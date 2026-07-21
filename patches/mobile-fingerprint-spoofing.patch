@@ -1,0 +1,17 @@
+diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
+index 12feb91573..12feb91574 100644
+--- a/dom/base/Navigator.cpp
++++ b/dom/base/Navigator.cpp
+@@ -728,6 +728,11 @@ bool Navigator::GlobalPrivacyControl() {
+ }
+
+ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
++  // Camoufox: allow spoofing navigator.maxTouchPoints via config. A desktop build
++  // has no touch digitizer, so the real value is 0 and Firefox's RFP path only ever
++  // collapses to 0 — there is no way to report a phone's value without this override.
++  if (auto value = MaskConfig::GetUint32("navigator.maxTouchPoints")) {
++    return value.value();
++  }
+   // The maxTouchPoints is going to reveal the detail of users' hardware. So, we
+   // will spoof it into 0 if fingerprinting resistance is enabled.
+   if (aCallerType != CallerType::System &&
