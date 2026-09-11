@@ -1893,6 +1893,9 @@ index ae2d14e105..77f35801a0 100644
    // Controls Event.isSynthesized value that helps identifying test related events.
    boolean isDOMEventSynthesized = true;
  };
+diff --git a/dom/workers/RuntimeService.cpp b/dom/workers/RuntimeService.cpp
+--- a/dom/workers/RuntimeService.cpp
++++ b/dom/workers/RuntimeService.cpp
 @@ -1915,6 +1914,13 @@ void RuntimeService::PropagateStorageAccessPermissionGranted(
    }
  }
