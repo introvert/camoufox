@@ -432,8 +432,24 @@ export class TargetRegistry {
       return;
     const browserId = actor.browsingContext.browserId;
     this._browserIdToActor.set(browserId, actor);
-    const target = this._browserIdToTarget.get(browserId);
+    // Camoufox: browserId is not a stable join key. A tab's top BrowsingContext
+    // is replaced on a remoteness switch -- and on Firefox 155 the one a
+    // freshly opened window ends up with is not the one PageTarget captured at
+    // construction -- so the id recorded there can name a context that no actor
+    // will ever carry. The <browser> element does survive those swaps, so fall
+    // back to it: without this the page channel is never bound, and because
+    // SimpleChannel queues until a transport appears, every parent->content
+    // message (Page.setInitScripts first) hangs with no error.
+    const target = this._browserIdToTarget.get(browserId) ||
+        this._targetForActor(actor);
     target?.setActor(actor);
+  }
+
+  // Resolve an actor to its PageTarget through the <browser> element that owns
+  // the actor's BrowsingContext.
+  _targetForActor(actor) {
+    const browser = actor.browsingContext.embedderElement;
+    return browser ? this._browserToTarget.get(browser) : undefined;
   }
 
   onActorDestroyed(actor) {
@@ -506,7 +522,18 @@ export class PageTarget {
     // Firefox 152+: the content-process actor may already exist (window.open
     // popups create the actor before TabOpen). Bind it now so the page channel
     // becomes ready and `Page.ready` reaches the client. See _browserIdToActor.
-    const actor = this._registry._browserIdToActor.get(browserId);
+    let actor = this._registry._browserIdToActor.get(browserId);
+    if (!actor) {
+      // Camoufox: same stale-browserId problem in the other direction -- the
+      // actor may already exist under an id this target never saw. Match on the
+      // <browser> element instead. See onActorCreated().
+      for (const candidate of this._registry._browserIdToActor.values()) {
+        if (candidate.browsingContext?.embedderElement === this._linkedBrowser) {
+          actor = candidate;
+          break;
+        }
+      }
+    }
     if (actor)
       this.setActor(actor);
 
