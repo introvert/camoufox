@@ -593,13 +593,13 @@ diff --git a/gfx/src/nsFontMetrics.cpp b/gfx/src/nsFontMetrics.cpp
 index a52e3a56d8..3025f57da5 100644
 --- a/gfx/src/nsFontMetrics.cpp
 +++ b/gfx/src/nsFontMetrics.cpp
-@@ -22,9 +22,13 @@
+@@ -25,9 +25,13 @@
+ #include "nsPresContext.h"       // for nsPresContext
+ #include "nsString.h"            // for nsString
  #include "nsStyleConsts.h"       // for StyleHyphens::None
- #include "mozilla/Assertions.h"  // for MOZ_ASSERT
- #include "mozilla/UniquePtr.h"   // for UniquePtr
-+#include "mozilla/dom/Document.h"  // for Document
++#include "mozilla/dom/Document.h"         // for Document
 +#include "mozilla/dom/BrowsingContext.h"  // for BrowsingContext
-+#include "nsPIDOMWindow.h"  // for nsPIDOMWindowInner
++#include "nsPIDOMWindow.h"                // for nsPIDOMWindowInner
  
  class gfxUserFontSet;
  using namespace mozilla;
@@ -678,17 +678,16 @@ diff --git a/gfx/thebes/gfxFont.cpp b/gfx/thebes/gfxFont.cpp
 index 39a0a013de..ce1c233d7d 100644
 --- a/gfx/thebes/gfxFont.cpp
 +++ b/gfx/thebes/gfxFont.cpp
-@@ -18,6 +18,7 @@
- 
- #include "gfxGlyphExtents.h"
+@@ -19,5 +19,6 @@
  #include "gfxPlatform.h"
-+#include "mozilla/dom/FontSpacingSeedManager.h"
+ #include "gfxSVGGlyphs.h"
  #include "gfxTextRun.h"
- #include "nsGkAtoms.h"
- 
-@@ -3308,9 +3309,10 @@ bool gfxFont::ProcessShapedWordInternal(
-     const T* aText, uint32_t aLength, uint32_t aHash, Script aRunScript,
-     nsAtom* aLanguage, bool aVertical, int32_t aAppUnitsPerDevUnit,
++#include "mozilla/dom/FontSpacingSeedManager.h"
+ #include "gfxTypes.h"
+ #include "gfxUserFontSet.h"
+@@ -3339,9 +3339,10 @@ bool gfxFont::ProcessShapedWordInternal(
+     const T* aText, uint8_t aLength, uint32_t aHash, Script aRunScript,
+     nsAtom* aLanguage, bool aVertical, uint16_t aAppUnitsPerDevUnit,
      gfx::ShapedTextFlags aFlags, RoundingFlags aRounding,
 -    gfxTextPerfMetrics* aTextPerf GFX_MAYBE_UNUSED, Func aCallback) {
 +    gfxTextPerfMetrics* aTextPerf GFX_MAYBE_UNUSED,
@@ -718,36 +717,36 @@ index 39a0a013de..ce1c233d7d 100644
      return false;
    }
  
-@@ -3434,7 +3439,7 @@ bool gfxFont::ProcessSingleSpaceShapedWord(
+@@ -3466,7 +3467,7 @@ bool gfxFont::ProcessSingleSpaceShapedWord(
    return ProcessShapedWordInternal(
-       &space, 1, gfxShapedWord::HashMix(0, ' '), Script::LATIN,
-       /* aLanguage = */ nullptr, aVertical, aAppUnitsPerDevUnit, aFlags,
--      aRounding, nullptr, aCallback);
-+      aRounding, nullptr, 0 /* pbid */, aCallback);
+       &space, 1, gfxShapedWord::HashMix(gfxShapedWord::sHashInitialValue, ' '),
+       Script::LATIN, /* aLanguage = */ nullptr, aVertical, aAppUnitsPerDevUnit,
+-      aFlags, aRounding, nullptr, aCallback);
++      aFlags, aRounding, nullptr, 0 /* pbid */, aCallback);
  }
  
  bool gfxFont::ShapeText(const uint8_t* aText, uint32_t aOffset,
-@@ -3788,6 +3793,7 @@ bool gfxFont::SplitAndInitTextRun(
+@@ -3823,6 +3824,7 @@ bool gfxFont::SplitAndInitTextRun(
        bool processed = ProcessShapedWordInternal(
-           aString + wordStart, length, hash, aRunScript, aLanguage, vertical,
-           appUnitsPerDevUnit, wordFlags, rounding, tp,
+           aString + wordStart, static_cast<uint8_t>(length), hash, aRunScript,
+           aLanguage, vertical, appUnitsPerDevUnit, wordFlags, rounding, tp,
 +          aTextRun->GetUserContextId(),
            [&](gfxShapedWord* aShapedWord) {
              aTextRun->CopyGlyphDataFrom(aShapedWord, aRunStart + wordStart);
            });
-@@ -3813,6 +3819,7 @@ bool gfxFont::SplitAndInitTextRun(
-             &boundary, 1, gfxShapedWord::HashMix(0, boundary), aRunScript,
-             aLanguage, vertical, appUnitsPerDevUnit,
+@@ -3847,7 +3849,8 @@ bool gfxFont::SplitAndInitTextRun(
+             &boundary, 1,
+             gfxShapedWord::HashMix(gfxShapedWord::sHashInitialValue, boundary),
+             aRunScript, aLanguage, vertical, appUnitsPerDevUnit,
              flags | gfx::ShapedTextFlags::TEXT_IS_8BIT, rounding, tp,
 +            aTextRun->GetUserContextId(),
              [&](gfxShapedWord* aShapedWord) {
                aTextRun->CopyGlyphDataFrom(aShapedWord, aRunStart + i);
                if (boundary == ' ') {
 diff --git a/gfx/thebes/gfxFont.h b/gfx/thebes/gfxFont.h
-index 25022d4b5b..fe65662b77 100644
 --- a/gfx/thebes/gfxFont.h
 +++ b/gfx/thebes/gfxFont.h
-@@ -746,6 +746,10 @@ class gfxShapedText {
+@@ -747,6 +747,10 @@
  
    virtual ~gfxShapedText() = default;
  
@@ -758,7 +757,7 @@ index 25022d4b5b..fe65662b77 100644
    /**
     * This class records the information associated with a character in the
     * input string. It's optimized for the case where there is one glyph
-@@ -1335,6 +1339,11 @@ class gfxShapedWord final : public gfxShapedText {
+@@ -1396,6 +1400,11 @@
    // allocated via malloc.
    void operator delete(void* p) { free(p); }
  
@@ -770,7 +769,7 @@ index 25022d4b5b..fe65662b77 100644
    const CompressedGlyph* GetCharacterGlyphs() const override {
      return &mCharGlyphsStorage[0];
    }
-@@ -1418,6 +1427,9 @@ class gfxShapedWord final : public gfxShapedText {
+@@ -1485,6 +1494,9 @@
    // With multithreaded shaping, this may be updated by any thread.
    std::atomic<uint32_t> mAgeCounter;
  
@@ -780,8 +779,8 @@ index 25022d4b5b..fe65662b77 100644
    // The mCharGlyphsStorage array is actually a variable-size member;
    // when the ShapedWord is created, its size will be increased as necessary
    // to allow the proper number of glyphs to be stored.
-@@ -2155,7 +2167,8 @@ class gfxFont {
-                                  int32_t aAppUnitsPerDevUnit,
+@@ -2221,7 +2233,8 @@
+                                  uint16_t aAppUnitsPerDevUnit,
                                   mozilla::gfx::ShapedTextFlags aFlags,
                                   RoundingFlags aRounding,
 -                                 gfxTextPerfMetrics* aTextPerf, Func aCallback);
@@ -790,67 +789,85 @@ index 25022d4b5b..fe65662b77 100644
  
    // whether a given feature is included in feature settings from both the
    // font and the style. aFeatureOn set if resolved feature value is non-zero
-@@ -2185,12 +2198,13 @@ class gfxFont {
-     int32_t mAppUnitsPerDevUnit;
+@@ -2256,23 +2269,25 @@
+     } mText;
      PLDHashNumber mHashKey;
      bool mTextIs8Bit;
+-    // 3 bytes of padding here
++    // 3 bytes of padding here, then:
 +    uint32_t mUserContextId;
-     RoundingFlags mRounding;
  
-     WordCacheKey(const uint8_t* aText, uint32_t aLength, uint32_t aStringHash,
+     static constexpr PLDHashNumber ComputeHash(uint32_t aStringHash,
+                                                Script aScriptCode,
+                                                uint32_t aLanguageHash,
+                                                int16_t aAppUnitsPerDevUnit,
+                                                ShapedTextFlags aFlags,
+-                                               RoundingFlags aRounding) {
++                                               RoundingFlags aRounding,
++                                               uint32_t aUserContextId) {
+       return (aStringHash + static_cast<int32_t>(aScriptCode) +
+               aAppUnitsPerDevUnit * 0x100 + uint16_t(aFlags) * 0x10000 +
+-              int(aRounding) + aLanguageHash);
++              int(aRounding) + aLanguageHash + aUserContextId * 0x1000000);
+     }
+ 
+     WordCacheKey(const uint8_t* aText, uint8_t aLength, uint32_t aStringHash,
                   Script aScriptCode, nsAtom* aLanguage,
-                  int32_t aAppUnitsPerDevUnit, ShapedTextFlags aFlags,
+                  uint16_t aAppUnitsPerDevUnit, ShapedTextFlags aFlags,
 -                 RoundingFlags aRounding)
 +                 RoundingFlags aRounding, uint32_t aUserContextId = 0)
-         : mLength(aLength),
+         : mLanguage(aLanguage),
            mFlags(aFlags),
            mScript(aScriptCode),
-@@ -2198,8 +2212,9 @@ class gfxFont {
-           mAppUnitsPerDevUnit(aAppUnitsPerDevUnit),
-           mHashKey(aStringHash + static_cast<int32_t>(aScriptCode) +
-                    aAppUnitsPerDevUnit * 0x100 + uint16_t(aFlags) * 0x10000 +
--                   int(aRounding) + (aLanguage ? aLanguage->hash() : 0)),
-+                   int(aRounding) + (aLanguage ? aLanguage->hash() : 0) + aUserContextId * 0x1000000),
-           mTextIs8Bit(true),
-+          mUserContextId(aUserContextId),
-           mRounding(aRounding) {
+@@ -2281,8 +2296,10 @@
+           mRounding(aRounding),
+           mHashKey(ComputeHash(aStringHash, aScriptCode,
+                                aLanguage ? aLanguage->hash() : 0,
+-                               aAppUnitsPerDevUnit, aFlags, aRounding)),
+-          mTextIs8Bit(true) {
++                               aAppUnitsPerDevUnit, aFlags, aRounding,
++                               aUserContextId)),
++          mTextIs8Bit(true),
++          mUserContextId(aUserContextId) {
        NS_ASSERTION(aFlags & ShapedTextFlags::TEXT_IS_8BIT,
                     "8-bit flag should have been set");
-@@ -2209,7 +2224,7 @@ class gfxFont {
-     WordCacheKey(const char16_t* aText, uint32_t aLength, uint32_t aStringHash,
+       mText.mSingle = aText;
+@@ -2291,7 +2308,7 @@
+     WordCacheKey(const char16_t* aText, uint8_t aLength, uint32_t aStringHash,
                   Script aScriptCode, nsAtom* aLanguage,
-                  int32_t aAppUnitsPerDevUnit, ShapedTextFlags aFlags,
+                  uint16_t aAppUnitsPerDevUnit, ShapedTextFlags aFlags,
 -                 RoundingFlags aRounding)
 +                 RoundingFlags aRounding, uint32_t aUserContextId = 0)
-         : mLength(aLength),
+         : mLanguage(aLanguage),
            mFlags(aFlags),
            mScript(aScriptCode),
-@@ -2217,8 +2232,9 @@ class gfxFont {
-           mAppUnitsPerDevUnit(aAppUnitsPerDevUnit),
-           mHashKey(aStringHash + static_cast<int32_t>(aScriptCode) +
-                    aAppUnitsPerDevUnit * 0x100 + uint16_t(aFlags) * 0x10000 +
--                   int(aRounding)),
-+                   int(aRounding) + aUserContextId * 0x1000000),
-           mTextIs8Bit(false),
-+          mUserContextId(aUserContextId),
-           mRounding(aRounding) {
+@@ -2300,8 +2317,10 @@
+           mRounding(aRounding),
+           mHashKey(ComputeHash(aStringHash, aScriptCode,
+                                aLanguage ? aLanguage->hash() : 0,
+-                               aAppUnitsPerDevUnit, aFlags, aRounding)),
+-          mTextIs8Bit(false) {
++                               aAppUnitsPerDevUnit, aFlags, aRounding,
++                               aUserContextId)),
++          mTextIs8Bit(false),
++          mUserContextId(aUserContextId) {
        // We can NOT assert that TEXT_IS_8BIT is false in aFlags here,
        // because this might be an 8bit-only word from a 16-bit textrun,
+       // in which case the text we're passed is still in 16-bit form,
 diff --git a/gfx/thebes/gfxHarfBuzzShaper.cpp b/gfx/thebes/gfxHarfBuzzShaper.cpp
 index e41408f51c..ffa0bd4caf 100644
 --- a/gfx/thebes/gfxHarfBuzzShaper.cpp
 +++ b/gfx/thebes/gfxHarfBuzzShaper.cpp
-@@ -16,6 +16,10 @@
- 
- #include "harfbuzz/hb.h"
+@@ -13,5 +13,9 @@
  #include "harfbuzz/hb-ot.h"
+ #include "harfbuzz/hb.h"
 +#include <cstdlib>
 +#include <chrono>
 +#include "MaskConfig.hpp"
 +#include "mozilla/dom/FontSpacingSeedManager.h"
- 
- #include <algorithm>
- 
+ #include "mozilla/Sprintf.h"
+ #include "mozilla/intl/String.h"
+ #include "mozilla/intl/UnicodeProperties.h"
 @@ -1465,6 +1469,50 @@ bool gfxHarfBuzzShaper::ShapeText(const char16_t* aText, uint32_t aOffset,
  
    hb_shape(mHBFont, mBuffer, features.Elements(), features.Length());
@@ -931,10 +948,11 @@ index fc1293be42..45641bd8b3 100644
  #include "mozilla/Sprintf.h"
  #include "mozilla/StaticPresData.h"
  #include "mozilla/UniquePtr.h"
-@@ -33,6 +34,9 @@
+@@ -32,7 +33,10 @@
+ #include "nsLayoutUtils.h"
+ #include "nsStyleConsts.h"
+ #include "nsStyleUtil.h"
  #include "nsUnicodeProperties.h"
- #include "SharedFontList-impl.h"
- #include "TextDrawTarget.h"
 +#include "mozilla/dom/BrowsingContext.h"
 +#include "mozilla/dom/Document.h"
 +#include "nsPIDOMWindow.h"
@@ -973,16 +991,6 @@ index fc1293be42..45641bd8b3 100644
        mShapingState(eShapingState_Normal) {
    NS_ASSERTION(mAppUnitsPerDevUnit > 0, "Invalid app unit scale");
    NS_ADDREF(mFontGroup);
-@@ -699,7 +705,8 @@ void gfxTextRun::DrawEmphasisMarks(
-     gfxContext* aContext, gfxTextRun* aMark, gfxFloat aMarkAdvance,
-     gfx::Point aPt, Range aRange, const PropertyProvider* aProvider,
-     mozilla::gfx::PaletteCache& aPaletteCache) const {
--  MOZ_ASSERT(aRange.end <= GetLength());
-+  MOZ_ASSERT(
-+      aRange.end <= GetLength());
- 
-   EmphasisMarkDrawParams params(aContext, aPaletteCache);
-   params.mark = aMark;
 @@ -1841,6 +1848,18 @@ gfxFontGroup::gfxFontGroup(FontVisibilityProvider* aFontVisibilityProvider,
        mFontVariantEmoji(aVariantEmoji) {
    // We don't use SetUserFontSet() here, as we want to unconditionally call

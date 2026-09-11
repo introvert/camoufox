@@ -375,9 +375,9 @@ index 06b86c6c75..9641c8457c 100644
  
  #include "nsDeviceContext.h"
 +#include "MaskConfig.hpp"
+ 
  #include <algorithm>  // for max
- #include "gfxContext.h"
- #include "gfxPoint.h"    // for gfxSize
+ 
 @@ -193,6 +194,13 @@ bool nsDeviceContext::GetScreenIsHDR() {
  }
  

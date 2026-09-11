@@ -30,9 +30,8 @@ diff --git a/js/src/debugger/Debugger.cpp b/js/src/debugger/Debugger.cpp
 index 858be3c571..0250d6d72c 100644
 --- a/js/src/debugger/Debugger.cpp
 +++ b/js/src/debugger/Debugger.cpp
-@@ -542,6 +542,7 @@ Debugger::Debugger(JSContext* cx, NativeObject* dbg)
+@@ -543,5 +543,6 @@ Debugger::Debugger(JSContext* cx, NativeObject* dbg)
        uncaughtExceptionHook(nullptr),
-       allowUnobservedAsmJS(false),
        allowUnobservedWasm(false),
 +      invisibleToContent(false),
        exclusiveDebuggerOnEval(false),
@@ -59,25 +58,15 @@ index 858be3c571..0250d6d72c 100644
  /* static */
  bool DebugAPI::hasExceptionUnwindHook(GlobalObject* global) {
    return Debugger::hasLiveHook(global, Debugger::OnExceptionUnwind);
-@@ -3529,14 +3544,14 @@ Debugger::IsObserving Debugger::observesAllExecution() const {
- }
- 
- Debugger::IsObserving Debugger::observesAsmJS() const {
--  if (!allowUnobservedAsmJS) {
-+  if (!allowUnobservedAsmJS && !invisibleToContent) {
-     return Observing;
-   }
-   return NotObserving;
- }
- 
+@@ -3628,6 +3628,6 @@ Debugger::IsObserving Debugger::observesAllExecution() const {
  Debugger::IsObserving Debugger::observesWasm() const {
 -  if (!allowUnobservedWasm) {
 +  if (!allowUnobservedWasm && !invisibleToContent) {
      return Observing;
    }
    return NotObserving;
-@@ -4256,6 +4271,8 @@ struct MOZ_STACK_CLASS Debugger::CallData {
-   bool setAllowUnobservedAsmJS();
+ }
+@@ -4393,5 +4393,7 @@ struct MOZ_STACK_CLASS Debugger::CallData {
    bool getAllowUnobservedWasm();
    bool setAllowUnobservedWasm();
 +  bool getInvisibleToContent();
@@ -85,7 +74,7 @@ index 858be3c571..0250d6d72c 100644
    bool getExclusiveDebuggerOnEval();
    bool setExclusiveDebuggerOnEval();
    bool getInspectNativeCallArguments();
-@@ -4564,6 +4581,29 @@ bool Debugger::CallData::setAllowUnobservedWasm() {
+@@ -4564,6 +4581,28 @@ bool Debugger::CallData::setAllowUnobservedWasm() {
    return true;
  }
  
@@ -104,7 +93,6 @@ index 858be3c571..0250d6d72c 100644
 +    GlobalObject* global = iter.get();
 +    Realm* realm = global->realm();
 +    realm->updateAllDebuggersInvisibleToContent();
-+    realm->updateDebuggerObservesAsmJS();
 +    realm->updateDebuggerObservesWasm();
 +  }
 +
@@ -115,24 +103,19 @@ index 858be3c571..0250d6d72c 100644
  bool Debugger::CallData::getExclusiveDebuggerOnEval() {
    args.rval().setBoolean(dbg->exclusiveDebuggerOnEval);
    return true;
-@@ -5074,6 +5114,7 @@ bool Debugger::addDebuggeeGlobal(JSContext* cx, Handle<GlobalObject*> global) {
-   // (5)
-   AutoRestoreRealmDebugMode debugModeGuard(debuggeeRealm);
+@@ -5184,3 +5184,4 @@ bool Debugger::addDebuggeeGlobal(JSContext* cx, Handle<GlobalObject*> global) {
    debuggeeRealm->setIsDebuggee();
 +  debuggeeRealm->updateAllDebuggersInvisibleToContent();
-   debuggeeRealm->updateDebuggerObservesAsmJS();
    debuggeeRealm->updateDebuggerObservesWasm();
    debuggeeRealm->updateDebuggerObservesCoverage();
-@@ -5196,6 +5237,7 @@ void Debugger::removeDebuggeeGlobal(JS::GCContext* gcx, GlobalObject* global,
+@@ -5303,5 +5304,6 @@ void Debugger::removeDebuggeeGlobal(JS::GCContext* gcx, GlobalObject* global,
      global->realm()->unsetIsDebuggee();
    } else {
      global->realm()->updateDebuggerObservesAllExecution();
 +    global->realm()->updateAllDebuggersInvisibleToContent();
-     global->realm()->updateDebuggerObservesAsmJS();
      global->realm()->updateDebuggerObservesWasm();
      global->realm()->updateDebuggerObservesCoverage();
-@@ -6879,6 +6921,8 @@ const JSPropertySpec Debugger::properties[] = {
-                   setAllowUnobservedAsmJS),
+@@ -7009,5 +7009,7 @@ const JSPropertySpec Debugger::properties[] = {
      JS_DEBUG_PSGS("allowUnobservedWasm", getAllowUnobservedWasm,
                    setAllowUnobservedWasm),
 +    JS_DEBUG_PSGS("invisibleToContent", getInvisibleToContent,
@@ -144,14 +127,13 @@ diff --git a/js/src/debugger/Debugger.h b/js/src/debugger/Debugger.h
 index 517dc5cc25..6156c921c6 100644
 --- a/js/src/debugger/Debugger.h
 +++ b/js/src/debugger/Debugger.h
-@@ -642,6 +642,13 @@ class Debugger : private mozilla::LinkedListElement<Debugger> {
-   bool allowUnobservedAsmJS;
+@@ -642,5 +642,12 @@ class Debugger : private mozilla::LinkedListElement<Debugger> {
    bool allowUnobservedWasm;
  
 +  // When true, this Debugger's debuggees do not take on the debuggee side
 +  // effects that content can observe: extra stack capture for throws, async
 +  // stack capture, the Promise return-value optimization being disabled, and
-+  // asm.js/wasm being deoptimized. Lets an embedder attach a Debugger without
++  // wasm being deoptimized. Lets an embedder attach a Debugger without
 +  // the debuggee realm becoming distinguishable from one that has no debugger.
 +  bool invisibleToContent;
 +
@@ -222,13 +204,13 @@ diff --git a/js/src/vm/Realm.h b/js/src/vm/Realm.h
 index c60b7da46f..7bbfc58948 100644
 --- a/js/src/vm/Realm.h
 +++ b/js/src/vm/Realm.h
-@@ -407,6 +407,9 @@ class JS::Realm : public JS::shadow::Realm {
-     DebuggerObservesCoverage = 1 << 3,
-     DebuggerObservesWasm = 1 << 4,
-     DebuggerObservesNativeCall = 1 << 5,
+@@ -410,6 +410,9 @@ class JS::Realm : public JS::shadow::Realm {
+     DebuggerObservesCoverage = 1 << 2,
+     DebuggerObservesWasm = 1 << 3,
+     DebuggerObservesNativeCall = 1 << 4,
 +    // Set only when the realm has debuggers and *every* one of them has
 +    // invisibleToContent set. See isDebuggeeVisibleToContent.
-+    AllDebuggersInvisibleToContent = 1 << 6,
++    AllDebuggersInvisibleToContent = 1 << 5,
    };
    uint32_t debugModeBits_ = 0;
    friend class js::AutoRestoreRealmDebugMode;

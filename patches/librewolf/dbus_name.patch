@@ -12,14 +12,14 @@ index aad9d7054af8..a926d8b6abdc 100644
      aDestinationName.Truncate(DBUS_MAXIMUM_NAME_LENGTH);
  
 @@ -90,7 +90,7 @@ bool nsDBusRemoteClient::GetRemoteDestinationName(const char* aProgram,
-   if (!sDBusValidateBusName(aDestinationName.get(), nullptr)) {
+   if (!g_dbus_is_name(aDestinationName.get())) {
      // We don't have a valid busName yet - try to create a default one.
      aDestinationName =
 -        nsPrintfCString("org.mozilla.%s.%s", aProgram, "default");
 +        nsPrintfCString("io.gitlab.%s.%s", aProgram, "default");
-     if (!sDBusValidateBusName(aDestinationName.get(), nullptr)) {
-       // We failed completelly to get a valid bus name - just quit
-       // to prevent crash at dbus_bus_request_name().
+     if (!g_dbus_is_name(aDestinationName.get())) {
+       // We failed completely to get a valid bus name - just quit.
+       LOG("  failed to validate profile DBus name");
 @@ -117,7 +117,7 @@ nsresult nsDBusRemoteClient::DoSendDBusCommandLine(const char* aProfile,
    }
  
@@ -66,9 +66,9 @@ index 4afb8381d0bc..bd927334b817 100644
  void nsDBusRemoteServer::OnBusAcquired(GDBusConnection* aConnection) {
 -  mPathName = nsPrintfCString("/org/mozilla/%s/Remote", mAppName.get());
 +  mPathName = nsPrintfCString("/io/gitlab/%s/Remote", mAppName.get());
-   static auto sDBusValidatePathName = (bool (*)(const char*, DBusError*))dlsym(
-       RTLD_DEFAULT, "dbus_validate_path");
-   if (!sDBusValidatePathName ||
+   if (!g_variant_is_object_path(mPathName.get())) {
+     g_warning("nsDBusRemoteServer: object path is not valid");
+     return;
 @@ -206,8 +206,7 @@ nsresult nsDBusRemoteServer::Startup(const char* aAppName,
  
    mozilla::XREAppData::SanitizeNameForDBus(profileName);
@@ -82,9 +82,9 @@ index 4afb8381d0bc..bd927334b817 100644
 @@ -221,7 +220,7 @@ nsresult nsDBusRemoteServer::Startup(const char* aAppName,
  
    // We don't have a valid busName yet - try to create a default one.
-   if (!sDBusValidateBusName(busName.get(), nullptr)) {
+   if (!g_dbus_is_name(busName.get())) {
 -    busName = nsPrintfCString("org.mozilla.%s.%s", mAppName.get(), "default");
 +    busName = nsPrintfCString("io.gitlab.%s.%s", mAppName.get(), "default");
-     if (!sDBusValidateBusName(busName.get(), nullptr)) {
-       // We failed completelly to get a valid bus name - just quit
-       // to prevent crash at dbus_bus_request_name().
+     if (!g_dbus_is_name(busName.get())) {
+       // We failed completely to get a valid bus name - just quit.
+       g_warning("nsDBusRemoteServer: couldn't get a valid bus name!");

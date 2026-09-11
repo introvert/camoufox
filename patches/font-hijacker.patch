@@ -39,14 +39,14 @@ Bug: daijro/camoufox#695
 diff --git a/gfx/thebes/gfxPlatformFontList.cpp b/gfx/thebes/gfxPlatformFontList.cpp
 --- a/gfx/thebes/gfxPlatformFontList.cpp
 +++ b/gfx/thebes/gfxPlatformFontList.cpp
-@@ -13,6 +13,7 @@
- #include "gfxTextRun.h"
- #include "gfxUserFontSet.h"
- #include "SharedFontList-impl.h"
-+#include "MaskConfig.hpp"
+@@ -5,6 +5,7 @@
+ #include "gfxPlatformFontList.h"
  
  #include "FontVisibilityProvider.h"
- 
++#include "MaskConfig.hpp"
+ #include "GeckoProfiler.h"
+ #include "SharedFontList-impl.h"
+ #include "base/eintr_wrapper.h"
 @@ -890,6 +891,29 @@
    ToLowerCase(aKeyName);
  }
@@ -154,20 +154,20 @@ diff --git a/gfx/thebes/gfxPlatformFontList.h b/gfx/thebes/gfxPlatformFontList.h
 diff --git a/gfx/thebes/gfxUserFontSet.cpp b/gfx/thebes/gfxUserFontSet.cpp
 --- a/gfx/thebes/gfxUserFontSet.cpp
 +++ b/gfx/thebes/gfxUserFontSet.cpp
-@@ -461,8 +461,12 @@
+@@ -462,8 +462,12 @@
        gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
        pfl->AddUserFontSet(fontSet);
        // Don't look up local fonts if the font whitelist is being used.
 +      // Camoufox: nor for content under the spoofed font list -- src: local()
 +      // would otherwise let a page probe for families the mask hides.
-       gfxFontEntry* fe = nullptr;
+       RefPtr<gfxFontEntry> fe;
 -      if (!pfl->IsFontFamilyWhitelistActive()) {
 +      if (!pfl->IsFontFamilyWhitelistActive() &&
 +          !gfxPlatformFontList::MaskedFontListAppliesTo(
 +              fontSet->GetFontVisibilityProvider())) {
          fe = gfxPlatform::GetPlatform()->LookupLocalFont(
              fontSet->GetFontVisibilityProvider(), currSrc.mLocalName, Weight(),
-             Stretch(), SlantStyle());
+             Width(), SlantStyle());
 diff --git a/gfx/thebes/moz.build b/gfx/thebes/moz.build
 --- a/gfx/thebes/moz.build
 +++ b/gfx/thebes/moz.build

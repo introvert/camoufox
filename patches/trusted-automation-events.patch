@@ -310,23 +310,24 @@ diff --git a/dom/html/HTMLSelectElement.cpp b/dom/html/HTMLSelectElement.cpp
 index b969ecca19..bcd5979e15 100644
 --- a/dom/html/HTMLSelectElement.cpp
 +++ b/dom/html/HTMLSelectElement.cpp
-@@ -19,6 +19,7 @@
- #include "mozilla/dom/Document.h"
+@@ -25,4 +25,5 @@
  #include "mozilla/dom/Element.h"
  #include "mozilla/dom/FormData.h"
+ #include "mozilla/dom/HTMLButtonElement.h"
 +#include "mozilla/dom/PointerEventHandler.h"
  #include "mozilla/dom/HTMLOptGroupElement.h"
- #include "mozilla/dom/HTMLOptionElement.h"
- #include "mozilla/dom/HTMLSelectElementBinding.h"
-@@ -1779,7 +1780,12 @@ nsresult HTMLSelectElement::HandleMouseDown(EventChainPostVisitor& aVisitor) {
-     }
+@@ -2297,6 +2298,16 @@ nsresult HTMLSelectElement::HandleMouseDown(EventChainPostVisitor& aVisitor) {
      const bool isSourceTouchEvent =
-         inputSource == MouseEvent_Binding::MOZ_SOURCE_TOUCH;
--    FireDropDownEvent(!OpenInParentProcess(), isSourceTouchEvent);
-+    const bool opening = !OpenInParentProcess();
-+    FireDropDownEvent(opening, isSourceTouchEvent);
-+    if (opening) {
-+      // The panel takes the button release, so no "pointerup" follows.
+         mouseEvent->mInputSource == MouseEvent_Binding::MOZ_SOURCE_TOUCH;
++    // Camoufox: only the parent-process drop-down panel swallows the button
++    // release, so no "pointerup" follows the "pointerdown" that opened it.
++    // The base-select picker is an ordinary in-content popover, which does
++    // not. Mirror TogglePickerInternal's own branch to tell the two apart.
++    const bool opensNativeDropDown =
++        !(IsBaseSelectAppearance() && GetPickerElement()) &&
++        !OpenInParentProcess();
+     TogglePickerInternal(isSourceTouchEvent);
++    if (opensNativeDropDown) {
 +      PointerEventHandler::NotifyDropDownOpenedByMouseDown();
 +    }
      return NS_OK;

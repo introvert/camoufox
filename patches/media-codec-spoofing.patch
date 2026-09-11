@@ -58,9 +58,9 @@ index abcdef0005..abcdef0006 100644
 +      return true;
 +    }
 +
-     RefPtr<PDMFactory> platform = new PDMFactory();
      for (const auto& track : tracks) {
-       if (!track ||
+       if (!track || PDMFactorySupport::IsSupported(SupportDecoderParams(*track),
+                                                    aDiagnostics)
 diff --git a/dom/media/webm/moz.build b/dom/media/webm/moz.build
 index abcdef0007..abcdef0008 100644
 --- a/dom/media/webm/moz.build

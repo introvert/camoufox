@@ -402,7 +402,7 @@ index 91f927902f..b1f3c6980d 100644
  
    SyncToJsep();
  
-@@ -1751,11 +1772,75 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
+@@ -1776,11 +1776,75 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
      MOZ_CRASH("Failed to create a promise!");
    }
  
@@ -477,7 +477,7 @@ index 91f927902f..b1f3c6980d 100644
 +                }
 +              }
 +            }
-             RefPtr<RTCStatsReport> report(new RTCStatsReport(window));
+             RefPtr report = MakeRefPtr<RTCStatsReport>(window);
              report->Incorporate(*aReport);
              promise->MaybeResolve(std::move(report));
 @@ -3260,12 +3345,22 @@ const std::string& PeerConnectionImpl::GetName() {
