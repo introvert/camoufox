@@ -402,7 +402,7 @@ index 91f927902f..b1f3c6980d 100644
  
    SyncToJsep();
  
-@@ -1776,11 +1776,75 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
+@@ -1776,11 +1776,77 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
      MOZ_CRASH("Failed to create a promise!");
    }
  
@@ -465,9 +465,11 @@ index 91f927902f..b1f3c6980d 100644
 +                cand.mProxied.Construct(NS_ConvertASCIItoUTF16("proxied"));
 +                cand.mId.Construct(NS_ConvertASCIItoUTF16("camou-srflx"));
 +                // Associate with the same transport as the real candidates.
++                // transportId is a required dictionary member, so it is a
++                // plain string rather than an Optional one.
 +                for (const auto& existing : aReport->mIceCandidateStats) {
-+                  if (existing.mTransportId.WasPassed()) {
-+                    cand.mTransportId.Construct(existing.mTransportId.Value());
++                  if (!existing.mTransportId.IsEmpty()) {
++                    cand.mTransportId = existing.mTransportId;
 +                    break;
 +                  }
 +                }
