@@ -593,13 +593,14 @@ diff --git a/gfx/src/nsFontMetrics.cpp b/gfx/src/nsFontMetrics.cpp
 index a52e3a56d8..3025f57da5 100644
 --- a/gfx/src/nsFontMetrics.cpp
 +++ b/gfx/src/nsFontMetrics.cpp
-@@ -25,9 +25,13 @@
+@@ -25,9 +25,14 @@
  #include "nsPresContext.h"       // for nsPresContext
  #include "nsString.h"            // for nsString
  #include "nsStyleConsts.h"       // for StyleHyphens::None
 +#include "mozilla/dom/Document.h"         // for Document
 +#include "mozilla/dom/BrowsingContext.h"  // for BrowsingContext
 +#include "nsPIDOMWindow.h"                // for nsPIDOMWindowInner
++#include "nsPIDOMWindowInlines.h"
  
  class gfxUserFontSet;
  using namespace mozilla;
@@ -948,7 +949,7 @@ index fc1293be42..45641bd8b3 100644
  #include "mozilla/Sprintf.h"
  #include "mozilla/StaticPresData.h"
  #include "mozilla/UniquePtr.h"
-@@ -32,7 +33,10 @@
+@@ -32,7 +33,11 @@
  #include "nsLayoutUtils.h"
  #include "nsStyleConsts.h"
  #include "nsStyleUtil.h"
@@ -956,6 +957,7 @@ index fc1293be42..45641bd8b3 100644
 +#include "mozilla/dom/BrowsingContext.h"
 +#include "mozilla/dom/Document.h"
 +#include "nsPIDOMWindow.h"
++#include "nsPIDOMWindowInlines.h"
  
  #ifdef XP_WIN
  #  include "gfxWindowsPlatform.h"
