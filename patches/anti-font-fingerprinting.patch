@@ -1234,12 +1234,13 @@ diff --git a/layout/generic/MathMLTextRunFactory.cpp b/layout/generic/MathMLText
 index 22adbaf9bc..e685fd4feb 100644
 --- a/layout/generic/MathMLTextRunFactory.cpp
 +++ b/layout/generic/MathMLTextRunFactory.cpp
-@@ -9,6 +9,8 @@
+@@ -9,6 +9,9 @@
  #include "mozilla/ComputedStyleInlines.h"
  #include "mozilla/StaticPrefs_mathml.h"
  #include "mozilla/intl/UnicodeScriptCodes.h"
 +#include "mozilla/dom/BrowsingContext.h"
 +#include "nsPIDOMWindow.h"
++#include "nsPIDOMWindowInlines.h"
  #include "nsDeviceContext.h"
  #include "nsFontMetrics.h"
  #include "nsStyleConsts.h"
@@ -1362,12 +1363,13 @@ diff --git a/layout/mathml/nsMathMLChar.cpp b/layout/mathml/nsMathMLChar.cpp
 index befaf7fed8..2f818fd962 100644
 --- a/layout/mathml/nsMathMLChar.cpp
 +++ b/layout/mathml/nsMathMLChar.cpp
-@@ -19,6 +19,8 @@
+@@ -19,6 +19,9 @@
  #include "mozilla/StaticPrefs_mathml.h"
  #include "mozilla/UniquePtr.h"
  #include "mozilla/dom/Document.h"
 +#include "mozilla/dom/BrowsingContext.h"
 +#include "nsPIDOMWindow.h"
++#include "nsPIDOMWindowInlines.h"
  #include "mozilla/gfx/2D.h"
  #include "mozilla/intl/UnicodeScriptCodes.h"
  #include "nsCSSRendering.h"

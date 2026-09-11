@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000000..8834c93e4b
 --- /dev/null
 +++ b/dom/base/WebRTCIPManager.cpp
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,147 @@
 +#include "WebRTCIPManager.h"
 +#include "nsTHashMap.h"
 +#include "RoverfoxStorageManager.h"
@@ -14,6 +14,7 @@ index 0000000000..8834c93e4b
 +#include "mozilla/dom/BrowsingContext.h"
 +#include "mozilla/dom/Document.h"
 +#include "nsPIDOMWindow.h"
++#include "nsPIDOMWindowInlines.h"
 +
 +namespace mozilla {
 +namespace dom {
