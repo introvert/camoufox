@@ -45,6 +45,11 @@ What PASS means:
     * every value a fingerprinter can read -- vendor, renderer, both unmasked
       strings, limits, extension list, shader precision -- is the pinned GPU's
       rather than the host's;
+    * every extension the spoofed list advertises actually resolves, so the list
+      is not sitting on top of a driver that lacks those extensions;
+    * and the shader translator reports the same target in both modes, which is
+      the one place the EGL and GLX paths could visibly differ: it is read
+      through WEBGL_debug_shaders, exposed to content by default;
     * and, where a virtual display is available, headful agrees key for key.
 
 Two things are deliberately not asserted. The framebuffer hash is reported
@@ -134,6 +139,13 @@ PROBE = r"""
     var p = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
     r.FRAG_HIGH_FLOAT = p ? [p.rangeMin, p.rangeMax, p.precision] : null;
 
+    // Every extension the browser advertises must actually resolve. A name in
+    // getSupportedExtensions() that getExtension() returns null for is a spoofed
+    // list sitting on top of a driver that does not have it, which is one
+    // getExtension call to catch.
+    var listed = gl.getSupportedExtensions() || [];
+    r.unresolvable = listed.filter(function (n) { return gl.getExtension(n) === null; });
+
     // Draw, then read it back: a context that reports well but renders nothing
     // is worse than no context at all.
     var vs = gl.createShader(gl.VERTEX_SHADER);
@@ -161,6 +173,16 @@ PROBE = r"""
     gl.readPixels(128, 100, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
     r.centerPixel = A(px);
     r.glError = gl.getError();
+
+    // The shader translator names its own target. A desktop GL backend emits
+    // "#version 450"; an ES backend emits an ESSL header. Headless takes the EGL
+    // path and headful takes GLX, so this is where the two could diverge in a
+    // way a page can read, through an extension that is exposed by default.
+    var ds = gl.getExtension('WEBGL_debug_shaders');
+    r.debug_shaders = !!ds;
+    r.glslTarget = ds
+      ? (ds.getTranslatedShaderSource(vs) || '').split('\n')[0]
+      : null;
 
     var all = new Uint8Array(256 * 256 * 4);
     gl.readPixels(0, 0, 256, 256, gl.RGBA, gl.UNSIGNED_BYTE, all);
@@ -218,6 +240,8 @@ def _assert_identity(results: Dict[str, Any], kind: str, got: Dict[str, Any],
         _check(results, f"{kind}.{name}", got[name], params[enum])
     _check(results, f"{kind}.extensions",
            got["extensions"], sorted(fp[f"{domain}:supportedExtensions"]))
+    # A spoofed list is only convincing if every name in it resolves.
+    _check(results, f"{kind}.every listed extension resolves", got["unresolvable"], [])
     spf = fp[f"{domain}:shaderPrecisionFormats"].get(FRAG_HIGH_FLOAT_KEY)
     if spf:
         _check(results, f"{kind}.FRAG_HIGH_FLOAT", got["FRAG_HIGH_FLOAT"],

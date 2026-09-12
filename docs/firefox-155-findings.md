@@ -142,6 +142,27 @@ unchanged, so every hunk header stays valid, and the whole patch was re-applied 
 pristine sources to confirm it still lands and yields the fixed line. Confirming the
 behaviour needs a build, since this is C++.
 
+### Stealth probing of the spoof layer
+
+Adversarial checks against a real context, with an NVIDIA profile pinned, looking
+for the inconsistencies a detector cross-references rather than the values it reads
+first.
+
+- **Every advertised extension resolves.** All 28 names in `getSupportedExtensions()`
+  return a non-null object from `getExtension()`, and extensions llvmpipe has but the
+  profile hides stay hidden. A spoofed list over a driver that lacks those extensions
+  would be one call to catch; this one holds.
+- **The shader error text does not name the backend.** A deliberately broken shader
+  returns `ERROR: 0:1: 'this' : Illegal use of reserved word`, which is the
+  translator Firefox ships on every platform, not a Mesa message.
+- **The shader translator does name its target.** `WEBGL_debug_shaders`, exposed to
+  content by default, returns translated source beginning `#version 450` on the GLX
+  path. Headless takes the EGL path, and the surfaceless context this work reaches is
+  OpenGL ES 3.2, so the header may read as ESSL there instead. That is the one place
+  the two paths could visibly diverge, and it is unmeasured until the patch is built.
+  The parity test now asserts both modes report the same target, so the build answers
+  it rather than leaving it open.
+
 ## Cost, measured
 
 | Mode | Context | Browser | X server | Total |
