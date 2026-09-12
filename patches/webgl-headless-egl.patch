@@ -1,0 +1,57 @@
+diff --git a/gfx/thebes/gfxPlatform.cpp b/gfx/thebes/gfxPlatform.cpp
+index f45971a4ec..8fbc8c9ce1 100644
+--- a/gfx/thebes/gfxPlatform.cpp
++++ b/gfx/thebes/gfxPlatform.cpp
+@@ -3230,6 +3230,24 @@ void gfxPlatform::InitWebGLConfig() {
+   gfxVars::SetAllowMetalAngleWebGL(
+       IsFeatureOk(nsIGfxInfo::FEATURE_WEBGL_ANGLE_METAL));
+ 
++  // Camoufox: every answer above comes from gfxInfo, and headless leaves gfxInfo
++  // with nothing to go on -- the glxtest probe cannot reach an X server, so it
++  // fails and GfxInfo blocks most features by default. WebGL and WebGL2 end up
++  // refused for want of a display rather than for want of a driver, which the
++  // page reads as a missing GPU. Whether WebGL exists belongs to the fingerprint,
++  // not to the host's window system, so decide it here instead.
++  //
++  // WebglUseHardware stays false on purpose: nothing is accelerating a headless
++  // process, and false is what sends DefaultEglDisplay() to the swrast device
++  // before anything else.
++  if (IsHeadless()) {
++    featureWebGL.UserForceEnable(
++        "Camoufox: headless keeps WebGL, gfxInfo has no display to probe");
++    gfxVars::SetAllowWebgl2(true);
++    gfxVars::SetWebglAllowWindowsNativeGl(true);
++    gfxVars::SetWebglUseHardware(false);
++  }
++
+   if (kIsMacOS) {
+     // Avoid crash for Intel HD Graphics 3000 on OSX. (Bug 1413269)
+     nsString vendorID, deviceID;
+diff --git a/gfx/thebes/gfxPlatformGtk.cpp b/gfx/thebes/gfxPlatformGtk.cpp
+index e1a7abea89..d10db009d5 100644
+--- a/gfx/thebes/gfxPlatformGtk.cpp
++++ b/gfx/thebes/gfxPlatformGtk.cpp
+@@ -107,7 +107,22 @@ gfxPlatformGtk::gfxPlatformGtk() {
+   mIsX11Display = gfxPlatform::IsHeadless() ? false : GdkIsX11Display();
+   if (XRE_IsParentProcess()) {
+     InitX11EGLConfig();
+-    if (IsWaylandDisplay() || gfxConfig::IsEnabled(Feature::X11_EGL)) {
++    // Camoufox: headless has no window system, so the X11_EGL feature is always
++    // force-disabled here -- InitX11EGLConfig() requires the glxtest probe to
++    // have reported EGL, and that probe opens an X connection first and dies
++    // without one ("Unable to open a connection to the X server"). Its
++    // ForceDisable outranks gfx.x11-egl.force-enabled, so UseEGL stays false and
++    // GLContextProviderLinux::CreateHeadless() picks GLX, which needs the display
++    // that is missing. WebGL context creation then fails outright and
++    // canvas.getContext('webgl') hands the page a null.
++    //
++    // A browser that claims a GPU in every other signal and has no WebGL at all
++    // is a louder tell than any renderer string, so ask for the EGL provider
++    // directly. It reaches Mesa's swrast device, or EGL_PLATFORM_SURFACELESS_MESA
++    // where there is no render node, and either gives a real GL ES context on
++    // llvmpipe with no X server and no hardware. Headful is untouched.
++    if (gfxPlatform::IsHeadless() || IsWaylandDisplay() ||
++        gfxConfig::IsEnabled(Feature::X11_EGL)) {
+       gfxVars::SetUseEGL(true);
+     }
+     InitDmabufConfig();
