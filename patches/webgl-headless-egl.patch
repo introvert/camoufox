@@ -1,24 +1,39 @@
 diff --git a/gfx/thebes/gfxPlatform.cpp b/gfx/thebes/gfxPlatform.cpp
-index f45971a4ec..8fbc8c9ce1 100644
+index f45971a4ec..b6e95c41a4 100644
 --- a/gfx/thebes/gfxPlatform.cpp
 +++ b/gfx/thebes/gfxPlatform.cpp
-@@ -3230,6 +3230,24 @@ void gfxPlatform::InitWebGLConfig() {
+@@ -3216,6 +3216,16 @@ void gfxPlatform::InitWebGLConfig() {
+     if (StaticPrefs::webgl_ignore_blocklist_AtStartup()) {
+       featureWebGL.UserForceEnable(
+           "Ignoring blocklist entry because webgl.ignore-blocklist is true.");
++    } else if (IsHeadless()) {
++      // Camoufox: headless leaves gfxInfo with nothing to go on -- the glxtest
++      // probe opens an X connection before anything else and cannot reach one,
++      // so it fails and GfxInfo blocks most features by default. This says
++      // blocklisted for want of a display, not for want of a driver. Note the
++      // ordering: Disable() below writes the environment status, and SetUser()
++      // asserts that has not happened yet, which is why the force-enable goes
++      // here rather than after.
++      featureWebGL.UserForceEnable(
++          "Camoufox: headless, gfxInfo had no display to probe");
+     }
+     featureWebGL.Disable(FeatureStatus::Blocklisted, message.get(), failureId);
+   }
+@@ -3230,6 +3240,22 @@ void gfxPlatform::InitWebGLConfig() {
    gfxVars::SetAllowMetalAngleWebGL(
        IsFeatureOk(nsIGfxInfo::FEATURE_WEBGL_ANGLE_METAL));
  
-+  // Camoufox: every answer above comes from gfxInfo, and headless leaves gfxInfo
-+  // with nothing to go on -- the glxtest probe cannot reach an X server, so it
-+  // fails and GfxInfo blocks most features by default. WebGL and WebGL2 end up
-+  // refused for want of a display rather than for want of a driver, which the
-+  // page reads as a missing GPU. Whether WebGL exists belongs to the fingerprint,
-+  // not to the host's window system, so decide it here instead.
++  // Camoufox: same reasoning as the force-enable above, for the two vars that
++  // actually gate context creation. WebglAllowWindowsNativeGl is what
++  // WebGLContext.cpp checks before it will try native GL at all, and a headless
++  // process fails that check for want of a display rather than for want of a
++  // driver. Whether WebGL exists belongs to the fingerprint, not to the host's
++  // window system.
 +  //
 +  // WebglUseHardware stays false on purpose: nothing is accelerating a headless
 +  // process, and false is what sends DefaultEglDisplay() to the swrast device
 +  // before anything else.
 +  if (IsHeadless()) {
-+    featureWebGL.UserForceEnable(
-+        "Camoufox: headless keeps WebGL, gfxInfo has no display to probe");
 +    gfxVars::SetAllowWebgl2(true);
 +    gfxVars::SetWebglAllowWindowsNativeGl(true);
 +    gfxVars::SetWebglUseHardware(false);
@@ -28,7 +43,7 @@ index f45971a4ec..8fbc8c9ce1 100644
      // Avoid crash for Intel HD Graphics 3000 on OSX. (Bug 1413269)
      nsString vendorID, deviceID;
 diff --git a/gfx/thebes/gfxPlatformGtk.cpp b/gfx/thebes/gfxPlatformGtk.cpp
-index e1a7abea89..d10db009d5 100644
+index e1a7abea89..0a7d5a090b 100644
 --- a/gfx/thebes/gfxPlatformGtk.cpp
 +++ b/gfx/thebes/gfxPlatformGtk.cpp
 @@ -107,7 +107,22 @@ gfxPlatformGtk::gfxPlatformGtk() {
@@ -55,3 +70,22 @@ index e1a7abea89..d10db009d5 100644
        gfxVars::SetUseEGL(true);
      }
      InitDmabufConfig();
+@@ -210,6 +225,18 @@ void gfxPlatformGtk::InitDmabufConfig() {
+                          "FEATURE_FAILURE_REQUIRES_EGL"_ns);
+   }
+ 
++  // Camoufox: that check used to cover headless as a side effect, because
++  // headless never reached EGL. It does now, so keep DMABUF off explicitly. A
++  // headless process presents no buffers to anything, and leaving the feature
++  // enabled here would have it open a DRM render node during startup -- a path
++  // that never ran in this mode before, and not something the WebGL fix should
++  // be deciding.
++  if (gfxPlatform::IsHeadless()) {
++    feature.ForceDisable(FeatureStatus::Unavailable,
++                         "Headless mode presents no buffers",
++                         "FEATURE_FAILURE_HEADLESS_MODE"_ns);
++  }
++
+   if (!gfxVars::WebglUseHardware()) {
+     feature.Disable(FeatureStatus::Blocklisted,
+                     "DMABuf disabled with software rendering", failureId);
