@@ -1,3 +1,35 @@
+diff --git a/gfx/gl/GLContextProviderLinux.cpp b/gfx/gl/GLContextProviderLinux.cpp
+index 87bfa48d50..3f063938eb 100644
+--- a/gfx/gl/GLContextProviderLinux.cpp
++++ b/gfx/gl/GLContextProviderLinux.cpp
+@@ -33,7 +33,26 @@ already_AddRefed<GLContext> GLContextProviderLinux::CreateForCompositorWidget(
+ /*static*/
+ already_AddRefed<GLContext> GLContextProviderLinux::CreateHeadless(
+     const GLContextCreateDesc& desc, nsACString* const out_failureId) {
+-  if (gfxVars::UseEGL() ||
++  // Camoufox: headless has no window system, and the GLX branch below needs an
++  // X connection it cannot get, so WebGL context creation fails outright and
++  // canvas.getContext('webgl') hands the page a null. UseEGL is false because
++  // the X11_EGL feature is force-disabled: it requires the glxtest probe to
++  // have reported EGL, and that probe opens an X connection first and dies
++  // without one. A browser that claims a GPU in every other signal and has no
++  // WebGL at all is a louder tell than any renderer string.
++  //
++  // Take the EGL provider here instead. It reaches Mesa's swrast device, or
++  // EGL_PLATFORM_SURFACELESS_MESA where there is no render node, and either
++  // gives a real GL ES context on llvmpipe with no X server and no hardware.
++  //
++  // Narrowed to this function on purpose. Flipping gfxVars::UseEGL() would
++  // reach DMABUF, hardware video decoding, RenderCompositorEGL and the
++  // compositor's shared GL context, none of which should change behaviour
++  // just so WebGL can have a context. This is the offscreen factory --
++  // WebGLContext::CreateAndInitGL() calls it as "tryNativeGL" -- and in
++  // headless the branch it replaces could only ever fail.
++  static const bool isHeadless = !!PR_GetEnv("MOZ_HEADLESS");
++  if (gfxVars::UseEGL() || isHeadless ||
+       bool(desc.flags & CreateContextFlags::FORBID_HARDWARE)) {
+     // We request EGL if software is required, because we don't know
+     // what X11 is using. It could be software or hardware.
 diff --git a/gfx/thebes/gfxPlatform.cpp b/gfx/thebes/gfxPlatform.cpp
 index f45971a4ec..b6e95c41a4 100644
 --- a/gfx/thebes/gfxPlatform.cpp
@@ -42,50 +74,3 @@ index f45971a4ec..b6e95c41a4 100644
    if (kIsMacOS) {
      // Avoid crash for Intel HD Graphics 3000 on OSX. (Bug 1413269)
      nsString vendorID, deviceID;
-diff --git a/gfx/thebes/gfxPlatformGtk.cpp b/gfx/thebes/gfxPlatformGtk.cpp
-index e1a7abea89..0a7d5a090b 100644
---- a/gfx/thebes/gfxPlatformGtk.cpp
-+++ b/gfx/thebes/gfxPlatformGtk.cpp
-@@ -107,7 +107,22 @@ gfxPlatformGtk::gfxPlatformGtk() {
-   mIsX11Display = gfxPlatform::IsHeadless() ? false : GdkIsX11Display();
-   if (XRE_IsParentProcess()) {
-     InitX11EGLConfig();
--    if (IsWaylandDisplay() || gfxConfig::IsEnabled(Feature::X11_EGL)) {
-+    // Camoufox: headless has no window system, so the X11_EGL feature is always
-+    // force-disabled here -- InitX11EGLConfig() requires the glxtest probe to
-+    // have reported EGL, and that probe opens an X connection first and dies
-+    // without one ("Unable to open a connection to the X server"). Its
-+    // ForceDisable outranks gfx.x11-egl.force-enabled, so UseEGL stays false and
-+    // GLContextProviderLinux::CreateHeadless() picks GLX, which needs the display
-+    // that is missing. WebGL context creation then fails outright and
-+    // canvas.getContext('webgl') hands the page a null.
-+    //
-+    // A browser that claims a GPU in every other signal and has no WebGL at all
-+    // is a louder tell than any renderer string, so ask for the EGL provider
-+    // directly. It reaches Mesa's swrast device, or EGL_PLATFORM_SURFACELESS_MESA
-+    // where there is no render node, and either gives a real GL ES context on
-+    // llvmpipe with no X server and no hardware. Headful is untouched.
-+    if (gfxPlatform::IsHeadless() || IsWaylandDisplay() ||
-+        gfxConfig::IsEnabled(Feature::X11_EGL)) {
-       gfxVars::SetUseEGL(true);
-     }
-     InitDmabufConfig();
-@@ -210,6 +225,18 @@ void gfxPlatformGtk::InitDmabufConfig() {
-                          "FEATURE_FAILURE_REQUIRES_EGL"_ns);
-   }
- 
-+  // Camoufox: that check used to cover headless as a side effect, because
-+  // headless never reached EGL. It does now, so keep DMABUF off explicitly. A
-+  // headless process presents no buffers to anything, and leaving the feature
-+  // enabled here would have it open a DRM render node during startup -- a path
-+  // that never ran in this mode before, and not something the WebGL fix should
-+  // be deciding.
-+  if (gfxPlatform::IsHeadless()) {
-+    feature.ForceDisable(FeatureStatus::Unavailable,
-+                         "Headless mode presents no buffers",
-+                         "FEATURE_FAILURE_HEADLESS_MODE"_ns);
-+  }
-+
-   if (!gfxVars::WebglUseHardware()) {
-     feature.Disable(FeatureStatus::Blocklisted,
-                     "DMABuf disabled with software rendering", failureId);
