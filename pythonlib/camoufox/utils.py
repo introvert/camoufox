@@ -21,7 +21,7 @@ from .exceptions import (
     InvalidPropertyType,
     NonFirefoxFingerprint,
 )
-from .fingerprints import from_browserforge, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults
+from .fingerprints import from_browserforge, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults, gpu_screen_is_plausible, is_software_renderer
 from .geolocation import geoip_allowed, get_geolocation
 from .ip import Proxy, public_ip, valid_ipv4, valid_ipv6
 from .locales import handle_locales
@@ -572,6 +572,33 @@ def sync_attach_vd(
     return browser
 
 
+WEBGL_CONFIG_ENV = 'CAMOUFOX_WEBGL_CONFIG'
+
+
+def webgl_config_from_env() -> Optional[Tuple[str, str]]:
+    """Read a fleet-wide default GPU from the environment.
+
+    A deployment often wants one GPU policy for every process without editing
+    each call site, and the fingerprint config itself is not readable from a
+    file -- the browser takes it as chunked environment variables the launcher
+    writes fresh each time, so exporting CAMOU_CONFIG does nothing. This is the
+    one place a default can live.
+
+    Format is "Vendor|Renderer", matching the webgl_config tuple. An explicit
+    webgl_config argument wins, so a caller can still override the fleet.
+    """
+    raw = os.environ.get(WEBGL_CONFIG_ENV)
+    if not raw:
+        return None
+    vendor, sep, renderer = raw.partition('|')
+    if not sep or not vendor.strip() or not renderer.strip():
+        raise ValueError(
+            f'{WEBGL_CONFIG_ENV} must be "Vendor|Renderer", for example '
+            f'"Mesa|llvmpipe, or similar". Got: {raw!r}'
+        )
+    return vendor.strip(), renderer.strip()
+
+
 def launch_options(
     *,
     config: Optional[Dict[str, Any]] = None,
@@ -749,6 +776,16 @@ def launch_options(
     _user_set_navigator = is_domain_set(config, 'navigator.')
     _user_set_screen_window = is_domain_set(config, 'screen.', 'window.')
     _user_set_media_devices = is_domain_set(config, 'mediaDevices:')
+
+    # A fleet-wide default, applied here so it meets the same OS requirement an
+    # explicit argument does rather than slipping past it. It ranks below both
+    # an explicit argument and a preset that names its own GPU: a default should
+    # lose to anything chosen deliberately, and an operator who wants to force
+    # the fleet policy over a preset can pass webgl_config instead.
+    if webgl_config is None and not (
+        config.get('webGl:vendor') and config.get('webGl:renderer')
+    ):
+        webgl_config = webgl_config_from_env()
 
     # Assert the target OS is valid
     if os:
@@ -980,6 +1017,25 @@ def launch_options(
         # If the user has provided a specific WebGL vendor/renderer pair, use it
         if webgl_config:
             webgl_fp = sample_webgl(target_os, *webgl_config)
+            # merge_into() leaves keys the config already holds, so a preset that
+            # named its own GPU would keep its vendor and renderer strings while
+            # the pinned parameter table landed underneath them -- getParameter
+            # (RENDERER) and UNMASKED_RENDERER_WEBGL then name different GPUs on
+            # the same context, which is one property read to catch. Drop the
+            # preset's pair so the pinned one lands whole.
+            config.pop('webGl:vendor', None)
+            config.pop('webGl:renderer', None)
+            # Pinning skips sample_webgl_for_screen, so the two checks it would
+            # have made are made here instead. Warn rather than resample: the
+            # caller named this GPU on purpose, and silently handing back a
+            # different one would be worse than saying the pairing is odd.
+            _pinned = webgl_fp.get('webGl:renderer')
+            if not gpu_screen_is_plausible(
+                _pinned, config.get('screen.width'), config.get('screen.height')
+            ):
+                LeakWarning.warn('webgl_pinned_screen', i_know_what_im_doing)
+            if is_software_renderer(_pinned):
+                LeakWarning.warn('webgl_pinned_software', i_know_what_im_doing)
         elif config.get('webGl:vendor') and config.get('webGl:renderer'):
             # Preset already set vendor/renderer — sample matching WebGL params
             webgl_fp = sample_webgl(target_os, config['webGl:vendor'], config['webGl:renderer'])

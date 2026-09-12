@@ -5,6 +5,19 @@ on:
   push:
     tags:
       - "*"
+  # Compile what is about to be merged. Until now the only build was on a tag,
+  # so a patch that does not compile was discovered after it had already landed
+  # on main and been tagged.
+  pull_request:
+    branches:
+      - main
+
+# A second push to a pull request makes the first build pointless; let it go
+# rather than holding four runners for two hours on stale code. Tag builds are
+# never cancelled -- they produce the release.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -15,8 +28,14 @@ jobs:
         # failure from skipping the release job, which needs every matrix
         # job to succeed. i686 went with it -- it was a Windows-only arch,
         # unsupported on both linux and macos.
+        #
+        # A pull request builds both platforms on one architecture. What it is
+        # there to catch is code that does not compile, and a patch guarded by
+        # MOZ_WIDGET_GTK has to be seen from both sides of that guard; the
+        # second architecture repeats the same sources and would double the
+        # wait for it. Tags still build the full four.
         target: [linux, macos]
-        arch: [x86_64, arm64]
+        arch: ${{ fromJSON(github.event_name == 'pull_request' && '["x86_64"]' || '["x86_64","arm64"]') }}
 
     steps:
       - name: Maximize build space
@@ -119,6 +138,9 @@ jobs:
 
   release:
     needs: build
+    # Skip the job outright on a pull request rather than letting it start and
+    # create nothing: the create step below is already gated on a tag ref.
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     runs-on: ubuntu-latest
