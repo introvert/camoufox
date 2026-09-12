@@ -554,8 +554,23 @@ class Runtime {
     // also keeps this working in workers, where there are no Xrays.
     if (this._pendingPromises.size === 1)
       this._debugger.onDebuggerStatement = this._onDebuggerStatement.bind(this);
-    executionContext._debuggee.executeInGlobalWithBindings(
+    // Attaching can fail where the promise is the page's own rather than this
+    // world's -- the `mw:` hatch, or disableWorldIsolation -- because then
+    // `then` is whatever page script left on the prototype, and that can throw
+    // or not be callable. Rejecting is the point: the entry is already in
+    // _pendingPromises, so bailing out quietly would hang exactly like the
+    // missing hook did. Verified by forcing the attach to throw -- without this
+    // the evaluate never returns. Playwright relabels any evaluate error it
+    // does not recognise as "Execution context was destroyed", so the text
+    // below is for the protocol log rather than for the caller.
+    const attached = executionContext._debuggee.executeInGlobalWithBindings(
         'p.then(() => { debugger; }, () => { debugger; })', {p: obj}, {useInnerBindings: true});
+    if (!attached || 'throw' in attached) {
+      this._pendingPromises.delete(obj.promiseID);
+      if (!this._pendingPromises.size)
+        this._debugger.onDebuggerStatement = undefined;
+      reject(new Error('Cannot await promise: failed to observe when it settles'));
+    }
     return await promise;
   }
 
