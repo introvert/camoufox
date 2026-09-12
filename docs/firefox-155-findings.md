@@ -13,10 +13,10 @@ reasoned about.
 | --- | --- | --- |
 | Promise-returning `evaluate` no longer hangs | Verified | Reproduced before and after on the release binary; 113 tests pass across five suites |
 | Failed reaction attach rejects instead of hanging | Verified | Forced the attach to throw: unguarded never returns, guarded errors at once |
-| Headless WebGL gets a real context | **Unbuilt** | Patch applies cleanly, destination proven by hand, C++ never compiled |
+| Headless WebGL gets a real context | Verified | Built in PR #6; headless gets a context that renders, pixel-identical to headful |
 | WebGL parity test | Verified | Fails correctly on the unpatched build; all 42 identity assertions hold against a real context |
 | Rendered WebGL pixels match the spoofed GPU | Not attempted | Measured absent: framebuffer hash identical with and without a spoof config |
-| `premultipliedAlpha` spoofing | Fixed, unbuilt | Leak reproduced live, then the key corrected; needs a build to confirm |
+| `premultipliedAlpha` spoofing | Verified | Leak reproduced, key corrected, and the probe now returns the config's value |
 
 ## Shipped: the evaluate hang
 
@@ -160,8 +160,9 @@ first.
   path. Headless takes the EGL path, and the surfaceless context this work reaches is
   OpenGL ES 3.2, so the header may read as ESSL there instead. That is the one place
   the two paths could visibly diverge, and it is unmeasured until the patch is built.
-  The parity test now asserts both modes report the same target, so the build answers
-  it rather than leaving it open.
+  The build answered it: both modes report `#version 450`, so there is no
+  divergence. The parity test keeps asserting it so a future rebase cannot
+  reintroduce one.
 
 ## Cost, measured
 
@@ -330,9 +331,16 @@ new default.
 
 ## What is still open
 
-**The gate.** The WebGL patch has never been compiled. Four review passes found four
-defects in roughly forty lines, which is the argument for not merging it on reading
-alone.
+**The gate is passed.** PR #6 built the branch on Linux and macOS and every suite
+ran against its artifact. What the build settled, beyond compiling:
+
+- Headless gets a real context that compiles, links, draws and reads back the
+  shader's colour, with no X server and no GPU.
+- `getTranslatedShaderSource` reports `#version 450` in **both** modes, so the EGL
+  path does not expose a different shader target from GLX. That was the open stealth
+  divergence and it does not exist.
+- The framebuffer hash is identical headless and headful, `e0c10396`. Moving a fleet
+  off Xvfb does not move the canvas fingerprint.
 
 - **Rendered pixels are not spoofed.** The framebuffer hash was byte-identical with
   and without a spoof config, so the image still describes llvmpipe. This gap exists
