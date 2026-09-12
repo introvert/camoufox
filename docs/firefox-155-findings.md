@@ -291,9 +291,21 @@ So the knob is an environment variable read by the launcher:
 export CAMOUFOX_WEBGL_CONFIG="Mesa|llvmpipe, or similar"
 ```
 
-An explicit `webgl_config=` argument still wins, and everything else about the
-fingerprint is untouched: the value feeds the same `sample_webgl()` lookup the
-preset path already uses.
+Precedence runs: an explicit `webgl_config=` argument, then a preset that names its
+own GPU, then this default, then the screen-coherent sampler. A default should lose
+to anything chosen deliberately; an operator who wants the fleet policy to beat a
+preset passes the argument instead.
+
+Everything else about the fingerprint is untouched. Verified by generating a config
+twice with the knob and twice without: the keys that differ between knob and no-knob
+are exactly the keys that differ between any two runs, which are the seeds, fonts,
+screen and navigator values the generator randomises anyway.
+
+An explicit argument replaces a preset's GPU rather than landing on top of it.
+`merge_into()` leaves keys the config already holds, so without that the preset kept
+its vendor and renderer strings while the pinned parameter table landed underneath:
+`getParameter(RENDERER)` said Intel while `UNMASKED_RENDERER_WEBGL` said llvmpipe, on
+the same context. One property read to catch, and the test now guards it.
 
 Pinning skips `sample_webgl_for_screen()`, which is what normally keeps the GPU
 coherent with the screen BrowserForge picked, so the two checks it would have made

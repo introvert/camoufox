@@ -27,6 +27,9 @@ What PASS means:
     * pinning a discrete GPU behind a screen too small for one warns;
     * pinning a software rasterizer warns, since it is a VM signal applied to
       every session;
+    * a preset that names its own GPU beats the fleet default, and an explicit
+      argument beats the preset by replacing it rather than landing half over it,
+      so the renderer string and the parameter table never name different GPUs;
     * and a sampled GPU, the default path, warns about neither.
 """
 
@@ -55,13 +58,18 @@ def _launch(**kwargs: Any) -> Dict[str, Any]:
     return launch_options(os="linux", headless=True, **kwargs)
 
 
-def _renderer(opts: Dict[str, Any]) -> Any:
-    """The renderer the browser will actually be told about."""
-    env = opts.get("env", {})
-    blob = "".join(v for k, v in sorted(env.items()) if k.startswith("CAMOU_CONFIG"))
+def _full(opts: Dict[str, Any]) -> Dict[str, Any]:
+    """The config the browser will actually be handed."""
     import orjson
 
-    return orjson.loads(blob).get("webGl:renderer")
+    env = opts.get("env", {})
+    blob = "".join(v for k, v in sorted(env.items()) if k.startswith("CAMOU_CONFIG"))
+    return orjson.loads(blob)
+
+
+def _renderer(opts: Dict[str, Any]) -> Any:
+    """The renderer the browser will actually be told about."""
+    return _full(opts).get("webGl:renderer")
 
 
 def _warnings_from(**kwargs: Any) -> List[str]:
@@ -88,6 +96,28 @@ def _run() -> bool:
     _check(results, "explicit webgl_config wins",
            _renderer(_launch(webgl_config=DISCRETE, i_know_what_im_doing=True)),
            DISCRETE[1])
+
+    print()
+    print("-- the config stays internally coherent --")
+    PRESET = {"webGl:vendor": "Intel", "webGl:renderer": "Intel(R) HD Graphics 400, or similar"}
+    os.environ["CAMOUFOX_WEBGL_CONFIG"] = "Mesa|llvmpipe, or similar"
+    # A preset naming its own GPU is a deliberate choice; the fleet default is not.
+    preset = _full(_launch(config=dict(PRESET), i_know_what_im_doing=True))
+    _check(results, "a preset's GPU beats the fleet default",
+           preset["webGl:renderer"], PRESET["webGl:renderer"])
+    _check(results, "and its unmasked name agrees",
+           preset["webGl:parameters"]["37446"], PRESET["webGl:renderer"])
+
+    # An explicit argument does beat the preset, and must replace it rather than
+    # land half over it: merge_into() keeps keys the config already holds, so the
+    # strings and the parameter table could otherwise name different GPUs.
+    forced = _full(_launch(config=dict(PRESET), webgl_config=SOFTWARE,
+                           i_know_what_im_doing=True))
+    _check(results, "an argument replaces the preset's GPU",
+           forced["webGl:renderer"], SOFTWARE[1])
+    _check(results, "and leaves no mismatched unmasked name",
+           forced["webGl:parameters"]["37446"], SOFTWARE[1])
+    del os.environ["CAMOUFOX_WEBGL_CONFIG"]
 
     print()
     print("-- a malformed value is not silently ignored --")

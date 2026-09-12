@@ -777,10 +777,14 @@ def launch_options(
     _user_set_screen_window = is_domain_set(config, 'screen.', 'window.')
     _user_set_media_devices = is_domain_set(config, 'mediaDevices:')
 
-    # A fleet-wide default, overridden by an explicit argument. Applied here so
-    # it meets the same OS requirement the argument does rather than slipping
-    # past it.
-    if webgl_config is None:
+    # A fleet-wide default, applied here so it meets the same OS requirement an
+    # explicit argument does rather than slipping past it. It ranks below both
+    # an explicit argument and a preset that names its own GPU: a default should
+    # lose to anything chosen deliberately, and an operator who wants to force
+    # the fleet policy over a preset can pass webgl_config instead.
+    if webgl_config is None and not (
+        config.get('webGl:vendor') and config.get('webGl:renderer')
+    ):
         webgl_config = webgl_config_from_env()
 
     # Assert the target OS is valid
@@ -1013,6 +1017,14 @@ def launch_options(
         # If the user has provided a specific WebGL vendor/renderer pair, use it
         if webgl_config:
             webgl_fp = sample_webgl(target_os, *webgl_config)
+            # merge_into() leaves keys the config already holds, so a preset that
+            # named its own GPU would keep its vendor and renderer strings while
+            # the pinned parameter table landed underneath them -- getParameter
+            # (RENDERER) and UNMASKED_RENDERER_WEBGL then name different GPUs on
+            # the same context, which is one property read to catch. Drop the
+            # preset's pair so the pinned one lands whole.
+            config.pop('webGl:vendor', None)
+            config.pop('webGl:renderer', None)
             # Pinning skips sample_webgl_for_screen, so the two checks it would
             # have made are made here instead. Warn rather than resample: the
             # caller named this GPU on purpose, and silently handing back a
