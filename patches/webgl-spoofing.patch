@@ -3,12 +3,13 @@ new file mode 100644
 index 0000000000..4f1ff23af4
 --- /dev/null
 +++ b/dom/base/WebGLParamsManager.cpp
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,83 @@
 +/* Camoufox: Per-context WebGL parameter manager */
 +#include "WebGLParamsManager.h"
 +
 +#include "mozilla/dom/BrowsingContext.h"
 +#include "nsGlobalWindowInner.h"
++#include "nsPIDOMWindowInlines.h"
 +#include "xpcpublic.h"
 +
 +namespace mozilla {

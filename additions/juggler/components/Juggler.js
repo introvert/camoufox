@@ -20,6 +20,22 @@ const Ci = Components.interfaces;
 // Register JSWindowActors that will be instantiated for each frame.
 ActorManagerParent.addJSWindowActors({
   JugglerFrame: {
+    // Firefox 155 gates JSWindowActors on a new `safeForUntrustedWebProcess`
+    // flag: JSActorProtocol::RemoteTypePrefixMatches() refuses to instantiate
+    // an actor that does not declare it in any process whose remote type
+    // starts with "web" or "file", as long as
+    // dom.jsipc.check_safeForUntrustedWebProcess is on (it defaults to true).
+    //
+    // Every Camoufox browser context runs in its own userContextId, so its
+    // pages live in a `web=^userContextId=N` process. Without this flag the
+    // page's JugglerFrame actor is never created, getActor() throws
+    //   NotSupportedError: Window protocol 'JugglerFrame' doesn't match
+    //   remote type 'web=^userContextId=6'
+    // and the page's SimpleChannel never gets a transport. SimpleChannel
+    // queues until one appears, so every parent->content message hangs with
+    // no error -- Page.setInitScripts first, which is the call Playwright
+    // makes from new_page().
+    safeForUntrustedWebProcess: true,
     parent: {
       esModuleURI: 'chrome://juggler/content/JugglerFrameParent.sys.mjs',
     },

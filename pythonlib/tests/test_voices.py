@@ -101,3 +101,87 @@ def test_normalize_preset_voices_passes_through_objects():
 
 def test_unknown_os_falls_back_to_macos():
     assert len(_generate_random_voice_subset("plan9", "en-US")) > 0
+
+
+# ── Fail-closed voice configuration (daijro/camoufox#731) ────────────────────
+#
+# nsSynthVoiceRegistry only withholds the host's speech-dispatcher / SAPI /
+# NSSpeech voices while Camoufox owns the list. An empty or unset `voices`
+# used to fall through to the host backend and register every native voice --
+# 14805 espeak-ng entries on a stock Linux box -- under a fingerprint claiming
+# macOS or Windows.
+
+from camoufox.exceptions import InvalidPropertyType  # noqa: E402
+from camoufox.utils import validate_voices  # noqa: E402
+
+
+def _launch_config(**kwargs):
+    """Rebuild the config dict from the chunked CAMOU_CONFIG_* env vars."""
+    import json
+
+    from camoufox.utils import launch_options
+
+    opts = launch_options(headless=True, i_know_what_im_doing=True, **kwargs)
+    env = opts["env"]
+    chunks = sorted(
+        (k for k in env if k.startswith("CAMOU_CONFIG_")),
+        key=lambda k: int(k.rsplit("_", 1)[1]),
+    )
+    return json.loads("".join(env[k] for k in chunks))
+
+
+def test_block_flag_is_pinned_by_default():
+    # Without this the browser has no instruction to withhold host voices when
+    # the list it receives turns out to be empty or unusable.
+    assert _launch_config(os="macos")["voices:blockIfNotDefined"] is True
+
+
+def test_caller_can_override_the_block_flag():
+    cfg = _launch_config(os="macos", config={"voices:blockIfNotDefined": False})
+    assert cfg["voices:blockIfNotDefined"] is False
+
+
+def test_voice_generation_failure_fails_closed(monkeypatch):
+    import camoufox.utils as utils
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("voices.json unreadable")
+
+    monkeypatch.setattr(utils, "_generate_random_voice_subset", boom)
+    cfg = _launch_config(os="macos")
+    # An empty list plus the block flag means "no voices" -- never "all of the
+    # host's".
+    assert cfg["voices"] == []
+    assert cfg["voices:blockIfNotDefined"] is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        ["Alex:en-US:local"],  # the bare-string shape MVoices() drops
+        [{"name": "Alex", "lang": "en-US"}],  # incomplete object
+        "Alex",  # not a list at all
+    ],
+)
+def test_validate_voices_rejects_unusable_shapes(value):
+    with pytest.raises(InvalidPropertyType):
+        validate_voices(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        [],  # empty is legal: it means "no voices", and the flag enforces it
+        [
+            {
+                "lang": "en-US",
+                "name": "Alex",
+                "voiceUri": "urn:moz-tts:osx:alex",
+                "isDefault": True,
+                "isLocalService": True,
+            }
+        ],
+    ],
+)
+def test_validate_voices_accepts_usable_shapes(value):
+    validate_voices(value)

@@ -26,9 +26,9 @@ index 1ff3195235..795cb05bc3 100644
 +  return IPC_OK();
 +}
 +
- IPCResult ContentParent::RecvAttributionEvent(
-     const nsACString& aHost, PrivateAttributionImpressionType aType,
-     uint32_t aIndex, const nsAString& aAd, const nsACString& aTargetHost) {
+ static mozilla::glean::security::FissionPrincipalsExtra
+ GetAndLogPrincipalValidationFailure(nsIPrincipal* aPrincipal,
+                                     const char* aMethod) {
 diff --git a/dom/ipc/ContentParent.h b/dom/ipc/ContentParent.h
 index 4a478a5a4d..161a1f993e 100644
 --- a/dom/ipc/ContentParent.h

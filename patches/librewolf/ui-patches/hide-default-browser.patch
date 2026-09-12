@@ -2,20 +2,18 @@ diff --git a/browser/components/preferences/main.js b/browser/components/prefere
 index c86e54bb6f..bdfcc7bb9f 100644
 --- a/browser/components/preferences/main.js
 +++ b/browser/components/preferences/main.js
-@@ -494,65 +494,6 @@ const DefaultBrowserHelper = {
+@@ -370,69 +370,6 @@
    },
- };
+ });
  
 -Preferences.addSetting({
 -  id: "alwaysCheckDefault",
 -  pref: "browser.shell.checkDefaultBrowser",
 -  setup: emitChange => {
 -    if (!DefaultBrowserHelper.canCheck) {
--      return;
+-      return undefined;
 -    }
--    DefaultBrowserHelper.pollForDefaultChanges(emitChange);
--    // eslint-disable-next-line consistent-return
--    return () => DefaultBrowserHelper.clearPollingForDefaultChanges();
+-    return DefaultBrowserHelper.pollForDefaultChanges(emitChange);
 -  },
 -  /**
 -   * Show button for setting browser as default browser or information that
@@ -32,14 +30,20 @@ index c86e54bb6f..bdfcc7bb9f 100644
 -  id: "isDefaultPane",
 -  deps: ["alwaysCheckDefault"],
 -  visible: () =>
--    DefaultBrowserHelper.canCheck && DefaultBrowserHelper.isBrowserDefault,
+-    DefaultBrowserHelper.canCheck &&
+-    DefaultBrowserHelper.isBrowserDefault &&
+-    Services.policies.isAllowed("setDefaultBrowser") &&
+-    !Services.prefs.prefIsLocked("pref.general.disable_button.default_browser"),
 -});
 -
 -Preferences.addSetting({
 -  id: "isNotDefaultPane",
 -  deps: ["alwaysCheckDefault"],
 -  visible: () =>
--    DefaultBrowserHelper.canCheck && !DefaultBrowserHelper.isBrowserDefault,
+-    DefaultBrowserHelper.canCheck &&
+-    !DefaultBrowserHelper.isBrowserDefault &&
+-    Services.policies.isAllowed("setDefaultBrowser") &&
+-    !Services.prefs.prefIsLocked("pref.general.disable_button.default_browser"),
 -  onUserClick: (e, { alwaysCheckDefault }) => {
 -    if (!DefaultBrowserHelper.canCheck) {
 -      return;
@@ -68,7 +72,7 @@ index c86e54bb6f..bdfcc7bb9f 100644
  // AI Control pref settings
  Preferences.addSetting({
    id: "aiControlDefault",
-@@ -679,16 +620,11 @@ function createStartupConfig(hidden = false) {
+@@ -565,16 +502,11 @@
            role: "status",
          },
        },
@@ -83,9 +87,9 @@ index c86e54bb6f..bdfcc7bb9f 100644
  SettingGroupManager.registerGroups({
 -  defaultBrowser: createDefaultBrowserConfig(),
    startup: createStartupConfig(
-     Services.prefs.getBoolPref("browser-settings-redesign.enabled", false)
+     Services.prefs.getBoolPref("browser.settings-redesign.enabled", false)
    ),
-@@ -797,7 +733,6 @@ var gMainPane = {
+@@ -690,7 +622,6 @@
      initSettingGroup("translations");
      initSettingGroup("spellCheck");
      initSettingGroup("performance");

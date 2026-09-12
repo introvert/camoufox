@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000000..8834c93e4b
 --- /dev/null
 +++ b/dom/base/WebRTCIPManager.cpp
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,147 @@
 +#include "WebRTCIPManager.h"
 +#include "nsTHashMap.h"
 +#include "RoverfoxStorageManager.h"
@@ -14,6 +14,7 @@ index 0000000000..8834c93e4b
 +#include "mozilla/dom/BrowsingContext.h"
 +#include "mozilla/dom/Document.h"
 +#include "nsPIDOMWindow.h"
++#include "nsPIDOMWindowInlines.h"
 +
 +namespace mozilla {
 +namespace dom {
@@ -402,7 +403,7 @@ index 91f927902f..b1f3c6980d 100644
  
    SyncToJsep();
  
-@@ -1751,11 +1772,75 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
+@@ -1776,11 +1776,77 @@ already_AddRefed<dom::Promise> PeerConnectionImpl::GetStats(
      MOZ_CRASH("Failed to create a promise!");
    }
  
@@ -465,9 +466,11 @@ index 91f927902f..b1f3c6980d 100644
 +                cand.mProxied.Construct(NS_ConvertASCIItoUTF16("proxied"));
 +                cand.mId.Construct(NS_ConvertASCIItoUTF16("camou-srflx"));
 +                // Associate with the same transport as the real candidates.
++                // transportId is a required dictionary member, so it is a
++                // plain string rather than an Optional one.
 +                for (const auto& existing : aReport->mIceCandidateStats) {
-+                  if (existing.mTransportId.WasPassed()) {
-+                    cand.mTransportId.Construct(existing.mTransportId.Value());
++                  if (!existing.mTransportId.IsEmpty()) {
++                    cand.mTransportId = existing.mTransportId;
 +                    break;
 +                  }
 +                }
@@ -477,7 +480,7 @@ index 91f927902f..b1f3c6980d 100644
 +                }
 +              }
 +            }
-             RefPtr<RTCStatsReport> report(new RTCStatsReport(window));
+             RefPtr report = MakeRefPtr<RTCStatsReport>(window);
              report->Incorporate(*aReport);
              promise->MaybeResolve(std::move(report));
 @@ -3260,12 +3345,22 @@ const std::string& PeerConnectionImpl::GetName() {

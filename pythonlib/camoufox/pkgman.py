@@ -1,3 +1,4 @@
+import hashlib
 import os
 import platform
 import re
@@ -31,7 +32,9 @@ from yaml import CLoader, load
 from .__version__ import CONSTRAINTS
 from .exceptions import (
     CamoufoxNotInstalled,
+    CorruptedDownload,
     MissingRelease,
+    ProfileDirectoryError,
     UnsupportedArchitecture,
     UnsupportedOS,
     UnsupportedVersion,
@@ -76,6 +79,41 @@ LAUNCH_FILE = {
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
 console = Console()
+
+
+def ensure_browser_profile_dir(
+    env: Optional[Dict[str, Union[str, float, bool]]] = None,
+) -> Optional[Path]:
+    """Ensure Firefox's Linux application directory exists before startup.
+
+    Firefox probes ``~/.camoufox`` even when Playwright supplies a temporary
+    profile. On a read-only HOME, a missing directory makes startup stall; an
+    existing directory may itself remain read-only.
+    """
+    if OS_NAME != 'lin':
+        return None
+
+    environment = os.environ if env is None else env
+    configured_home = environment.get('HOME')
+    home = Path(str(configured_home)).expanduser() if configured_home else Path.home()
+    profile_dir = home / '.camoufox'
+    if profile_dir.is_dir():
+        return profile_dir
+
+    try:
+        profile_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as error:
+        raise ProfileDirectoryError(
+            f"Camoufox requires '{profile_dir}' to exist before launch, but it "
+            "could not be created. For a read-only runtime, create this directory "
+            "before making HOME read-only."
+        ) from error
+
+    if not profile_dir.is_dir():
+        raise ProfileDirectoryError(
+            f"Camoufox requires '{profile_dir}' to be a directory before launch."
+        )
+    return profile_dir
 
 
 def rprint(msg: str, fg: Optional[str] = None, nl: bool = True) -> None:
@@ -331,7 +369,7 @@ class Version:
         return self.sorted_rel < other.sorted_rel
 
     def is_supported(self) -> bool:
-        return VERSION_MIN <= self < VERSION_MAX
+        return effective_version_min() <= self < VERSION_MAX
 
     @staticmethod
     def from_path(path: Optional[Path] = None) -> 'Version':
@@ -368,6 +406,34 @@ class Version:
 
 
 VERSION_MIN, VERSION_MAX = Version.build_minmax()
+
+
+def _resolved_playwright_version() -> Optional[Tuple[int, ...]]:
+    """The installed Playwright version, or None if it cannot be determined."""
+    from importlib.metadata import version
+
+    try:
+        return _parse_semver(version('playwright'))
+    except Exception:
+        return None
+
+
+def effective_version_min() -> 'Version':
+    """The lowest browser build this install can actually talk to.
+
+    VERSION_MIN, raised by whatever the resolved Playwright requires. When the
+    Playwright version cannot be read we fall back to VERSION_MIN rather than
+    assuming the worst: a spurious forced re-download is worse than leaving a
+    working install alone, and pyproject caps Playwright anyway.
+    """
+    floor = VERSION_MIN
+    playwright_version = _resolved_playwright_version()
+    if playwright_version is None:
+        return floor
+    for required_playwright, build in CONSTRAINTS.PLAYWRIGHT_BROWSER_FLOORS:
+        if playwright_version >= required_playwright and floor < Version(build=build):
+            floor = Version(build=build)
+    return floor
 
 
 class GitHubDownloader:
@@ -595,6 +661,7 @@ class CamoufoxFetcher(GitHubDownloader):
         from .multiversion import install_versioned
 
         install_versioned(self, replace=replace)
+        ensure_browser_profile_dir()
 
     @property
     def url(self) -> str:
@@ -718,6 +785,22 @@ def installed_verstr() -> str:
     return Version.from_path(active).full_string
 
 
+def _root_install_supported() -> bool:
+    """
+    Whether INSTALL_DIR's root holds a supported build.
+
+    Only the pre-multiversion flat layout wrote version.json at the root; the
+    versioned layout keeps it under browsers/<repo>/<version>/. A missing root
+    version.json means "no legacy install here", so the caller should fall
+    through to a fetch rather than raise. The alpha.1 floor masked this: no
+    install was ever unsupported, so this branch was never reached.
+    """
+    try:
+        return Version.from_path().is_supported()
+    except FileNotFoundError:
+        return False
+
+
 def camoufox_path(download_if_missing: bool = True) -> Path:
     """
     Full path to the active camoufox folder
@@ -750,7 +833,7 @@ def camoufox_path(download_if_missing: bool = True) -> Path:
                 f"{active_display} is not installed. " f"Please run `camoufox fetch` to install."
             )
 
-    elif os.path.exists(INSTALL_DIR) and Version.from_path().is_supported():
+    elif os.path.exists(INSTALL_DIR) and _root_install_supported():
         return INSTALL_DIR
 
     else:
@@ -758,7 +841,24 @@ def camoufox_path(download_if_missing: bool = True) -> Path:
             raise UnsupportedVersion("Camoufox executable is outdated.")
 
     CamoufoxFetcher().install()
-    return camoufox_path()
+
+    # Re-check rather than recurse.
+    #
+    # If the newest published build is still below the floor -- a library
+    # published ahead of its browser release, or a repos.yml source that does
+    # not carry it -- install() is a no-op ("already installed") and recursing
+    # here spun ~1000 fetch attempts into a RecursionError, having hammered the
+    # GitHub API into a rate limit on the way. Say what is actually wrong.
+    active = get_active_path()
+    if active and Version.from_path(active).is_supported():
+        return active
+    if os.path.exists(INSTALL_DIR) and _root_install_supported():
+        return INSTALL_DIR
+    raise UnsupportedVersion(
+        f"No available Camoufox build satisfies this library's minimum "
+        f"({CONSTRAINTS.MIN_VERSION}). The matching browser release may not be "
+        f"published yet; wait for it, or install an older camoufox release."
+    )
 
 
 def get_path(file: str) -> str:
@@ -850,6 +950,33 @@ def webdl(
 
     buffer.seek(0)
     return buffer
+
+
+def verify_sha256(buffer: DownloadBuffer, expected: Optional[str], desc: str = "asset") -> None:
+    """
+    Check a downloaded buffer against its expected sha256 digest.
+
+    Raises CorruptedDownload on mismatch. Skips silently when no digest is
+    known, so installs from sources that publish no digest still work.
+    """
+    if not expected:
+        rprint(f"Warning: no sha256 published for {desc}; skipping verification.", fg="yellow")
+        return
+
+    buffer.seek(0)
+    digest = hashlib.sha256()
+    for block in iter(lambda: buffer.read(1024 * 1024), b""):
+        digest.update(block)
+    buffer.seek(0)
+
+    actual = digest.hexdigest()
+    if actual != expected.lower():
+        raise CorruptedDownload(
+            f"Checksum mismatch for {desc}.\n"
+            f"  expected sha256: {expected.lower()}\n"
+            f"  actual   sha256: {actual}\n"
+            "The download was corrupted or tampered with. Installation aborted."
+        )
 
 
 def unzip(

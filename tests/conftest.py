@@ -42,12 +42,36 @@ Patch playwright to not rely on module path for assets.
 original_get_file_dirname = playwright._impl._path_utils.get_file_dirname
 
 
+def _run_in_the_pages_own_world() -> None:
+    """Run this suite in the page's world rather than Camoufox's isolated one.
+
+    This is upstream Playwright's conformance suite, so it asserts upstream
+    semantics: tests read globals their own page scripts defined, and pass
+    element handles into evaluate(). Camoufox evaluates in an isolated world by
+    default -- the reason this fork exists -- and about 37 of these tests fail
+    on "X is not defined" for a global the page really did set.
+
+    The `mw:` prefix cannot stand in for this. It refuses handles by design
+    (Runtime.js), and much of this suite needs them. So isolation is turned off
+    for this suite alone. Camoufox's isolated-world behaviour keeps its own
+    coverage in tests/patches/isolated-evaluate.py, which must go on passing
+    without this flag -- that is the file to check if isolation regresses, not
+    this one.
+    """
+    raw = os.environ.get("CAMOU_CONFIG")
+    camou_config = json.loads(raw) if raw else {}
+    camou_config["disableWorldIsolation"] = True
+    os.environ["CAMOU_CONFIG"] = json.dumps(camou_config)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
     def patched_get_file_dirname():
         return _dirname
 
     playwright._impl._path_utils.get_file_dirname = patched_get_file_dirname
+
+    _run_in_the_pages_own_world()
 
 
 @pytest.hookimpl(trylast=True)
@@ -68,9 +92,17 @@ Playwright fixtures.
 
 @pytest.fixture(scope="session")
 def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    loop = asyncio.get_event_loop()
-    yield loop
-    loop.close()
+    # Not asyncio.get_event_loop(): with no running loop that is deprecated on
+    # 3.12 and raises RuntimeError on 3.14, which takes down every async test in
+    # the suite at fixture setup ("There is no current event loop in thread
+    # 'MainThread'") -- 1151 errors that look like browser failures but are not.
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        yield loop
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
 
 
 @pytest.fixture(scope="session")
@@ -242,6 +274,21 @@ def assert_to_be_golden(browser_name: str) -> Callable[[bytes, str], None]:
     return compare
 
 
+def _to_camel_case_keys(options: Dict) -> Dict:
+    """snake_case launch options -> the camelCase the Node driver expects.
+
+    Unset options are dropped rather than serialised as null: the driver
+    validates types strictly, so a `channel: None` from an unused --browser-channel
+    aborts the server with "channel: expected string, got object".
+    """
+
+    def camel(key: str) -> str:
+        head, *rest = key.split("_")
+        return head + "".join(part.title() for part in rest)
+
+    return {camel(key): value for key, value in options.items() if value is not None}
+
+
 class RemoteServer:
     def __init__(self, browser_name: str, launch_server_options: Dict, tmpfile: Path) -> None:
         driver_dir = Path(inspect.getfile(playwright)).parent / "driver"
@@ -250,7 +297,14 @@ class RemoteServer:
         else:
             node_executable = driver_dir / "node"
         cli_js = driver_dir / "package" / "cli.js"
-        tmpfile.write_text(json.dumps(launch_server_options))
+        # `launch-server --config` is read by the Node driver as JS launch
+        # options, so the keys have to be camelCase. Handing it the Python
+        # fixture's snake_case `executable_path` silently dropped it: the server
+        # fell back to Playwright's bundled Firefox, failed with "Executable
+        # doesn't exist at .../firefox-1522/firefox", printed no endpoint, and
+        # every connect test then died on an empty ws_endpoint with the
+        # misleading "Port should be >= 0 and < 65536. Received type string ('')".
+        tmpfile.write_text(json.dumps(_to_camel_case_keys(launch_server_options)))
         self.process = subprocess.Popen(
             [
                 str(node_executable),

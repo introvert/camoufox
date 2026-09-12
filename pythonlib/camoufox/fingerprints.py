@@ -4,7 +4,7 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from random import choice, randint, randrange, random, sample, shuffle
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from browserforge.fingerprints import (
     Fingerprint,
@@ -406,6 +406,52 @@ def clamp_window_dimensions(config: Dict[str, Any]) -> None:
             config[f'window.inner{axis}'] = outer_clamped
 
 
+def clamp_screen_to_display(
+    config: Dict[str, Any],
+    max_width: Optional[int],
+    max_height: Optional[int],
+) -> None:
+    """Shrink screen.width/height down to the bounds of the real display.
+
+    BrowserForge takes a Screen constraint but drops it silently whenever it
+    filters the fingerprint pool too far: FingerprintGenerator.partial_csp
+    swallows the resulting failure and deletes the constraint unless strict=True.
+    So the bound from get_screen_cons() is best-effort only, and a 1366x768
+    laptop routinely gets a 2560x1440 fingerprint. browser-init.patch resizes the
+    real chrome window to window.outerWidth/outerHeight, so an unbounded value
+    renders past the edge of the monitor (daijro/camoufox#499).
+
+    Keeps the taskbar delta (screen - avail) intact so fix_screen_no_taskbar's
+    invariant survives. Callers must run clamp_window_dimensions afterwards to
+    cascade the new bounds down to avail/outer/inner.
+    """
+    for axis, cap in (('width', max_width), ('height', max_height)):
+        screen = config.get(f'screen.{axis}')
+        if not (screen and cap) or screen <= cap:
+            continue
+        avail_key = 'screen.availWidth' if axis == 'width' else 'screen.availHeight'
+        avail = config.get(avail_key)
+        config[f'screen.{axis}'] = cap
+        if avail:
+            config[avail_key] = max(1, cap - max(0, screen - avail))
+
+
+def clamp_window_position(config: Dict[str, Any]) -> None:
+    """Keep the window box inside the screen: 0 <= screenX/Y <= screen - outer.
+
+    BrowserForge's screenX/screenY are consistent with the screen it generated
+    them against, so clamp_screen_to_display invalidates them. A window
+    positioned partly off its own reported screen is an impossible geometry.
+    """
+    for axis, pos_key in (('Width', 'window.screenX'), ('Height', 'window.screenY')):
+        screen = config.get(f'screen.{axis.lower()}')
+        outer = config.get(f'window.outer{axis}')
+        pos = config.get(pos_key)
+        if pos is None or not (screen and outer):
+            continue
+        config[pos_key] = max(0, min(pos, screen - outer))
+
+
 def set_media_devices_defaults(config: Dict[str, Any]) -> None:
     """Spoof navigator.mediaDevices.enumerateDevices() so headless contexts
     expose a plausible device list.
@@ -422,6 +468,201 @@ def set_media_devices_defaults(config: Dict[str, Any]) -> None:
     config['mediaDevices:micros'] = 1
     config['mediaDevices:webcams'] = 1
     config['mediaDevices:speakers'] = 0
+
+
+# -- WebGL <-> screen coherence (#729) ---------------------------------------
+#
+# BrowserForge picks navigator/screen; the GPU is drawn separately from
+# webgl_data.db weighted only by OS. Nothing ties the two together, so the
+# synthetic path can emit pairs no real machine ships -- a discrete GPU behind
+# a 1024x600 netbook panel. Consistency checks (Pixelscan, Fingerprint.com)
+# read that as masking even when every individual value is plausible alone.
+#
+# What can honestly be claimed here is narrow, because Firefox never reports
+# the GPU it actually sees. dom/canvas/SanitizeRenderer.cpp collapses every
+# renderer string into one of ~11 representative device buckets before a page
+# sees it (prefs webgl.sanitize-unmasked-renderer and
+# webgl.enable-renderer-query, both default true; resistFingerprinting
+# replaces the value with "Mozilla" outright). That file's own header comment
+# gives the flavour: `"GeForce RTX 3090" => "GeForce GTX 980"`. So every RTX,
+# every Quadro M/P/V/T and every GeForce 900-7999 arrive as one string, while
+# "Intel(R) UHD Graphics 620" and "Mesa Intel(R) Iris(R) Xe Graphics" both
+# arrive as an "Intel(R) HD Graphics" spelling.
+#
+# Two consequences. Matching on raw model names -- RTX, Quadro, RX, UHD, Iris,
+# Mesa Intel -- can never fire, because those are exactly the strings Gecko
+# collapses away. And a bucket spanning a desktop RTX 4090 and a mobile GTX
+# 1650 Max-Q carries no useful screen floor: 1366x768 laptops with discrete
+# NVIDIA GPUs are ordinary hardware, not a tell.
+#
+# So the rule below holds only what is true of *every* part behind a bucket,
+# and renderers are reduced to their bucket first (see _renderer_bucket) so
+# the ANGLE, nouveau and /PCIe/SSE2 spellings of one GPU land on one rule
+# instead of three different ones.
+
+# Software rasterizers. A VM or headless host reports whatever resolution the
+# window manager hands it, so no screen constrains them -- and the sampler
+# must never come to *prefer* them, because a software renderer is a far
+# stronger "this is a bot" signal than any GPU/screen mismatch.
+_SOFTWARE_RENDERERS: Tuple[str, ...] = (
+    'llvmpipe',
+    'Microsoft Basic Render Driver',
+    'SwiftShader',
+    'Generic Renderer',
+)
+
+# Discrete NVIDIA, plus the AMD R5/R7/R9/RX/Vega bucket. Everything else in
+# webgl_data.db reaches down into netbook territory and gets no floor at all:
+# the "Intel(R) HD Graphics" bucket swallows the GMA 3150 netbook chipset,
+# "Radeon HD 3200 Graphics" is Gecko's catch-all for a bare "AMD"/"Radeon"
+# (the C-50/E-350 netbook APUs included), and Apple silicon drives arbitrary
+# external monitors from a Mac mini or Mac Studio.
+_DISCRETE_GPU_BUCKETS: FrozenSet[str] = frozenset(
+    {
+        'GeForce 8800 GTX',
+        'GeForce GTX 480',
+        'GeForce GTX 980',
+        'Radeon R9 200 Series',
+    }
+)
+
+# Discrete GPUs did not ship in netbooks, and netbook panels topped out at
+# 1024x600. That is the whole of the claim.
+#
+# It is an area rather than a width x height pair because real panels do not
+# dominate one another: 1280x800 and 1366x768 are both ordinary laptop
+# screens, and a per-axis floor taken from either one rejects the other. A
+# 1366x768 laptop with a discrete GPU is common hardware, not a tell.
+_NETBOOK_MAX_PIXELS = 1024 * 600
+
+# The three shapes SanitizeRenderer wraps a device bucket in.
+_ANGLE_D3D_RE = re.compile(r'^ANGLE \([^,]*, (.*?) Direct3D.*\)$')
+_ANGLE_VULKAN_RE = re.compile(r'^ANGLE \((.*)\) on Vulkan$')
+_PCIE_SSE2_RE = re.compile(r'^(.*)/PCIe?/SSE2$')
+
+
+def _renderer_bucket(renderer: str) -> str:
+    """Reduce a reported renderer to Gecko's sanitized device bucket.
+
+    "ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Direct3D11 vs_5_0 ps_5_0), or
+    similar" (Windows), "NVIDIA GeForce GTX 980/PCIe/SSE2" (Linux proprietary
+    driver) and "GeForce GTX 980, or similar" (nouveau, which loses the vendor
+    prefix) are one GPU class in three spellings. Without this they land on
+    three different rules, or none.
+    """
+    core = renderer.removesuffix(', or similar')
+    match = _ANGLE_D3D_RE.match(core) or _ANGLE_VULKAN_RE.match(core)
+    if match:
+        core = match.group(1)
+    match = _PCIE_SSE2_RE.match(core)
+    if match:
+        core = match.group(1)
+    # SanitizeRenderer re-adds the "NVIDIA " prefix only when the raw string
+    # carried it, so one bucket arrives both with and without it.
+    return core.removeprefix('NVIDIA ')
+
+
+# The smallest screen mainstream hardware still ships. BrowserForge's pool
+# carries netbook-era geometry that essentially no 2026 device reports, and
+# that is a tell on its own, whatever GPU sits behind it.
+MODERN_SCREEN_FLOOR: Tuple[int, int] = (1366, 768)
+
+
+def raise_screen_to_modern_floor(config: Dict[str, Any]) -> None:
+    """Lift netbook-era screen geometry to something current hardware reports.
+
+    BrowserForge still draws 1024x600 and friends. Those panels left
+    production a decade and a half ago, so the screen is what has to move --
+    no GPU choice makes that profile look current.
+
+    Keeps the screen-to-avail gap intact so fix_screen_no_taskbar's invariant
+    survives; the window box is reconciled by clamp_window_dimensions and
+    clamp_window_position, which run after this. Call BEFORE
+    clamp_screen_to_display so a genuinely small real monitor still wins.
+    """
+    min_w, min_h = MODERN_SCREEN_FLOOR
+    sw = config.get('screen.width')
+    sh = config.get('screen.height')
+    if not (sw and sh) or (sw >= min_w and sh >= min_h):
+        return
+
+    # Measure the gaps before mutating, or they get folded into themselves.
+    aw = config.get('screen.availWidth')
+    ah = config.get('screen.availHeight')
+    gap_w = sw - aw if aw else None
+    gap_h = sh - ah if ah else None
+
+    new_w, new_h = max(sw, min_w), max(sh, min_h)
+    config['screen.width'] = new_w
+    config['screen.height'] = new_h
+    if gap_w is not None:
+        config['screen.availWidth'] = max(1, new_w - max(0, gap_w))
+    if gap_h is not None:
+        config['screen.availHeight'] = max(1, new_h - max(0, gap_h))
+
+
+def is_software_renderer(renderer: Optional[str]) -> bool:
+    """Whether `renderer` is a software rasterizer rather than real hardware."""
+    return bool(renderer) and any(name in renderer for name in _SOFTWARE_RENDERERS)
+
+
+def gpu_screen_is_plausible(
+    renderer: Optional[str], width: Optional[int], height: Optional[int]
+) -> bool:
+    """Whether `renderer` is a GPU that plausibly drives a `width` x `height` screen.
+
+    Unconstrained buckets and software rasterizers pass. The set only names
+    buckets whose floor holds for every part behind them, so anything absent
+    from it is genuinely unconstrained rather than merely unrecognised.
+    """
+    if not renderer or not width or not height:
+        return True
+    if is_software_renderer(renderer):
+        return True
+    if _renderer_bucket(renderer) not in _DISCRETE_GPU_BUCKETS:
+        return True
+    return width * height > _NETBOOK_MAX_PIXELS
+
+
+def sample_webgl_for_screen(
+    target_os: str,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    attempts: int = 32,
+) -> Dict[str, str]:
+    """Sample a WebGL profile that is coherent with the screen already chosen.
+
+    Rejection sampling, so the GPU keeps webgl_data.db's real OS-weighted
+    distribution -- we only drop draws that contradict the screen. The screen
+    itself is left alone on purpose: it has already been reconciled with the
+    real display and the window box (clamp_screen_to_display,
+    fix_screen_no_taskbar, clamp_window_dimensions, clamp_window_position),
+    and widening it here to flatter the GPU would push a headful window back
+    off the monitor it is drawn on (#499).
+
+    The first draw settles hardware-vs-software at the pool's natural rate and
+    is never resampled once it lands on a rasterizer. Rejecting only hardware
+    draws would renormalise the survivors onto llvmpipe / WARP / SwiftShader:
+    on a small screen that turns a 1.5% software rate into a 40% one, trading
+    a weak incoherence for the strongest VM/headless tell there is.
+
+    Falls back to that first draw when the pool holds nothing coherent, so an
+    unusual screen degrades to today's behaviour rather than raising.
+    """
+    first = sample_webgl(target_os)
+    renderer = first.get('webGl:renderer')
+    if is_software_renderer(renderer) or gpu_screen_is_plausible(renderer, width, height):
+        return first
+
+    for _ in range(attempts - 1):
+        candidate = sample_webgl(target_os)
+        renderer = candidate.get('webGl:renderer')
+        # Skip rather than accept: the class was settled by the first draw.
+        if is_software_renderer(renderer):
+            continue
+        if gpu_screen_is_plausible(renderer, width, height):
+            return candidate
+    return first
 
 
 def _select_presets_file(ff_version: Optional[Any] = None) -> Path:
@@ -497,6 +738,33 @@ def get_random_preset(
     return choice(candidates)  # nosec
 
 
+# Tokens that name the machine rather than the platform: Firefox leaves every one
+# of them out of appVersion.
+_APP_VERSION_DROPPED = ('Win64', 'x64', 'Mobile', 'Tablet')
+
+
+def _app_version_from_user_agent(user_agent: str) -> Optional[str]:
+    """The appVersion Firefox reports for a browser sending this user agent.
+
+    "5.0 (<OS tokens>)": the parenthesised part of the UA without the
+    architecture, the Gecko revision, or the Windows build number.
+    """
+    block = re.match(r'Mozilla/5\.0 \(([^)]*)\)', user_agent or '')
+    if not block:
+        return None
+    kept = []
+    for token in (part.strip() for part in block.group(1).split(';')):
+        if (
+            token.startswith('rv:')
+            or token in _APP_VERSION_DROPPED
+            or token.startswith('Linux ')
+            or token.startswith('Intel Mac OS X')
+        ):
+            continue
+        kept.append('Windows' if token.startswith('Windows') else token)
+    return f"5.0 ({'; '.join(kept)})" if kept else None
+
+
 def from_preset(preset: Dict, ff_version: Optional[str] = None) -> Dict[str, Any]:
     """
     Convert a real fingerprint preset to CAMOU_CONFIG format.
@@ -526,6 +794,24 @@ def from_preset(preset: Dict, ff_version: Optional[str] = None) -> Dict[str, Any
             config['navigator.oscpu'] = 'Windows NT 10.0; Win64; x64'
         elif 'Linux' in plat or 'linux' in plat:
             config['navigator.oscpu'] = 'Linux x86_64'
+    if nav.get('appVersion'):
+        config['navigator.appVersion'] = nav['appVersion']
+    elif config.get('navigator.userAgent'):
+        # Left unset, appVersion falls through to the *host's* value and then
+        # contradicts the userAgent and platform set above: a Linux preset on a
+        # macOS host reported "5.0 (Macintosh)" beside platform "Linux x86_64",
+        # which any page can read in two properties.
+        #
+        # Firefox builds it from the same OS tokens as the userAgent, minus the
+        # architecture and rv, with Windows collapsed to its family name. Deriving
+        # it from the UA rather than from the platform keeps the distro token that
+        # 20 of the bundled Linux presets carry ("X11; Ubuntu"), which a platform
+        # lookup would flatten to "X11" — a mismatch of the same kind, if a
+        # smaller one. Checked against 800 browserforge fingerprints: exact every
+        # time.
+        derived = _app_version_from_user_agent(config['navigator.userAgent'])
+        if derived:
+            config['navigator.appVersion'] = derived
     if 'maxTouchPoints' in nav:
         config['navigator.maxTouchPoints'] = nav['maxTouchPoints']
 
@@ -766,7 +1052,14 @@ def generate_context_fingerprint(
                 else:
                     _target_os = 'mac'
             try:
-                webgl_fp = sample_webgl(_target_os)
+                # Same coherence treatment launch_options applies (#729): lift
+                # netbook geometry, then keep the GPU consistent with whatever
+                # screen this identity ended up with. This path has no real
+                # display to reconcile against, so the floor is unconditional.
+                raise_screen_to_modern_floor(config)
+                webgl_fp = sample_webgl_for_screen(
+                    _target_os, config.get('screen.width'), config.get('screen.height')
+                )
                 webgl_fp.pop('webGl2Enabled', None)
                 config.update(webgl_fp)
             except Exception:

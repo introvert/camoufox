@@ -88,6 +88,7 @@
     "mediaDevices:webcams": "int[>=0]",
     "mediaDevices:speakers": "int[>=0]",
     "mediaDevices:enabled": "bool",
+    "media:spoof_codecs": "bool",
 
     "webGl:renderer$__WEBGL": "str",
     "webGl:vendor$__WEBGL": "str",
@@ -299,6 +300,8 @@
     "showcursor": "bool",
 
     "allowMainWorld": "bool",
+    "disableWorldIsolation": "bool",
+    "allowAddonNewtab": "bool",
     "forceScopeAccess": "bool",
 
     "disableTheming": "bool",
