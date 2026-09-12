@@ -543,28 +543,42 @@ class Runtime {
       resolve = a;
       reject = b;
     });
-    this._pendingPromises.set(obj.promiseID, {resolve, reject, executionContext, exceptionDetails});
+    this._pendingPromises.set(obj.promiseID, {resolve, reject, executionContext, exceptionDetails, promiseObj: obj});
+    // Firefox 155 removed the Debugger.onPromiseSettled hook (Bug 2044167), and
+    // assigning it silently creates a plain expando that nothing ever calls --
+    // every Promise-returning evaluate used to hang here forever. Instead,
+    // attach reactions inside the debuggee that run a `debugger;` statement when
+    // the promise settles, and sweep the pending set from onDebuggerStatement.
+    // Attaching the reactions in the debuggee rather than dereferencing the
+    // promise and using Promise.prototype.then from the privileged compartment
+    // also keeps this working in workers, where there are no Xrays.
     if (this._pendingPromises.size === 1)
-      this._debugger.onPromiseSettled = this._onPromiseSettled.bind(this);
+      this._debugger.onDebuggerStatement = this._onDebuggerStatement.bind(this);
+    executionContext._debuggee.executeInGlobalWithBindings(
+        'p.then(() => { debugger; }, () => { debugger; })', {p: obj}, {useInnerBindings: true});
     return await promise;
   }
 
-  _onPromiseSettled(obj) {
-    const pendingPromise = this._pendingPromises.get(obj.promiseID);
-    if (!pendingPromise)
-      return;
-    this._pendingPromises.delete(obj.promiseID);
+  // The hook carries no argument saying which promise settled, so walk the
+  // pending set and resolve everything that is no longer pending. Content can
+  // run `debugger;` of its own, which lands here too; the sweep is a no-op then.
+  _onDebuggerStatement() {
+    for (const [promiseID, pendingPromise] of this._pendingPromises) {
+      const obj = pendingPromise.promiseObj;
+      if (obj.promiseState === 'pending')
+        continue;
+      this._pendingPromises.delete(promiseID);
+      if (obj.promiseState === 'fulfilled') {
+        pendingPromise.resolve({success: true, obj: obj.promiseValue});
+        continue;
+      }
+      const debuggee = pendingPromise.executionContext._debuggee;
+      pendingPromise.exceptionDetails.text = debuggee.executeInGlobalWithBindings('e.message', {e: obj.promiseReason}, {useInnerBindings: true}).return;
+      pendingPromise.exceptionDetails.stack = debuggee.executeInGlobalWithBindings('e.stack', {e: obj.promiseReason}, {useInnerBindings: true}).return;
+      pendingPromise.resolve({success: false, obj: null});
+    }
     if (!this._pendingPromises.size)
-      this._debugger.onPromiseSettled = undefined;
-
-    if (obj.promiseState === 'fulfilled') {
-      pendingPromise.resolve({success: true, obj: obj.promiseValue});
-      return;
-    };
-    const debuggee = pendingPromise.executionContext._debuggee;
-    pendingPromise.exceptionDetails.text = debuggee.executeInGlobalWithBindings('e.message', {e: obj.promiseReason}, {useInnerBindings: true}).return;
-    pendingPromise.exceptionDetails.stack = debuggee.executeInGlobalWithBindings('e.stack', {e: obj.promiseReason}, {useInnerBindings: true}).return;
-    pendingPromise.resolve({success: false, obj: null});
+      this._debugger.onDebuggerStatement = undefined;
   }
 
   createExecutionContext(domWindow, contextGlobal, auxData) {
@@ -597,7 +611,7 @@ class Runtime {
       }
     }
     if (!this._pendingPromises.size)
-      this._debugger.onPromiseSettled = undefined;
+      this._debugger.onDebuggerStatement = undefined;
     this._debugger.removeDebuggee(context._contextGlobal);
   }
 
@@ -613,7 +627,7 @@ class Runtime {
       }
     }
     if (!this._pendingPromises.size)
-      this._debugger.onPromiseSettled = undefined;
+      this._debugger.onDebuggerStatement = undefined;
     this._debugger.removeDebuggee(destroyedContext._contextGlobal);
     this._executionContexts.delete(destroyedContext._id);
     if (destroyedContext._domWindow)
