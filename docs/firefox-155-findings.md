@@ -16,7 +16,7 @@ reasoned about.
 | Headless WebGL gets a real context | **Unbuilt** | Patch applies cleanly, destination proven by hand, C++ never compiled |
 | WebGL parity test | Verified | Fails correctly on the unpatched build; all 42 identity assertions hold against a real context |
 | Rendered WebGL pixels match the spoofed GPU | Not attempted | Measured absent: framebuffer hash identical with and without a spoof config |
-| `premultipliedAlpha` spoofing | **Broken** | Key never matches, so the host value leaks; pre-existing and also upstream |
+| `premultipliedAlpha` spoofing | Fixed, unbuilt | Leak reproduced live, then the key corrected; needs a build to confirm |
 
 ## Shipped: the evaluate hang
 
@@ -123,6 +123,24 @@ Four review passes, four defects, each found by reading rather than running:
    applying on macOS too, where gfxInfo reaches a verdict without any window system,
    and forcing `WebglUseHardware` false there would drop a working hardware context
    onto a software rasterizer. CI builds macOS.
+
+### The `premultipliedAlpha` leak
+
+`webgl-spoofing.patch` looked the attribute up under
+`webGl:contextAttributes.premultipliedAlpha` while already inside the
+`webGl:contextAttributes` map, so the key could never match and the host's real
+value passed through. Demonstrated on the release build with a config saying
+`premultipliedAlpha: false` and a page asking for `true`:
+
+```
+reported: {"premultipliedAlpha": true, "antialias": false}
+```
+
+`antialias` follows the config; `premultipliedAlpha` returns what the page asked
+for. The key is corrected. Only the two added lines changed and their count is
+unchanged, so every hunk header stays valid, and the whole patch was re-applied to
+pristine sources to confirm it still lands and yields the fixed line. Confirming the
+behaviour needs a build, since this is C++.
 
 ## Cost, measured
 
@@ -249,13 +267,14 @@ alone.
   and without a spoof config, so the image still describes llvmpipe. This gap exists
   identically in the Xvfb setup today. Closing it means seeded noise at the readback
   boundary, with real breakage risk for genuine WebGL pages.
-- **`premultipliedAlpha` leaks.** `webgl-spoofing.patch` reads it under
-  `webGl:contextAttributes.premultipliedAlpha` while already inside that map, so the
-  lookup never matches and the host's value passes through. Every other attribute
-  spoofs correctly. One line, and it is upstream's too.
-- **Hunk placement on Firefox 152.** The patch applies to upstream's tree but one
-  hunk needs fuzz, because it anchors on a line 155 added. Re-anchoring on
-  `SetWebglUseHardware`, which both versions have, makes it exact on both.
+- **Hunk placement on Firefox 152.** The headless patch applies to upstream's tree
+  but its second hunk needs fuzz 2. I tried to re-anchor it on
+  `SetWebglUseHardware`, which both versions carry, and it does not work: at normal
+  context the hunk fails on 152 outright, and only reaches fuzz 1 with one-line
+  context, which thins the anchor for our own tree. The two versions differ in the
+  lines immediately after every viable insertion point in that function, so a single
+  hunk cannot match both exactly. Left as it is; upstreaming would want the block
+  split or the patch cut against 152 directly.
 - **Never exercised here.** Live scraping, the arm64 binary on arm64 hardware, and
   the `build-tester` suite.
 
@@ -265,4 +284,4 @@ Daijro's tree pins Firefox 152.0.4 and carries no patch touching any of these fi
 nothing in it mentions `UseEGL`, `CreateHeadless`, `glxtest` or `MOZ_HEADLESS`.
 Pulling the two files from the `FIREFOX_152_0_4_RELEASE` tag, `CreateHeadless` is
 the same function with the same GLX branch. Released Camoufox has this fault on
-Linux, and the `premultipliedAlpha` leak with it.
+Linux, and carried the `premultipliedAlpha` leak too until the fix below.
