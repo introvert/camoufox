@@ -278,6 +278,44 @@ On the current release build this prints `42` and `False`. With the WebGL patch
 built it should print `42` and `True`; anything else means the Mesa packages above
 are missing.
 
+## Controlling the GPU fleet-wide
+
+The fingerprint config cannot come from a file. The browser reads it as chunked
+`CAMOU_CONFIG_<n>` environment variables that `launch_options()` writes fresh on
+every launch, so a `CAMOU_CONFIG` exported in userdata is ignored. `camoufox.cfg`
+is Firefox prefs, not fingerprint config, despite the name.
+
+So the knob is an environment variable read by the launcher:
+
+```sh
+export CAMOUFOX_WEBGL_CONFIG="Mesa|llvmpipe, or similar"
+```
+
+An explicit `webgl_config=` argument still wins, and everything else about the
+fingerprint is untouched: the value feeds the same `sample_webgl()` lookup the
+preset path already uses.
+
+Pinning skips `sample_webgl_for_screen()`, which is what normally keeps the GPU
+coherent with the screen BrowserForge picked, so the two checks it would have made
+now run on the pinned value and warn rather than resample. The caller named that
+GPU on purpose; quietly substituting another would be worse than saying the pairing
+is odd.
+
+- A discrete GPU behind a screen too small for one warns. That gap was real: before
+  this, pinning could put a GeForce GTX 980 behind a 1024x600 panel with nothing
+  complaining.
+- A software rasterizer warns, because `sample_webgl_for_screen()`'s own reasoning
+  says it is the strongest VM and headless signal a page can read, and pinning
+  applies it to every session instead of the small share of real machines that
+  report it.
+
+That second warning is deliberate friction. Pinning llvmpipe buys coherence between
+the renderer string and the pixels, and pays for it with a string many vendors
+blocklist outright. Neither choice is free, which is why this is a knob and not a
+new default.
+
+`tests/patches/webgl-config-knob.py` covers all of it and launches no browser.
+
 ## What is still open
 
 **The gate.** The WebGL patch has never been compiled. Four review passes found four
