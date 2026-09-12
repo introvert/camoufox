@@ -43,9 +43,10 @@
 #                      hands the page a null context, which is the loudest
 #                      automation tell there is. The rasterizer is llvmpipe
 #                      from the DRI drivers; no GPU is involved.
-#   xvfb               tests/patches/webgl-headless-parity.py runs the headful
-#                      half on a virtual display, and `make tests headful=true`
-#                      needs one too.
+#   xvfb               Only for headful testing -- `make tests headful=true`,
+#                      and the optional headful half of
+#                      tests/patches/webgl-headless-parity.py, which skips it
+#                      when absent. Nothing at runtime needs a display.
 # ---------------------------------------------------------------------------
 
 set -euo pipefail
