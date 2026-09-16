@@ -37,6 +37,16 @@
 #   git, curl, make,   Core build tooling. Present by default on macOS via
 #   clang, unzip,      the Xcode Command Line Tools; installed explicitly on
 #   rsync              Linux.
+#   Mesa EGL + swrast  Linux runtime, not build. libxul dlopens libEGL.so.1
+#                      rather than linking it, so without Mesa's EGL the
+#                      browser still starts and only WebGL fails -- headless
+#                      hands the page a null context, which is the loudest
+#                      automation tell there is. The rasterizer is llvmpipe
+#                      from the DRI drivers; no GPU is involved.
+#   xvfb               Only for headful testing -- `make tests headful=true`,
+#                      and the optional headful half of
+#                      tests/patches/webgl-headless-parity.py, which skips it
+#                      when absent. Nothing at runtime needs a display.
 # ---------------------------------------------------------------------------
 
 set -euo pipefail
@@ -149,9 +159,9 @@ install_macos() {
 install_linux() {
   log "Detected Linux."
 
-  local debs="python3 python3-dev python3-pip p7zip-full golang-go msitools wget aria2 libsqlite3-dev build-essential make git curl unzip rsync ca-certificates"
-  local rpms="python3 python3-devel p7zip golang msitools wget aria2 sqlite-devel gcc gcc-c++ make git curl unzip rsync ca-certificates"
-  local pacman_pkgs="python python-pip p7zip go msitools wget aria2 sqlite base-devel git curl unzip rsync ca-certificates"
+  local debs="python3 python3-dev python3-pip p7zip-full golang-go msitools wget aria2 libsqlite3-dev build-essential make git curl unzip rsync ca-certificates libegl1 libegl-mesa0 libgl1-mesa-dri xvfb"
+  local rpms="python3 python3-devel p7zip golang msitools wget aria2 sqlite-devel gcc gcc-c++ make git curl unzip rsync ca-certificates mesa-libEGL mesa-dri-drivers xorg-x11-server-Xvfb"
+  local pacman_pkgs="python python-pip p7zip go msitools wget aria2 sqlite base-devel git curl unzip rsync ca-certificates mesa xorg-server-xvfb"
 
   if have apt-get; then
     log "Using apt-get..."

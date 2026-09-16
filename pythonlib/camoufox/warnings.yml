@@ -40,6 +40,17 @@ no_region: >-
 block_webgl: >-
     Disabling WebGL is not recommended. Many WAFs will check if WebGL is enabled.
 
+webgl_pinned_screen: >-
+    The WebGL vendor/renderer you pinned is a discrete GPU, but the screen in this
+    fingerprint is too small for any machine that ships one. Consistency checks read
+    that pairing as masking. Pin a screen to match, or let Camoufox sample the GPU.
+
+webgl_pinned_software: >-
+    You pinned a software rasterizer (llvmpipe, SwiftShader or WARP) as the WebGL
+    renderer. It is coherent with a machine that has no GPU, but it is also one of
+    the clearest VM and headless signals a page can read, and pinning applies it to
+    every session rather than the small share of real machines that report it.
+
 block_images: >-
     Blocking image requests has been reported to cause detection issues on major WAFs.
 
