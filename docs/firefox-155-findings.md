@@ -4,8 +4,9 @@ Engineering record for the Firefox 155.0.1 rebase and the two defects found on i
 Written so the next person can tell which claims were measured and which were only
 reasoned about.
 
-- `main` @ `915bf9f`, tag `v155.0.1-beta.33`
-- branch `claude/firefox-155-camoufox-sync-3a69t6` carries the unbuilt WebGL work
+- `main` @ `428708d` — PR #6 merged, so the WebGL work is on `main`
+- branch `claude/firefox-155-camoufox-sync-3a69t6` carries the `beta.34` release bump (PR #7)
+- last tag is `v155.0.1-beta.33` @ `915bf9f`, which **predates** the WebGL work
 
 ## Where each change stands
 
@@ -17,6 +18,7 @@ reasoned about.
 | WebGL parity test | Verified | Fails correctly on the unpatched build; all 42 identity assertions hold against a real context |
 | Rendered WebGL pixels match the spoofed GPU | Not attempted | Measured absent: framebuffer hash identical with and without a spoof config |
 | `premultipliedAlpha` spoofing | Verified | Leak reproduced, key corrected, and the probe now returns the config's value |
+| Whole-fingerprint grade on the built binary | Verified | `build-tester`, 8 profiles: grade A, 1054/1054, five runs |
 
 ## Shipped: the evaluate hang
 
@@ -279,6 +281,24 @@ On the current release build this prints `42` and `False`. With the WebGL patch
 built it should print `42` and `True`; anything else means the Mesa packages above
 are missing.
 
+### 8. The release gate
+
+`build-tester` scores a binary the way CONTRIBUTING requires. It needs no display
+and no GPU; it launches the binary itself, so point it at the unpacked build:
+
+```sh
+cd build-tester
+npm install                        # first run only, builds the checks bundle
+pip install -r requirements.txt
+python scripts/run_tests.py /path/to/camoufox-bin --save-cert cert.txt
+```
+
+Expect grade A at 1054/1054. A score of 1053 with a single
+`headlessDetection.noSwiftShader` failure on a Linux profile is the 3% software
+preset described below, not a regression — confirm by checking that the same
+profile's `webgl.renderer` match result is `True`. The run takes about a minute;
+the exit code is non-zero on any failed check.
+
 ## Controlling the GPU fleet-wide
 
 The fingerprint config cannot come from a file. The browser reads it as chunked
@@ -329,6 +349,60 @@ new default.
 
 `tests/patches/webgl-config-knob.py` covers all of it and launches no browser.
 
+## The whole-fingerprint grade, and the one thing it flags
+
+`build-tester` is the suite CONTRIBUTING gates releases on (score >= 1000). It had
+never been run on this work. Against the built `beta.33` binary, headless, with no
+GPU and no Xvfb, over five runs:
+
+```
+OVERALL: [A]  1054/1054 checks passed  (8 profiles)
+
+WebGL Render ............................... 8/8  [PASS]
+Canvas Noise ............................... 8/8  [PASS]
+Headless Detection ....................... 80/80  [PASS]
+Lie Detection ............................ 104/104 [PASS]
+```
+
+`WebGL Render 8/8` is the headless fix seen from the page side by the project's own
+suite rather than by a test written alongside the patch. Before it, headless had no
+context for those checks to score.
+
+Two of the five runs scored 1053/1054 instead, each time a single
+`headlessDetection.noSwiftShader` failure on a different Linux per-context profile.
+It is not a leak. The suite's own match results for that same profile:
+
+```
+webgl.vendor      True   actual=Mesa
+webgl.renderer    True   actual=llvmpipe, or similar
+```
+
+The profile's assigned fingerprint *was* `Mesa` / `llvmpipe` and the browser
+reported it faithfully. `fingerprint-presets-v150.json` is real scraped data, and
+real Linux desktops do run software rendering:
+
+| Pool | Presets | Software renderer |
+| --- | --- | --- |
+| linux | 65 | 2 (3.1%) |
+| windows | 180 | 0 |
+| macos | 67 | 0 |
+
+So roughly 3% of Linux draws present `llvmpipe`, and `build-tester` flags any
+`llvmpipe` as a headless indicator regardless of where it came from. The suite is
+being conservative, not catching us.
+
+**It is still worth knowing for a fleet.** An antibot using the same heuristic would
+flag that 3%, and a scraping fleet has no reason to opt into a renderer that trips a
+cheap check. The mitigation already exists and needs no code change — pin the GPU:
+
+```sh
+export CAMOUFOX_WEBGL_CONFIG='NVIDIA Corporation|NVIDIA GeForce GTX 980, or similar'
+```
+
+Left as data rather than a fix: filtering the two presets out would mean editing
+scraped data to make a heuristic happy, and it removes a genuine configuration that
+some operators may want.
+
 ## What is still open
 
 **The gate is passed.** PR #6 built the branch on Linux and macOS and every suite
@@ -354,8 +428,7 @@ ran against its artifact. What the build settled, beyond compiling:
   lines immediately after every viable insertion point in that function, so a single
   hunk cannot match both exactly. Left as it is; upstreaming would want the block
   split or the patch cut against 152 directly.
-- **Never exercised here.** Live scraping, the arm64 binary on arm64 hardware, and
-  the `build-tester` suite.
+- **Never exercised here.** Live scraping, and the arm64 binary on arm64 hardware.
 
 ## Upstream
 
