@@ -19,6 +19,7 @@ reasoned about.
 | Rendered WebGL pixels match the spoofed GPU | Not attempted | Measured absent: framebuffer hash identical with and without a spoof config |
 | `premultipliedAlpha` spoofing | Verified | Leak reproduced, key corrected, and the probe now returns the config's value |
 | Whole-fingerprint grade on the built binary | Verified | `build-tester`, 8 profiles: grade A, 1054/1054, five runs |
+| Contexts sharing a proxy keep their own login | Verified | 407s reproduced on the beta.33 release binary; 4/4 clean runs after, 24/24 requests |
 
 ## Shipped: the evaluate hang
 
@@ -166,6 +167,57 @@ first.
   divergence. The parity test keeps asserting it so a future rebase cannot
   reintroduce one.
 
+## Shipped: contexts sharing one proxy refused each other's logins
+
+A proxy pool usually hands out one gateway `host:port` and tells sessions apart by
+the username. Giving six contexts that proxy with six different usernames refused
+requests at random, on valid credentials:
+
+```
+ctx0 http://example.com/ 200
+ctx3 http://example.com/ 407      # valid credentials, still refused
+```
+
+Per-context proxies themselves were never broken. Juggler routes each channel
+through the proxy belonging to the channel's `userContextId`, and every request
+reached the right proxy. What is not per-context is where Firefox keeps the
+*password*: `nsHttpAuthCache` keys proxy entries by `host:port` alone and
+deliberately leaves the origin-attributes suffix off, because isolating it "would
+only annoy users with authentication dialogs popping up" — the right call for a
+person behind one corporate proxy, the wrong one when each context is a separate
+paid session.
+
+Juggler compensated by wiping the whole auth cache: on every request through a
+proxy whose credentials clashed with another context's, and again on every
+`setProxy`. Sequentially that works. Concurrently the wipe lands inside another
+context's handshake, between the entry being stored and the header being built from
+it, so the retry goes out with no `Proxy-Authorization`. The second 407 sets
+`PREVIOUS_FAILED`, which `promptAuth` answers by declining, and the 407 reaches the
+page.
+
+`proxy-auth-isolation.patch` gives each context its own entry instead, keying proxy
+credentials by `userContextId` and `privateBrowsingId` — not the full network state
+suffix, whose partition key would force a fresh 407 round trip per top-level site.
+The default context produces an empty suffix, which is stock behaviour. With the
+entries separated, the wipes go: `NetworkObserver` no longer clears on each request,
+`setProxy` clears only when it replaces a proxy the context already had, and the
+clash-detection bookkeeping that fed both is gone.
+
+Connections needed nothing: `nsHttpConnectionInfo::BuildHashKey` already appends the
+origin-attributes suffix, so two contexts never shared a proxy connection or an
+authenticated CONNECT tunnel to begin with.
+
+| Suite | Before | After |
+| --- | --- | --- |
+| `tests/patches/proxy-auth-isolation.py` (new) | 4-14 of 24 requests refused, every run | 24/24, four runs |
+| HTTP, HTTP+auth and SOCKS5, launch-level and per-context | pass | pass |
+
+One thing this measured that the patch does not fix: with six contexts starting at
+once, some pages stop navigating entirely and every `goto` times out. It reproduces
+with no proxy configured at all, on the beta.33 release and on the official 152
+build, so it predates this work and is not proxy-related. The test reports those as
+a warning rather than failing on them.
+
 ## Cost, measured
 
 | Mode | Context | Browser | X server | Total |
@@ -204,11 +256,12 @@ then point everything at the binary you want to exercise.
 export CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin
 ```
 
-### 3. The two regression tests
+### 3. The three regression tests
 
 ```sh
 python tests/patches/promise-evaluate.py
 python tests/patches/webgl-headless-parity.py
+python tests/patches/proxy-auth-isolation.py
 ```
 
 The first covers settled, microtask-settled and timer-settled promises, rejection
@@ -217,6 +270,9 @@ automation's Promise machinery. The second pins one GPU and asserts headless get
 context that compiles, links, draws and reads back the shader's colour, and reports
 that GPU rather than the host's. It needs no display; where Xvfb happens to exist it
 also compares against a virtual one, and says which it did.
+The third runs six contexts through one in-process proxy on six logins, creating
+contexts while others load, and asserts no 407 reaches a page and no request carries
+another context's login. It needs no network.
 
 ### 4. The conformance suites
 

@@ -624,8 +624,6 @@ export class NetworkObserver {
           proxyFilter.onProxyFilterResult(defaultProxyInfo);
           return;
         }
-        if (this._targetRegistry.shouldBustHTTPAuthCacheForProxy(proxy))
-          Services.obs.notifyObservers(null, "net:clear-active-logins");
         proxyFilter.onProxyFilterResult(protocolProxyService.newProxyInfo(
             proxy.type,
             proxy.host,
