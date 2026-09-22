@@ -297,13 +297,16 @@ class NetworkRequest {
     if (!pageNetwork)
       return false;
     let credentials = null;
-    const origin = aChannel.URI.scheme + '://' + aChannel.URI.hostPort;
     if (authInfo.flags & Ci.nsIAuthInformation.AUTH_PROXY) {
       const proxy = this._networkObserver._targetRegistry.getProxyInfo(aChannel);
       credentials = proxy ? {username: proxy.username, password: proxy.password} : null;
     } else {
       // An entry without an origin answers for any; one with an origin answers
-      // only for that origin. First match wins, as it does upstream.
+      // only for that origin. First match wins, as it does upstream. The origin
+      // is read here rather than above because `hostPort` throws on a
+      // non-standard URI, and a throw inside asyncPromptAuth's promise leaves
+      // the channel hanging with neither callback ever made.
+      const origin = aChannel.URI.scheme + '://' + aChannel.URI.hostPort;
       const contextCredentials = pageNetwork._target.browserContext().httpCredentials || [];
       credentials = contextCredentials.find(credential =>
           !credential.origin || credential.origin.toLowerCase() === origin.toLowerCase()) || null;

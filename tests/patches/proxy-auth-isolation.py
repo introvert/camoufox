@@ -25,10 +25,13 @@ Run against a specific build:
 
 What PASS means:
     * no request through the shared proxy is refused: no 407 reaches a page
-      while contexts load concurrently and new contexts are created mid-flight
-      (navigations that stall with no response at all are only warned about);
-    * and every request reaches the proxy carrying its own context's username,
-      never another context's.
+      while contexts load concurrently and new contexts are created mid-flight;
+    * every request reaches the proxy carrying its own context's username, never
+      another context's;
+    * and every context gets at least one request served, so that a hang cannot
+      be mistaken for success. Individual navigations that stall with no response
+      are otherwise only warned about -- pages stall under concurrency with no
+      proxy configured at all, which is not this patch's to answer for.
 """
 
 import asyncio
@@ -140,14 +143,26 @@ async def _run() -> bool:
     refused = [r for r in requests if r[1] not in (0, 200)]
     crossed = [r for r in requests if r[1] == 200 and r[2] != r[0]]
 
+    # Excusing the stalls costs the test its teeth unless something is still
+    # required to have gone through the proxy: a regression that made proxy auth
+    # hang rather than answer would otherwise score as a pass having verified
+    # nothing. Every context has to come back with at least one served request.
+    served = {user for user, status, _ in requests if status == 200}
+    silent = sorted({user for user, _, _ in requests} - served)
+
     for label, bad in (("no request refused", refused), ("each request logged in as its context", crossed)):
         verdict = "PASS" if not bad else "FAIL"
         print(f"  {verdict} {label:40} -> {len(requests) - len(bad)}/{len(requests)}")
         for user, status, body in bad[:5]:
             print(f"         {user}: status {status}, proxy saw {body!r}")
+
+    verdict = "PASS" if not silent else "FAIL"
+    print(f"  {verdict} {'every context reached the proxy':40} -> {len(served)}/{CONTEXTS}")
+    for user in silent[:5]:
+        print(f"         {user}: no request served")
     if stalled:
         print(f"  WARN {len(stalled)} navigation(s) stalled without a response (not proxy-related)")
-    return not refused and not crossed
+    return not refused and not crossed and not silent
 
 
 async def main() -> int:
