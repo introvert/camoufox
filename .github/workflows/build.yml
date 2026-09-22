@@ -97,6 +97,11 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # The runner image carries an apt.llvm.org source whose Release file
+          # is gone, and one dead source fails the whole `apt-get update` with
+          # exit 100 -- taking every build down with it. Nothing here comes
+          # from that repository, so drop it before updating.
+          sudo rm -f /etc/apt/sources.list.d/*llvm* /etc/apt/sources.list.d/*llvm*.sources || true
           sudo apt-get update
           # ccache: the mozconfig enables --with-ccache, but the runner image no
           # longer ships it, so configure fails with "Cannot find ccache".
