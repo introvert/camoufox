@@ -20,6 +20,7 @@ reasoned about.
 | `premultipliedAlpha` spoofing | Verified | Leak reproduced, key corrected, and the probe now returns the config's value |
 | Whole-fingerprint grade on the built binary | Verified | `build-tester`, 8 profiles: grade A, 1054/1054, five runs |
 | Contexts sharing a proxy keep their own login | Verified | 407s reproduced on the beta.33 release binary; 4/4 clean runs after, 24/24 requests |
+| `make tests` failures were the harness, not the code | Verified | 28 failures cut to 8, all 8 reproduced on the release binary |
 
 ## Shipped: the evaluate hang
 
@@ -217,6 +218,58 @@ once, some pages stop navigating entirely and every `goto` times out. It reprodu
 with no proxy configured at all, on the beta.33 release and on the official 152
 build, so it predates this work and is not proxy-related. The test reports those as
 a warning rather than failing on them.
+
+## Shipped: what the 28 `make tests` failures actually were
+
+A full `make tests` on the built binary reported 28 failures. None of them were
+the browser.
+
+**Twenty-one were the Playwright version.** `tests/local-requirements.txt` asks for
+`playwright` unpinned, so a fresh venv takes the newest release, while
+`pythonlib/pyproject.toml` caps the package at `<1.63` exactly because each
+Playwright minor may change Juggler. 1.63 does: `Browser.setHTTPCredentials` now
+carries an array, so a context can hold a credential per origin, and this fork's
+schema rejected it outright.
+
+```
+Expected "<root>.credentials.username" to be |string|; found |undefined| `undefined` instead.
+```
+
+Every context built with `http_credentials` died there. The requirement is now
+pinned to the same ceiling as the package, so the suite measures a pairing the
+package will actually install.
+
+**Seven were the missing display.** `async/test_headful.py` opens real windows
+whatever `--headless` says. `run-tests.sh` now supplies a virtual one through
+`xvfb-run` when `DISPLAY` is unset, which is the normal case on a build box.
+
+**Eight remain, and all eight predate this work.** Seven reproduce on the
+`v155.0.1-beta.33` release binary run the same way; the eighth,
+`test_frame_goto_should_continue_after_client_redirect`, is flaky — three passes
+out of three on the built binary against two failures out of three on the release
+one, so it is if anything better here.
+
+| Run | Failures |
+| --- | --- |
+| `make tests` as it stood | 28 |
+| with the Playwright ceiling honoured | 21 fewer |
+| with a display for the headful tests | 7 fewer |
+| what is left | 8, every one pre-existing |
+
+### Juggler now takes either credentials shape
+
+The array is cheap to accept, and refusing it strands the fork a release behind, so
+`Browser.setHTTPCredentials` now takes both: the schema picks its check from what
+arrived, `BrowserHandler` stores a list either way, and `promptAuth` picks the first
+entry whose origin matches the channel, an entry without an origin answering for
+any. The twelve auth and credentials tests fail 11 of 12 on 1.63 before, and pass
+all twelve on both 1.62 and 1.63 after.
+
+The ceiling stays at `<1.63` regardless. Credentials was the first 1.63 break to
+surface, not the last: a full suite on 1.63 with the fix still fails three tests
+that pass on 1.62 — `test_assertions`'s two custom-timeout cases and
+`test_should_collect_trace_with_resources_but_no_js`. Those want measuring before
+the package claims the version.
 
 ## Cost, measured
 
