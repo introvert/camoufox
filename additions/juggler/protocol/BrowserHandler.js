@@ -177,7 +177,9 @@ export class BrowserHandler {
   }
 
   ['Browser.setHTTPCredentials']({browserContextId, credentials}) {
-    this._targetRegistry.browserContextForId(browserContextId).httpCredentials = nullToUndefined(credentials);
+    // Stored as a list whichever shape arrived, so the lookup has one form to read.
+    const list = credentials ? (Array.isArray(credentials) ? credentials : [credentials]) : undefined;
+    this._targetRegistry.browserContextForId(browserContextId).httpCredentials = nullToUndefined(list);
   }
 
   async ['Browser.setBrowserProxy']({type, host, port, bypass, username, password}) {

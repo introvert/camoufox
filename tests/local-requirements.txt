@@ -1,4 +1,9 @@
-playwright
+# Keep the same ceiling as pythonlib/pyproject.toml. Every Playwright minor is
+# free to change the Juggler protocol, and 1.63 does. Juggler now takes 1.63's
+# array of HTTP credentials, but three other tests still fail there and pass on
+# 1.62, so the package does not yet claim the version. Bump both together,
+# deliberately, and see docs/firefox-155-findings.md for what is outstanding.
+playwright<1.63
 auditwheel==6.1.0
 autobahn==23.1.2
 black==24.8.0

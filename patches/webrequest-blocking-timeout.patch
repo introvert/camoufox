@@ -1,0 +1,83 @@
+diff --git a/toolkit/components/extensions/webrequest/WebRequest.sys.mjs b/toolkit/components/extensions/webrequest/WebRequest.sys.mjs
+index 8fada7e66c..9e17780ec6 100644
+--- a/toolkit/components/extensions/webrequest/WebRequest.sys.mjs
++++ b/toolkit/components/extensions/webrequest/WebRequest.sys.mjs
+@@ -14,6 +14,52 @@ ChromeUtils.defineESModuleGetters(lazy, {
+   WebRequestUpload: "resource://gre/modules/WebRequestUpload.sys.mjs",
+ });
+ 
++const { setTimeout, clearTimeout } = ChromeUtils.importESModule(
++  "resource://gre/modules/Timer.sys.mjs"
++);
++
++// Camoufox: a deadline for a blocking listener's answer. runChannelListener
++// suspends the channel and awaits the listener's promise with no deadline of
++// its own, and nsHttpChannel::OnSuspendTimeout does not rescue it -- that only
++// bypasses the cache writer lock -- so a listener that never settles parks the
++// request until the page is torn down. A listener past the deadline is treated
++// as having no opinion, which is what a non-blocking listener is. 0 restores
++// Gecko's unbounded wait.
++const BLOCKING_RESPONSE_TIMEOUT_PREF =
++  "extensions.webRequest.blockingResponseTimeoutMs";
++const BLOCKING_RESPONSE_TIMEOUT_DEFAULT = 10000;
++
++const kBlockingResponseTimedOut = Symbol("blocking-response-timed-out");
++
++function blockingResponseTimeoutMs() {
++  return Services.prefs.getIntPref(
++    BLOCKING_RESPONSE_TIMEOUT_PREF,
++    BLOCKING_RESPONSE_TIMEOUT_DEFAULT
++  );
++}
++
++function awaitBlockingResponse(promise, timeoutMs) {
++  if (!(timeoutMs > 0)) {
++    return promise;
++  }
++  return new Promise((resolve, reject) => {
++    const timer = setTimeout(
++      () => resolve(kBlockingResponseTimedOut),
++      timeoutMs
++    );
++    promise.then(
++      value => {
++        clearTimeout(timer);
++        resolve(value);
++      },
++      error => {
++        clearTimeout(timer);
++        reject(error);
++      }
++    );
++  });
++}
++
+ // WebRequest.sys.mjs's only consumer is ext-webRequest.js, so we can depend on
+ // the apiManager.global being initialized.
+ ChromeUtils.defineLazyGetter(lazy, "tabTracker", () => {
+@@ -996,9 +1042,10 @@ HttpObserverManager = {
+     try {
+       for (let { opts, result } of handlerResults) {
+         if (isThenable(result)) {
++          const timeoutMs = blockingResponseTimeoutMs();
+           channel.suspend(markerText);
+           try {
+-            result = await result;
++            result = await awaitBlockingResponse(result, timeoutMs);
+           } catch (e) {
+             let error;
+ 
+@@ -1011,6 +1058,13 @@ HttpObserverManager = {
+             Cu.reportError(error);
+             continue;
+           }
++          if (result === kBlockingResponseTimedOut) {
++            Cu.reportError(
++              `Extension ${opts.addonId} did not answer ${kind} for ${finalURL} ` +
++                `within ${timeoutMs}ms; continuing without it.`
++            );
++            continue;
++          }
+           if (!result || typeof result !== "object") {
+             continue;
+           }

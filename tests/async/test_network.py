@@ -402,9 +402,17 @@ async def test_should_parse_the_data_if_content_type_is_form_urlencoded(
     await page.set_content(
         """<form method='POST' action='/post'><input type='text' name='foo' value='bar'><input type='number' name='baz' value='123'><input type='submit'></form>"""
     )
-    await page.click("input[type=submit]")
-    assert len(requests) == 1
-    assert requests[0].post_data_json == {"foo": "bar", "baz": "123"}
+    # Wait for the request rather than assuming it has been reported by the time
+    # click() returns. Nothing orders those two: the click resolves when the
+    # renderer acks the event, the request is reported when the channel opens,
+    # and they finish within a few ms of each other in either order. Camoufox
+    # acks fast enough to lose that race, where stock Firefox happens to win it
+    # by about twenty milliseconds. What the test is for -- that form-urlencoded
+    # post data is parsed -- is unaffected.
+    async with page.expect_request("**/post") as request_info:
+        await page.click("input[type=submit]")
+    request = await request_info.value
+    assert request.post_data_json == {"foo": "bar", "baz": "123"}
 
 
 async def test_should_be_undefined_when_there_is_no_post_data(page: Page, server: Server) -> None:

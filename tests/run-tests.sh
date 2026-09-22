@@ -73,5 +73,19 @@ if [ -n "$CAMOUFOX_EXECUTABLE_PATH" ]; then
     echo "CAMOUFOX_EXECUTABLE_PATH set to: $CAMOUFOX_EXECUTABLE_PATH"
 fi
 
-echo venv/bin/pytest -vv "${VALID_ARGS[@]}" async/
-venv/bin/pytest -vv "${VALID_ARGS[@]}" async/
+# async/test_headful.py launches real windows whatever --headless says, so those
+# seven tests need a display even on a headless run. Supply a virtual one when
+# the machine has no X server, which is the normal case on a build box.
+RUNNER=()
+if [ -z "$DISPLAY" ]; then
+    if command -v xvfb-run >/dev/null 2>&1; then
+        echo "No DISPLAY set; running under xvfb-run so the headful tests can open windows."
+        RUNNER=(xvfb-run -a)
+    else
+        echo "WARNING: no DISPLAY and no xvfb-run; async/test_headful.py will fail." >&2
+        echo "         Install it with: apt-get install -y xvfb" >&2
+    fi
+fi
+
+echo "${RUNNER[@]}" venv/bin/pytest -vv "${VALID_ARGS[@]}" async/
+"${RUNNER[@]}" venv/bin/pytest -vv "${VALID_ARGS[@]}" async/

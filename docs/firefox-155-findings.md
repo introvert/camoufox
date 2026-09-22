@@ -19,6 +19,10 @@ reasoned about.
 | Rendered WebGL pixels match the spoofed GPU | Not attempted | Measured absent: framebuffer hash identical with and without a spoof config |
 | `premultipliedAlpha` spoofing | Verified | Leak reproduced, key corrected, and the probe now returns the config's value |
 | Whole-fingerprint grade on the built binary | Verified | `build-tester`, 8 profiles: grade A, 1054/1054, five runs |
+| Contexts sharing a proxy keep their own login | Verified | 407s reproduced on the beta.33 release binary; 4/4 clean runs after, 24/24 requests |
+| `make tests` failures were the harness, not the code | Verified | 28 failures cut to 0; every one of the last 7 reproduced on stock Firefox, except the one that was ours |
+| Concurrent contexts stall on a blocking webRequest listener | Verified | MOZ_LOG shows the channel suspended by WebRequest and never resumed; reproduced deterministically with a listener that answers nothing |
+| A listener that never answers can no longer park a request | Verified | Released at 3.1s and 10.1s as configured; 0 permanent stalls in 4 concurrent runs, against a hang that outlived a 90s wait |
 
 ## Shipped: the evaluate hang
 
@@ -166,6 +170,189 @@ first.
   divergence. The parity test keeps asserting it so a future rebase cannot
   reintroduce one.
 
+## Shipped: contexts sharing one proxy refused each other's logins
+
+A proxy pool usually hands out one gateway `host:port` and tells sessions apart by
+the username. Giving six contexts that proxy with six different usernames refused
+requests at random, on valid credentials:
+
+```
+ctx0 http://example.com/ 200
+ctx3 http://example.com/ 407      # valid credentials, still refused
+```
+
+Per-context proxies themselves were never broken. Juggler routes each channel
+through the proxy belonging to the channel's `userContextId`, and every request
+reached the right proxy. What is not per-context is where Firefox keeps the
+*password*: `nsHttpAuthCache` keys proxy entries by `host:port` alone and
+deliberately leaves the origin-attributes suffix off, because isolating it "would
+only annoy users with authentication dialogs popping up" — the right call for a
+person behind one corporate proxy, the wrong one when each context is a separate
+paid session.
+
+Juggler compensated by wiping the whole auth cache: on every request through a
+proxy whose credentials clashed with another context's, and again on every
+`setProxy`. Sequentially that works. Concurrently the wipe lands inside another
+context's handshake, between the entry being stored and the header being built from
+it, so the retry goes out with no `Proxy-Authorization`. The second 407 sets
+`PREVIOUS_FAILED`, which `promptAuth` answers by declining, and the 407 reaches the
+page.
+
+`proxy-auth-isolation.patch` gives each context its own entry instead, keying proxy
+credentials by `userContextId` and `privateBrowsingId` — not the full network state
+suffix, whose partition key would force a fresh 407 round trip per top-level site.
+The default context produces an empty suffix, which is stock behaviour. With the
+entries separated, the wipes go: `NetworkObserver` no longer clears on each request,
+`setProxy` clears only when it replaces a proxy the context already had, and the
+clash-detection bookkeeping that fed both is gone.
+
+Connections needed nothing: `nsHttpConnectionInfo::BuildHashKey` already appends the
+origin-attributes suffix, so two contexts never shared a proxy connection or an
+authenticated CONNECT tunnel to begin with.
+
+| Suite | Before | After |
+| --- | --- | --- |
+| `tests/patches/proxy-auth-isolation.py` (new) | 4-14 of 24 requests refused, every run | 24/24, four runs |
+| HTTP, HTTP+auth and SOCKS5, launch-level and per-context | pass | pass |
+
+One thing this measured that the patch does not fix: with six contexts starting at
+once, some pages stop navigating entirely and every `goto` times out. It reproduces
+with no proxy configured at all, on the beta.33 release and on the official 152
+build, so it predates this work. It is a blocking webRequest listener — see below —
+and now has a deadline; the test still launches without uBlock Origin, to keep an
+addon's timing out of a proxy measurement.
+
+## Shipped: what the 28 `make tests` failures actually were
+
+A full `make tests` on the built binary reported 28 failures. None of them were
+the browser.
+
+**Twenty-one were the Playwright version.** `tests/local-requirements.txt` asks for
+`playwright` unpinned, so a fresh venv takes the newest release, while
+`pythonlib/pyproject.toml` caps the package at `<1.63` exactly because each
+Playwright minor may change Juggler. 1.63 does: `Browser.setHTTPCredentials` now
+carries an array, so a context can hold a credential per origin, and this fork's
+schema rejected it outright.
+
+```
+Expected "<root>.credentials.username" to be |string|; found |undefined| `undefined` instead.
+```
+
+Every context built with `http_credentials` died there. The requirement is now
+pinned to the same ceiling as the package, so the suite measures a pairing the
+package will actually install.
+
+**Seven were the missing display.** `async/test_headful.py` opens real windows
+whatever `--headless` says. `run-tests.sh` now supplies a virtual one through
+`xvfb-run` when `DISPLAY` is unset, which is the normal case on a build box.
+
+**The last seven split cleanly, and the test to tell them apart was free.** The
+suite falls back to the Playwright-bundled Firefox when `CAMOUFOX_EXECUTABLE_PATH`
+is unset, so the same seven run against stock in one command. Six fail there
+identically: a popup `readyState` expectation current Firefox no longer meets, a
+locator handler whose interstitial stays visible, a clock bound asserted to the
+millisecond that measures 1005ms, two tracing expectations older than the pinned
+Playwright, and a websocket error test whose own endpoint answers 404. They are a
+vendored snapshot that the Playwright pin has moved past; `async/conftest.py` now
+skips them by name, each with the reason it was checked against, to be re-checked
+when the suite is re-vendored.
+
+The seventh was ours.
+`test_should_parse_the_data_if_content_type_is_form_urlencoded` submits a form by
+clicking and asserts the request was reported by the time `click()` returns.
+Nothing orders those two — the click resolves when the renderer acks the event,
+the request is reported when the channel opens — and measurement put them within
+a few milliseconds of each other in either order:
+
+| Build | click returned | request reported |
+| --- | --- | --- |
+| stock Firefox | 295ms, 106ms, 127ms | 270ms, 89ms, 108ms |
+| Camoufox | 229ms, 118ms, 102ms | 231ms, 119ms, 105ms |
+
+Stock wins that race by about twenty milliseconds; Camoufox acks fast enough to
+lose it by two. The C++ ordering is not at fault: the
+`juggler-mouse-event-hit-renderer` notification still fires after
+`DispatchWidgetEventViaAPZ`, so the default action has run. The test now waits for
+the request instead of assuming it, which leaves what it is for -- that
+form-urlencoded post data is parsed -- exactly as it was.
+
+| Run | Failures |
+| --- | --- |
+| `make tests` as it stood | 28 |
+| with the Playwright ceiling honoured | 21 fewer |
+| with a display for the headful tests | 7 fewer |
+| the race fixed, the six stale ones skipped by name | 0 |
+
+### Juggler now takes either credentials shape
+
+The array is cheap to accept, and refusing it strands the fork a release behind, so
+`Browser.setHTTPCredentials` now takes both: the schema picks its check from what
+arrived, `BrowserHandler` stores a list either way, and `promptAuth` picks the first
+entry whose origin matches the channel, an entry without an origin answering for
+any. The twelve auth and credentials tests fail 11 of 12 on 1.63 before, and pass
+all twelve on both 1.62 and 1.63 after.
+
+The ceiling stays at `<1.63` regardless. Credentials was the first 1.63 break to
+surface, not the last: a full suite on 1.63 with the fix still fails three tests
+that pass on 1.62 — `test_assertions`'s two custom-timeout cases and
+`test_should_collect_trace_with_resources_but_no_js`. Those want measuring before
+the package claims the version.
+
+## Shipped: a blocking webRequest listener could park a request forever
+
+Six contexts created while others load, and the last two or three never navigate at
+all: `goto` times out on every URL, though the page answers `evaluate` and stays on
+`about:blank`. It reproduces on the beta.33 release and on the official 152 build,
+with no proxy configured, so it is neither new nor proxy-related.
+
+It is not Juggler. `Page.navigate` returns a navigation id and
+`Page.navigationStarted` fires; the channel is created, clears Juggler's proxy
+filter and reaches `http-on-modify-request`. Then nothing — the server never
+accepts a connection and `navigationCommitted` never arrives.
+
+`MOZ_LOG=nsHttp:5` names the culprit:
+
+```
+nsHttpChannel::Suspend [this=7c515f270b00]
+  called from script: resource://gre/modules/WebRequest.sys.mjs:999:19
+  started suspend timer, will fire in 5000ms
+...  +5.0s  nsHttpChannel::OnSuspendTimeout          # fires, does not resume
+...  +12.7s nsHttpChannel::Cancel status=804b0002    # the test's own timeout
+...  +13.1s nsHttpChannel::ResumeInternal
+             called from script: resource://gre/modules/WebRequest.sys.mjs:1148:15
+```
+
+A blocking `webRequest` listener suspends the channel and does not answer — the
+resume above arrives only because the test cancelled the channel. Left alone the
+request never completes: a ninety-second `goto` expires with the server never having
+accepted a connection. uBlock Origin is the listener in the default bundle, and
+Playwright hands each launch a fresh profile, so uBO reloads its filter lists every
+time and pages opened during that window are the ones that hang.
+
+`runChannelListener` awaits the listener's promise with no deadline of its own, and
+`nsHttpChannel::OnSuspendTimeout` does not rescue it — that only bypasses the cache
+writer lock. `webrequest-blocking-timeout.patch` gives the wait a deadline
+(`extensions.webRequest.blockingResponseTimeoutMs`, 10s, 0 for Gecko's behaviour).
+A listener past it is treated as having no opinion, which is what a non-blocking
+listener is.
+
+Measured with an extension written for the purpose, whose listener answers nothing
+for one URL, so the hang is deterministic rather than a race that needs load:
+
+| Deadline | The held request |
+| --- | --- |
+| off (pref 0) | never released; navigation timed out, server saw nothing |
+| 3000ms | released at 3.1s, served |
+| 10000ms (default) | released at 10.1s, served |
+
+The six-context case that started this now finishes: four runs, no permanent stall,
+the affected navigations released at the deadline instead. uBlock Origin still
+blocks — a tracker URL is still aborted with the patch in place. That check earns
+its place: the first version of this patch called `defineLazyPreferenceGetter` on
+`ChromeUtils`, where it does not exist, which threw at module load and disabled
+every blocking listener. Every stall disappeared, and the fix looked like it worked
+while having quietly turned the ad blocker off.
+
 ## Cost, measured
 
 | Mode | Context | Browser | X server | Total |
@@ -204,11 +391,13 @@ then point everything at the binary you want to exercise.
 export CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin
 ```
 
-### 3. The two regression tests
+### 3. The four regression tests
 
 ```sh
 python tests/patches/promise-evaluate.py
 python tests/patches/webgl-headless-parity.py
+python tests/patches/proxy-auth-isolation.py
+python tests/patches/webrequest-blocking-timeout.py
 ```
 
 The first covers settled, microtask-settled and timer-settled promises, rejection
@@ -217,6 +406,9 @@ automation's Promise machinery. The second pins one GPU and asserts headless get
 context that compiles, links, draws and reads back the shader's colour, and reports
 that GPU rather than the host's. It needs no display; where Xvfb happens to exist it
 also compares against a virtual one, and says which it did.
+The third runs six contexts through one in-process proxy on six logins, creating
+contexts while others load, and asserts no 407 reaches a page and no request carries
+another context's login. It needs no network.
 
 ### 4. The conformance suites
 

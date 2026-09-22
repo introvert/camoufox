@@ -301,12 +301,17 @@ class NetworkRequest {
       const proxy = this._networkObserver._targetRegistry.getProxyInfo(aChannel);
       credentials = proxy ? {username: proxy.username, password: proxy.password} : null;
     } else {
-      credentials = pageNetwork._target.browserContext().httpCredentials;
+      // An entry without an origin answers for any; one with an origin answers
+      // only for that origin. First match wins, as it does upstream. The origin
+      // is read here rather than above because `hostPort` throws on a
+      // non-standard URI, and a throw inside asyncPromptAuth's promise leaves
+      // the channel hanging with neither callback ever made.
+      const origin = aChannel.URI.scheme + '://' + aChannel.URI.hostPort;
+      const contextCredentials = pageNetwork._target.browserContext().httpCredentials || [];
+      credentials = contextCredentials.find(credential =>
+          !credential.origin || credential.origin.toLowerCase() === origin.toLowerCase()) || null;
     }
     if (!credentials)
-      return false;
-    const origin = aChannel.URI.scheme + '://' + aChannel.URI.hostPort;
-    if (credentials.origin && origin.toLowerCase() !== credentials.origin.toLowerCase())
       return false;
     authInfo.username = credentials.username;
     authInfo.password = credentials.password;
@@ -624,8 +629,6 @@ export class NetworkObserver {
           proxyFilter.onProxyFilterResult(defaultProxyInfo);
           return;
         }
-        if (this._targetRegistry.shouldBustHTTPAuthCacheForProxy(proxy))
-          Services.obs.notifyObservers(null, "net:clear-active-logins");
         proxyFilter.onProxyFilterResult(protocolProxyService.newProxyInfo(
             proxy.type,
             proxy.host,
