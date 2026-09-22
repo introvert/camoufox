@@ -21,6 +21,7 @@ reasoned about.
 | Whole-fingerprint grade on the built binary | Verified | `build-tester`, 8 profiles: grade A, 1054/1054, five runs |
 | Contexts sharing a proxy keep their own login | Verified | 407s reproduced on the beta.33 release binary; 4/4 clean runs after, 24/24 requests |
 | `make tests` failures were the harness, not the code | Verified | 28 failures cut to 8, all 8 reproduced on the release binary |
+| Concurrent contexts stall on uBlock Origin, not on Juggler | Verified | MOZ_LOG shows the channel suspended by WebRequest; 0 stalls in 5 runs without the addon |
 
 ## Shipped: the evaluate hang
 
@@ -216,8 +217,8 @@ authenticated CONNECT tunnel to begin with.
 One thing this measured that the patch does not fix: with six contexts starting at
 once, some pages stop navigating entirely and every `goto` times out. It reproduces
 with no proxy configured at all, on the beta.33 release and on the official 152
-build, so it predates this work and is not proxy-related. The test reports those as
-a warning rather than failing on them.
+build, so it predates this work. It is uBlock Origin — see below — and the test now
+launches without it.
 
 ## Shipped: what the 28 `make tests` failures actually were
 
@@ -270,6 +271,42 @@ surface, not the last: a full suite on 1.63 with the fix still fails three tests
 that pass on 1.62 — `test_assertions`'s two custom-timeout cases and
 `test_should_collect_trace_with_resources_but_no_js`. Those want measuring before
 the package claims the version.
+
+## Found while measuring: concurrent contexts stall on uBlock Origin
+
+Six contexts created while others load, and the last two or three never navigate at
+all: `goto` times out on every URL, though the page answers `evaluate` and stays on
+`about:blank`. It reproduces on the beta.33 release and on the official 152 build,
+with no proxy configured, so it is neither new nor proxy-related.
+
+It is not Juggler. `Page.navigate` returns a navigation id and
+`Page.navigationStarted` fires; the channel is created, clears Juggler's proxy
+filter and reaches `http-on-modify-request`. Then nothing — the server never
+accepts a connection and `navigationCommitted` never arrives.
+
+`MOZ_LOG=nsHttp:5` names the culprit:
+
+```
+nsHttpChannel::Suspend [this=7c515f270b00]
+  called from script: resource://gre/modules/WebRequest.sys.mjs:999:19
+  started suspend timer, will fire in 5000ms
+...  +5.0s  nsHttpChannel::OnSuspendTimeout          # fires, does not resume
+...  +12.7s nsHttpChannel::Cancel status=804b0002    # the test's own timeout
+...  +13.1s nsHttpChannel::ResumeInternal
+             called from script: resource://gre/modules/WebRequest.sys.mjs:1148:15
+```
+
+A blocking `webRequest` listener suspends the channel and does not answer for
+thirteen seconds — in the end only as the page is torn down. The listener is
+uBlock Origin's: excluding the addon gives five runs with no stall at all, against
+stalls in most runs with it, and every earlier raw-Playwright run that never stalled
+was one launched without addons.
+
+Playwright hands each launch a fresh profile, so uBO reloads its filter lists every
+time, and pages opened during that window are the ones that hang. What it means for
+callers is that a fleet opening many contexts at once should pass
+`exclude_addons=[DefaultAddons.UBO]` until this is fixed upstream or worked around
+in the launcher; the proxy regression test now does exactly that.
 
 ## Cost, measured
 

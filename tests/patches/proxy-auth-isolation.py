@@ -30,8 +30,9 @@ What PASS means:
       another context's;
     * and every context gets at least one request served, so that a hang cannot
       be mistaken for success. Individual navigations that stall with no response
-      are otherwise only warned about -- pages stall under concurrency with no
-      proxy configured at all, which is not this patch's to answer for.
+      are otherwise only warned about -- pages stall under concurrency for
+      reasons that have nothing to do with a proxy, which is not this patch's to
+      answer for.
 """
 
 import asyncio
@@ -40,6 +41,7 @@ import os
 import sys
 from typing import Dict, List, Tuple
 
+from camoufox.addons import DefaultAddons
 from camoufox.async_api import AsyncCamoufox, AsyncNewContext
 
 EXECUTABLE_PATH = os.environ.get("CAMOUFOX_EXECUTABLE_PATH")
@@ -127,7 +129,17 @@ async def _run() -> bool:
     proxy = EchoProxy({f"session{i}": f"pw{i}" for i in range(CONTEXTS)})
     await proxy.start()
     try:
-        async with AsyncCamoufox(headless=True, executable_path=EXECUTABLE_PATH) as browser:
+        # Without uBlock Origin. Its blocking webRequest listener suspends the
+        # channel of a page opened while it is still starting up and does not
+        # answer for ten seconds or more, so contexts created last never
+        # navigate at all -- measured with MOZ_LOG, and absent from five runs
+        # with the addon excluded. That is a real bug, but it is not this one,
+        # and leaving it in makes this test fail for the wrong reason.
+        async with AsyncCamoufox(
+            headless=True,
+            executable_path=EXECUTABLE_PATH,
+            exclude_addons=[DefaultAddons.UBO],
+        ) as browser:
             # Stagger starts so contexts are created while others are authenticating.
             results = await asyncio.gather(
                 *[_browse(browser, proxy, i, start_delay=i * 0.15) for i in range(CONTEXTS)]
