@@ -129,12 +129,11 @@ async def _run() -> bool:
     proxy = EchoProxy({f"session{i}": f"pw{i}" for i in range(CONTEXTS)})
     await proxy.start()
     try:
-        # Without uBlock Origin. Its blocking webRequest listener suspends the
-        # channel of a page opened while it is still starting up and does not
-        # answer for ten seconds or more, so contexts created last never
-        # navigate at all -- measured with MOZ_LOG, and absent from five runs
-        # with the addon excluded. That is a real bug, but it is not this one,
-        # and leaving it in makes this test fail for the wrong reason.
+        # Without uBlock Origin. Its blocking webRequest listener holds the
+        # channel of a page opened while it is still starting up;
+        # webrequest-blocking-timeout.patch now releases such a request at a
+        # deadline rather than never, but a ten second pause would still be an
+        # addon's timing measured as if it were a proxy's.
         async with AsyncCamoufox(
             headless=True,
             executable_path=EXECUTABLE_PATH,

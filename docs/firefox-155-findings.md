@@ -21,7 +21,8 @@ reasoned about.
 | Whole-fingerprint grade on the built binary | Verified | `build-tester`, 8 profiles: grade A, 1054/1054, five runs |
 | Contexts sharing a proxy keep their own login | Verified | 407s reproduced on the beta.33 release binary; 4/4 clean runs after, 24/24 requests |
 | `make tests` failures were the harness, not the code | Verified | 28 failures cut to 8, all 8 reproduced on the release binary |
-| Concurrent contexts stall on uBlock Origin, not on Juggler | Verified | MOZ_LOG shows the channel suspended by WebRequest; 0 stalls in 5 runs without the addon |
+| Concurrent contexts stall on a blocking webRequest listener | Verified | MOZ_LOG shows the channel suspended by WebRequest and never resumed; reproduced deterministically with a listener that answers nothing |
+| A listener that never answers can no longer park a request | Verified | Released at 3.1s and 10.1s as configured; 0 permanent stalls in 4 concurrent runs, against a hang that outlived a 90s wait |
 
 ## Shipped: the evaluate hang
 
@@ -217,8 +218,9 @@ authenticated CONNECT tunnel to begin with.
 One thing this measured that the patch does not fix: with six contexts starting at
 once, some pages stop navigating entirely and every `goto` times out. It reproduces
 with no proxy configured at all, on the beta.33 release and on the official 152
-build, so it predates this work. It is uBlock Origin — see below — and the test now
-launches without it.
+build, so it predates this work. It is a blocking webRequest listener — see below —
+and now has a deadline; the test still launches without uBlock Origin, to keep an
+addon's timing out of a proxy measurement.
 
 ## Shipped: what the 28 `make tests` failures actually were
 
@@ -272,7 +274,7 @@ that pass on 1.62 — `test_assertions`'s two custom-timeout cases and
 `test_should_collect_trace_with_resources_but_no_js`. Those want measuring before
 the package claims the version.
 
-## Found while measuring: concurrent contexts stall on uBlock Origin
+## Shipped: a blocking webRequest listener could park a request forever
 
 Six contexts created while others load, and the last two or three never navigate at
 all: `goto` times out on every URL, though the page answers `evaluate` and stays on
@@ -296,17 +298,36 @@ nsHttpChannel::Suspend [this=7c515f270b00]
              called from script: resource://gre/modules/WebRequest.sys.mjs:1148:15
 ```
 
-A blocking `webRequest` listener suspends the channel and does not answer for
-thirteen seconds — in the end only as the page is torn down. The listener is
-uBlock Origin's: excluding the addon gives five runs with no stall at all, against
-stalls in most runs with it, and every earlier raw-Playwright run that never stalled
-was one launched without addons.
-
+A blocking `webRequest` listener suspends the channel and does not answer — the
+resume above arrives only because the test cancelled the channel. Left alone the
+request never completes: a ninety-second `goto` expires with the server never having
+accepted a connection. uBlock Origin is the listener in the default bundle, and
 Playwright hands each launch a fresh profile, so uBO reloads its filter lists every
-time, and pages opened during that window are the ones that hang. What it means for
-callers is that a fleet opening many contexts at once should pass
-`exclude_addons=[DefaultAddons.UBO]` until this is fixed upstream or worked around
-in the launcher; the proxy regression test now does exactly that.
+time and pages opened during that window are the ones that hang.
+
+`runChannelListener` awaits the listener's promise with no deadline of its own, and
+`nsHttpChannel::OnSuspendTimeout` does not rescue it — that only bypasses the cache
+writer lock. `webrequest-blocking-timeout.patch` gives the wait a deadline
+(`extensions.webRequest.blockingResponseTimeoutMs`, 10s, 0 for Gecko's behaviour).
+A listener past it is treated as having no opinion, which is what a non-blocking
+listener is.
+
+Measured with an extension written for the purpose, whose listener answers nothing
+for one URL, so the hang is deterministic rather than a race that needs load:
+
+| Deadline | The held request |
+| --- | --- |
+| off (pref 0) | never released; navigation timed out, server saw nothing |
+| 3000ms | released at 3.1s, served |
+| 10000ms (default) | released at 10.1s, served |
+
+The six-context case that started this now finishes: four runs, no permanent stall,
+the affected navigations released at the deadline instead. uBlock Origin still
+blocks — a tracker URL is still aborted with the patch in place. That check earns
+its place: the first version of this patch called `defineLazyPreferenceGetter` on
+`ChromeUtils`, where it does not exist, which threw at module load and disabled
+every blocking listener. Every stall disappeared, and the fix looked like it worked
+while having quietly turned the ad blocker off.
 
 ## Cost, measured
 
@@ -346,12 +367,13 @@ then point everything at the binary you want to exercise.
 export CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin
 ```
 
-### 3. The three regression tests
+### 3. The four regression tests
 
 ```sh
 python tests/patches/promise-evaluate.py
 python tests/patches/webgl-headless-parity.py
 python tests/patches/proxy-auth-isolation.py
+python tests/patches/webrequest-blocking-timeout.py
 ```
 
 The first covers settled, microtask-settled and timer-settled promises, rejection
