@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const {t} = ChromeUtils.importESModule('chrome://juggler/content/protocol/PrimitiveTypes.js');
+const {t, checkScheme} = ChromeUtils.importESModule('chrome://juggler/content/protocol/PrimitiveTypes.js');
 
 // Protocol-specific types.
 const browserTypes = {};
@@ -198,6 +198,14 @@ networkTypes.HTTPCredentials = {
   origin: t.Optional(t.String),
 };
 
+// Playwright <= 1.62 sends one credentials object; 1.63 sends an array of them,
+// so that a context can hold a credential per origin. Accept either shape and
+// let BrowserHandler normalise, so one Juggler serves both client versions.
+networkTypes.HTTPCredentialsOrList = function(x, details = {}, path = ['<root>']) {
+  const scheme = Array.isArray(x) ? t.Array(networkTypes.HTTPCredentials) : networkTypes.HTTPCredentials;
+  return checkScheme(scheme, x, details, path);
+};
+
 networkTypes.SecurityDetails = {
   protocol: t.String,
   subjectName: t.String,
@@ -315,7 +323,7 @@ const Browser = {
     'setHTTPCredentials': {
       params: {
         browserContextId: t.Optional(t.String),
-        credentials: t.Nullable(networkTypes.HTTPCredentials),
+        credentials: t.Nullable(networkTypes.HTTPCredentialsOrList),
       },
     },
     'setRequestInterception': {

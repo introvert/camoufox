@@ -297,16 +297,18 @@ class NetworkRequest {
     if (!pageNetwork)
       return false;
     let credentials = null;
+    const origin = aChannel.URI.scheme + '://' + aChannel.URI.hostPort;
     if (authInfo.flags & Ci.nsIAuthInformation.AUTH_PROXY) {
       const proxy = this._networkObserver._targetRegistry.getProxyInfo(aChannel);
       credentials = proxy ? {username: proxy.username, password: proxy.password} : null;
     } else {
-      credentials = pageNetwork._target.browserContext().httpCredentials;
+      // An entry without an origin answers for any; one with an origin answers
+      // only for that origin. First match wins, as it does upstream.
+      const contextCredentials = pageNetwork._target.browserContext().httpCredentials || [];
+      credentials = contextCredentials.find(credential =>
+          !credential.origin || credential.origin.toLowerCase() === origin.toLowerCase()) || null;
     }
     if (!credentials)
-      return false;
-    const origin = aChannel.URI.scheme + '://' + aChannel.URI.hostPort;
-    if (credentials.origin && origin.toLowerCase() !== credentials.origin.toLowerCase())
       return false;
     authInfo.username = credentials.username;
     authInfo.password = credentials.password;
