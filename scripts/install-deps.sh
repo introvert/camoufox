@@ -159,9 +159,11 @@ install_macos() {
 install_linux() {
   log "Detected Linux."
 
-  local debs="python3 python3-dev python3-pip p7zip-full golang-go msitools wget aria2 libsqlite3-dev build-essential make git curl unzip rsync ca-certificates libegl1 libegl-mesa0 libgl1-mesa-dri xvfb"
-  local rpms="python3 python3-devel p7zip golang msitools wget aria2 sqlite-devel gcc gcc-c++ make git curl unzip rsync ca-certificates mesa-libEGL mesa-dri-drivers xorg-x11-server-Xvfb"
-  local pacman_pkgs="python python-pip p7zip go msitools wget aria2 sqlite base-devel git curl unzip rsync ca-certificates mesa xorg-server-xvfb"
+  # nodejs/npm are for build-tester, which bundles its checks with esbuild.
+
+  local debs="python3 python3-dev python3-pip p7zip-full golang-go msitools wget aria2 libsqlite3-dev build-essential make git curl unzip rsync ca-certificates libegl1 libegl-mesa0 libgl1-mesa-dri xvfb nodejs npm"
+  local rpms="python3 python3-devel p7zip golang msitools wget aria2 sqlite-devel gcc gcc-c++ make git curl unzip rsync ca-certificates mesa-libEGL mesa-dri-drivers xorg-x11-server-Xvfb nodejs npm"
+  local pacman_pkgs="python python-pip p7zip go msitools wget aria2 sqlite base-devel git curl unzip rsync ca-certificates mesa xorg-server-xvfb nodejs npm"
 
   if have apt-get; then
     log "Using apt-get..."

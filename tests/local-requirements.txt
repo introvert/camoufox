@@ -1,4 +1,8 @@
-playwright
+# Keep the same ceiling as pythonlib/pyproject.toml. Every Playwright minor is
+# free to change the Juggler protocol, and 1.63 does: it sends HTTP credentials
+# as an array, which this fork's Juggler rejects, so 21 tests fail on a version
+# the package does not claim to support. Bump both together, deliberately.
+playwright<1.63
 auditwheel==6.1.0
 autobahn==23.1.2
 black==24.8.0
