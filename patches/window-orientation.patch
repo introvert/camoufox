@@ -50,7 +50,23 @@ diff --git a/dom/events/EventNameList.inc b/dom/events/EventNameList.inc
 diff --git a/dom/events/EventListenerManager.cpp b/dom/events/EventListenerManager.cpp
 --- a/dom/events/EventListenerManager.cpp
 +++ b/dom/events/EventListenerManager.cpp
-@@ -529,18 +529,16 @@ void EventListenerManager::AddEventListenerInternal(
+@@ -402,15 +402,13 @@ void EventListenerManager::AddEventListenerInternal(
+         break;
+       case eDeviceOrientation:
+       case eDeviceOrientationAbsolute:
+       case eUserProximity:
+       case eDeviceLight:
+       case eDeviceMotion:
+-#if defined(MOZ_WIDGET_ANDROID)
+       case eOrientationChange:
+-#endif  // #if defined(MOZ_WIDGET_ANDROID)
+         EnableDevice(aTypeAtom);
+         break;
+       case eTouchStart:
+       case eTouchEnd:
+       case eTouchMove:
+       case eTouchCancel:
+@@ -529,18 +527,16 @@ void EventListenerManager::AddEventListenerInternal(
                                       ToChar(resolvedEventMessage))
                           .get());
          NS_ASSERTION(aTypeAtom != nsGkAtoms::ondevicemotion,
@@ -69,7 +85,7 @@ diff --git a/dom/events/EventListenerManager.cpp b/dom/events/EventListenerManag
                           .get());
          NS_ASSERTION(aTypeAtom != nsGkAtoms::ontouchend,
                       nsPrintfCString("resolvedEventMessage=%s",
-@@ -700,17 +698,15 @@ void EventListenerManager::ProcessApzAwareEventListenerAdd(nsAtom* aEvent) {
+@@ -700,17 +696,15 @@ void EventListenerManager::ProcessApzAwareEventListenerAdd(nsAtom* aEvent) {
  }
  
  bool EventListenerManager::IsDeviceType(nsAtom* aTypeAtom) {
@@ -90,7 +106,7 @@ diff --git a/dom/events/EventListenerManager.cpp b/dom/events/EventListenerManag
    nsCOMPtr<nsPIDOMWindowInner> window = GetTargetAsInnerWindow();
    if (!window) {
      return;
-@@ -749,18 +745,16 @@ void EventListenerManager::EnableDevice(nsAtom* aTypeAtom) {
+@@ -749,18 +743,16 @@ void EventListenerManager::EnableDevice(nsAtom* aTypeAtom) {
      window->EnableDeviceSensor(SENSOR_ACCELERATION);
      window->EnableDeviceSensor(SENSOR_LINEAR_ACCELERATION);
      window->EnableDeviceSensor(SENSOR_GYROSCOPE);
@@ -109,7 +125,7 @@ diff --git a/dom/events/EventListenerManager.cpp b/dom/events/EventListenerManag
  
  void EventListenerManager::DisableDevice(nsAtom* aTypeAtom) {
    nsCOMPtr<nsPIDOMWindowInner> window = GetTargetAsInnerWindow();
-@@ -799,18 +793,16 @@ void EventListenerManager::DisableDevice(nsAtom* aTypeAtom) {
+@@ -799,18 +791,16 @@ void EventListenerManager::DisableDevice(nsAtom* aTypeAtom) {
  
    if (aTypeAtom == nsGkAtoms::ondevicelight) {
      window->DisableDeviceSensor(SENSOR_LIGHT);
@@ -267,3 +283,24 @@ diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
      screenAngle = nsRFPService::ViewportSizeToAngle(size.width, size.height);
    }
    int16_t angle = AssertedCast<int16_t>(screenAngle);
+diff --git a/widget/EventMessageList.h b/widget/EventMessageList.h
+--- a/widget/EventMessageList.h
++++ b/widget/EventMessageList.h
+@@ -407,15 +407,15 @@ NS_EVENT_MESSAGE(eOpen)
+ // Device motion and orientation
+ NS_EVENT_MESSAGE(eDeviceOrientation)
+ NS_EVENT_MESSAGE(eDeviceOrientationAbsolute)
+ NS_EVENT_MESSAGE(eDeviceMotion)
+ NS_EVENT_MESSAGE(eUserProximity)
+ NS_EVENT_MESSAGE(eDeviceLight)
+-#if defined(MOZ_WIDGET_ANDROID)
++// Camoufox: built everywhere for window.onorientationchange; see
++// window-orientation.patch.
+ NS_EVENT_MESSAGE(eOrientationChange)
+-#endif
+ 
+ // WebVR events
+ NS_EVENT_MESSAGE(eVRDisplayActivate)
+ NS_EVENT_MESSAGE(eVRDisplayDeactivate)
+ NS_EVENT_MESSAGE(eVRDisplayConnect)
+ NS_EVENT_MESSAGE(eVRDisplayDisconnect)
