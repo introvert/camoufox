@@ -30,23 +30,26 @@ diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
 diff --git a/dom/events/EventNameList.inc b/dom/events/EventNameList.inc
 --- a/dom/events/EventNameList.inc
 +++ b/dom/events/EventNameList.inc
-@@ -299,16 +299,14 @@ WINDOW_EVENT(messageerror, eMessageError, EventNameType_HTMLBodyOrFramesetOnly,
- WINDOW_EVENT(offline, eOffline,
-              EventNameType_XUL | EventNameType_HTMLBodyOrFramesetOnly,
-              eBasicEventClass)
+@@ -302,12 +302,19 @@ WINDOW_EVENT(offline, eOffline,
  WINDOW_EVENT(online, eOnline,
               EventNameType_XUL | EventNameType_HTMLBodyOrFramesetOnly,
               eBasicEventClass)
--#if defined(MOZ_WIDGET_ANDROID)
+ #if defined(MOZ_WIDGET_ANDROID)
  WINDOW_EVENT(orientationchange, eOrientationChange,
               EventNameType_HTMLBodyOrFramesetOnly, eBasicEventClass)
--#endif
++#else
++// Camoufox: the window.onorientationchange IDL attribute is gated by
++// nsGlobalWindowInner::IsWindowOrientationEnabled, but a content attribute
++// cannot be. Desktop Firefox has no onorientationchange at all, so it must not
++// become a live <body>/<frameset> event handler attribute here either.
++WINDOW_EVENT(orientationchange, eOrientationChange, EventNameType_None,
++             eBasicEventClass)
+ #endif
  WINDOW_EVENT(pagehide, ePageHide, EventNameType_HTMLBodyOrFramesetOnly,
               eBasicEventClass)
  WINDOW_EVENT(pagereveal, ePageReveal, EventNameType_HTMLBodyOrFramesetOnly,
               eBasicEventClass)
  WINDOW_EVENT(pageshow, ePageShow, EventNameType_HTMLBodyOrFramesetOnly,
-              eBasicEventClass)
 diff --git a/dom/events/EventListenerManager.cpp b/dom/events/EventListenerManager.cpp
 --- a/dom/events/EventListenerManager.cpp
 +++ b/dom/events/EventListenerManager.cpp

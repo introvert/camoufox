@@ -26,7 +26,6 @@
     "OfferToSaveLogins": false,
     "ExtensionUpdate": false,
     "PDFjs": {
-      "Enabled": true,
       "EnablePermissions": true
     },
     "WebsiteFilter": {

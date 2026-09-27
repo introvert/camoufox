@@ -25,7 +25,7 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 | `navigator.hardwareConcurrency` | the device's cores | `navigator.hardwareConcurrency` | auto |
 | `navigator.maxTouchPoints` | `5` on multitouch phones | `navigator.maxTouchPoints`. A `has_touch` context or mobile mode without a count reports 5 | auto (5) |
 | `navigator.languages` | the app locales | `navigator.languages` (list), or `locale=`. Both feed `intl.accept_languages`, so `Accept-Language` stays the same list | from `locale` / `geoip` |
-| `navigator.pdfViewerEnabled` | `true` unless `pdfjs.disabled`. GeckoView leaves pdf.js on in-tree; **check Fenix on a real device** | `pdfViewerEnabled`. `navigator.plugins` and `mimeTypes` follow it, and the launcher sets `pdfjs.disabled` to match | Gecko default (`true`) |
+| `navigator.pdfViewerEnabled` | `true` unless `pdfjs.disabled`. GeckoView leaves pdf.js on in-tree; **check Fenix on a real device** | `pdfViewerEnabled`. `navigator.plugins` and `mimeTypes` follow it, and the launcher sets `pdfjs.disabled` to match (policies.json no longer locks that pref) | Gecko default (`true`) |
 | `navigator.plugins.length` / `mimeTypes.length` | `5` / `2` with a viewer, `0` / `0` without | follow `pdfViewerEnabled`. `navigator.plugins` (bool) moves them alone, with a warning, since no real Firefox splits them | follow |
 | `navigator.userAgentData` | absent (Gecko has no client hints) | nothing to set | absent |
 | `navigator.connection` | absent (`dom.netinfo.enabled` is false) | pref `dom.netinfo.enabled` | absent |

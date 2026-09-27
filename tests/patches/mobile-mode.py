@@ -87,13 +87,24 @@ DESKTOP: Dict[str, Any] = {
     "(any-hover: hover)": True,
     "window.orientation": None,
     "'onorientationchange' in window": False,
+    # Desktop Firefox has no such handler, so the content attribute is inert.
+    "<body onorientationchange> fires": False,
 }
 
 PROBE_JS = r"""() => {
   const mq = q => window.matchMedia(q).matches;
   let createEvent = false;
   try { createEvent = !!document.createEvent('TouchEvent'); } catch (e) { createEvent = false; }
+  let bodyFires = false;
+  if (document.body) {
+    window.__camouOrientationProbe = false;
+    document.body.setAttribute("onorientationchange", "window.__camouOrientationProbe = true");
+    window.dispatchEvent(new Event("orientationchange"));
+    bodyFires = window.__camouOrientationProbe;
+    document.body.removeAttribute("onorientationchange");
+  }
   return {
+    "<body onorientationchange> fires": bodyFires,
     "(pointer: fine)":       mq("(pointer: fine)"),
     "(pointer: coarse)":     mq("(pointer: coarse)"),
     "(any-pointer: fine)":   mq("(any-pointer: fine)"),
