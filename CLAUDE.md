@@ -48,6 +48,24 @@ Docker is the portable path: `docker build -t camoufox-builder .` then `docker r
 
 Packaging: `make package-linux|package-macos|package-windows arch=<arch>` (wraps `scripts/package.py`). Launcher (Go): `make build-launcher arch=<arch> os=<os>`.
 
+### Releasing
+
+Pushing a tag builds all four targets (linux/macos × x86_64/arm64) and drafts a
+release — about two hours per architecture. When the tag points at code a pull
+request already compiled, which is the usual case because the release bump is the
+last commit on the branch, those zips already exist as that run's artifacts:
+
+```bash
+gh workflow run copy-prebuilt-release.yml -f run_id=<pr build run> -f tag=<tag>
+```
+
+It copies them onto the release inside GitHub's network in about two minutes and
+builds nothing. Check the trees first — `git rev-parse <run head>^{tree}` against
+`git rev-parse <tag>^{tree}`; a merge commit has a different sha than the branch
+tip it merged while holding the same tree, which is the case this is for. A pull
+request only builds x86_64 (see the matrix in `build.yml`), so arm64 still has to
+come from the tag build.
+
 ## Working with patches (the core workflow)
 
 Almost all browser-behavior changes are `patches/*.patch` (~49 patches: `fingerprint-injection.patch`, `webgl-spoofing.patch`, `navigator-spoofing.patch`, `webrtc-ip-spoofing.patch`, the `playwright/` and `librewolf/` and `ghostery/` subdirs, etc.). Do not hand-edit patch files.
