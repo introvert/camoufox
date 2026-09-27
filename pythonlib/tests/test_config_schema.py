@@ -31,8 +31,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 PROPERTIES = REPO / "settings" / "properties.json"
 
-# MaskConfig::GetBool("k") / GetString("k") / GetUint32("k") / HasKey("k") ...
-MASKCONFIG_READ = re.compile(r'MaskConfig::(?:Get|Has)\w*\(\s*"([^"]+)"')
+# MaskConfig::GetBool("k") / GetString("k") / CheckBool("k") / HasKey("k") ...
+MASKCONFIG_READ = re.compile(r'MaskConfig::(?:Get|Has|Check)\w*\(\s*"([^"]+)"')
 
 # Keys read through a variable or built at runtime rather than a string literal.
 # Add here (with a reason) only when the read genuinely cannot name its key.
@@ -105,3 +105,72 @@ def test_known_previously_missing_keys_stay_declared(key):
         f"{key} is read by the browser but is not declared in "
         f"settings/properties.json -- see PR #562"
     )
+
+
+# Declared in settings/properties.json but read by nothing in patches/ or
+# additions/, so setting them does nothing. None of these is a surface a page
+# reads directly. Shrink this list as they get a reader; never grow it.
+KNOWN_UNREAD = {
+    "webrtc:localipv4",
+    "webrtc:localipv6",
+    "canvas:seed",
+    "canvas:aaOffset",
+    "canvas:aaCapOffset",
+    "memorysaver",
+}
+
+
+def _named_in_sources(key: str, text: str) -> bool:
+    # Some keys are read through a helper or a table rather than a direct
+    # MaskConfig::Get call, so any quoted mention counts as a reader.
+    return f'"{key}"' in text or f"'{key}'" in text
+
+
+def test_every_declared_key_is_read():
+    """The other direction: pdfViewerEnabled was declared for years while no
+    patch read it, so `config={"pdfViewerEnabled": False}` silently did
+    nothing and navigator.plugins could not be tested at all."""
+    text = ""
+    for path in _sources():
+        try:
+            text += path.read_text(errors="ignore")
+        except OSError:
+            continue
+
+    unread = sorted(
+        k for k in _declared_keys() if k not in KNOWN_UNREAD and not _named_in_sources(k, text)
+    )
+    assert not unread, (
+        "declared in settings/properties.json but read by no patch or addition, "
+        f"so setting them does nothing: {unread}"
+    )
+
+    now_read = sorted(k for k in KNOWN_UNREAD if _named_in_sources(k, text))
+    assert not now_read, f"these now have a reader; drop them from KNOWN_UNREAD: {now_read}"
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "pdfViewerEnabled",
+        "navigator.plugins",
+        "mobile",
+        "navigator.appCodeName",
+        "navigator.appName",
+        "navigator.product",
+        "navigator.productSub",
+        "navigator.vendor",
+        "navigator.buildID",
+        "navigator.cookieEnabled",
+        "navigator.onLine",
+        "navigator.doNotTrack",
+        "navigator.globalPrivacyControl",
+        "mobile:zoom",
+    ],
+)
+def test_new_keys_are_declared_and_read(key):
+    """Keys read straight through a MaskConfig call. navigator.languages and
+    screen.orientation are read by chrome JS (browser-init.js, Juggler), so the
+    general scan above covers them."""
+    assert key in _declared_keys()
+    assert key in _keys_read(), f"{key} is declared but no MaskConfig call reads it"

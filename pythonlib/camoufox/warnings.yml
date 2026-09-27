@@ -68,3 +68,21 @@ max_touch_points: >-
     `(pointer: coarse)` false and `ontouchstart` absent, exactly as a real one does.
     The rest of your fingerprint is not adjusted to suit, so a device that claims a digitizer
     but reports a screen size no touchscreen laptop ships with is still inconsistent.
+
+mobile_resources: >-
+    Mobile mode takes its fonts, speech voices and WebGL GPU from the Linux pools,
+    because Camoufox bundles no Android fonts and has no WebGL data for phone GPUs.
+    Pages that fingerprint those will not see an Android device. The layout-facing
+    signals (user agent, pointer, touch, viewport, screen) do match Firefox for Android.
+
+plugins_pdf_mismatch: >-
+    navigator.plugins disagrees with pdfViewerEnabled. Firefox exposes its five PDF plugins
+    and two PDF MIME types exactly when it has a PDF viewer, so this pairing does not exist
+    on any real Firefox and a page can see the contradiction. Leave navigator.plugins unset
+    to have it follow pdfViewerEnabled.
+
+webgl_unknown_pair: >-
+    Camoufox has no WebGL parameter data for this vendor/renderer pair (its database only
+    covers desktop GPUs). The vendor and renderer strings are set as given, but every other
+    WebGL parameter (limits, extensions, precision formats) is the host's own, and a page
+    that compares them with the named GPU can see they do not belong together.

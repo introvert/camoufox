@@ -35,12 +35,21 @@ Main patcher functions
 
 
 def reset_to_unpatched():
-    """Reset this source repository without discovering a parent repository."""
+    """Reset this source repository without discovering a parent repository.
+
+    The object directory survives: files the patches leave untouched keep their
+    timestamps, so the next build recompiles only what the patches changed (and
+    the compiler cache serves most of that). Set CAMOUFOX_CLOBBER=1 for the old
+    from-scratch behaviour.
+    """
     if not os.path.exists('.git'):
         return
 
     print("Resetting to unpatched state...")
-    run('git reset --hard unpatched && ./mach clobber && git clean -fdx')
+    if os.environ.get('CAMOUFOX_CLOBBER') == '1':
+        run('git reset --hard unpatched && ./mach clobber && git clean -fdx')
+    else:
+        run("git reset --hard unpatched && git clean -fdx -e '/obj-*/' -e '/mozconfig.hash'")
 
 
 @dataclass
@@ -56,6 +65,20 @@ class Patcher:
         """
         version, release = extract_args()
         with temp_cd(find_src_dir('.', version, release)):
+            if options.mozconfig_only:
+                # Only the build target changes: leave the applied patches, the
+                # additions and the object directory exactly as they are.
+                # _update_mozconfig builds from mozconfig.backup, which a full
+                # run's `git clean` removes; drop it here too, or edits to
+                # base.mozconfig never reach the new mozconfig.
+                if os.path.exists('mozconfig.backup'):
+                    os.remove('mozconfig.backup')
+                run('cp -v ../assets/base.mozconfig mozconfig')
+                print(f'Using target: {self.moz_target}')
+                self._update_mozconfig()
+                print('Complete!')
+                return
+
             # Reset only when the source tree has its own local repository.
             reset_to_unpatched()
 
@@ -69,46 +92,45 @@ class Patcher:
             print(f'Using target: {self.moz_target}')
             self._update_mozconfig()
 
-            if not options.mozconfig_only:
-                # Apply patches with roverfox patches at the very end
-                all_patches = list_patches()
-                # Normalize paths and partition into non-roverfox and roverfox
-                non_roverfox = []
-                roverfox = []
-                for p in all_patches:
-                    norm = os.path.normpath(p)
-                    parts = norm.split(os.sep)
-                    if 'roverfox' in parts:
-                        roverfox.append(p)
-                    else:
-                        non_roverfox.append(p)
+            # Apply patches with roverfox patches at the very end
+            all_patches = list_patches()
+            # Normalize paths and partition into non-roverfox and roverfox
+            non_roverfox = []
+            roverfox = []
+            for p in all_patches:
+                norm = os.path.normpath(p)
+                parts = norm.split(os.sep)
+                if 'roverfox' in parts:
+                    roverfox.append(p)
+                else:
+                    non_roverfox.append(p)
 
-                # Track patch failures
-                failed_patches = []
+            # Track patch failures
+            failed_patches = []
 
-                # Apply non-roverfox patches first
-                for patch_file in non_roverfox:
-                    rejects = self._apply_and_check(patch_file)
-                    if rejects:
-                        failed_patches.append((patch_file, rejects))
+            # Apply non-roverfox patches first
+            for patch_file in non_roverfox:
+                rejects = self._apply_and_check(patch_file)
+                if rejects:
+                    failed_patches.append((patch_file, rejects))
 
-                # Apply roverfox patches last
-                for patch_file in roverfox:
-                    rejects = self._apply_and_check(patch_file)
-                    if rejects:
-                        failed_patches.append((patch_file, rejects))
+            # Apply roverfox patches last
+            for patch_file in roverfox:
+                rejects = self._apply_and_check(patch_file)
+                if rejects:
+                    failed_patches.append((patch_file, rejects))
 
-                # Report failures
-                if failed_patches:
-                    print('\n' + '='*70)
-                    print(f'ERROR: {len(failed_patches)} patch(es) failed to apply cleanly:')
-                    print('='*70)
-                    for patch_file, rejects in failed_patches:
-                        print(f'\n{patch_file}:')
-                        for reject in rejects:
-                            print(f'  - {reject}')
-                    print('='*70)
-                    sys.exit(1)
+            # Report failures
+            if failed_patches:
+                print('\n' + '='*70)
+                print(f'ERROR: {len(failed_patches)} patch(es) failed to apply cleanly:')
+                print('='*70)
+                for patch_file, rejects in failed_patches:
+                    print(f'\n{patch_file}:')
+                    for reject in rejects:
+                        print(f'  - {reject}')
+                print('='*70)
+                sys.exit(1)
 
             print('Complete!')
 
@@ -131,7 +153,8 @@ class Patcher:
         # --binary flag: preserve line endings (helps with CRLF vs LF differences)
         # -l flag: ignore whitespace differences
         result = subprocess.run(
-            ['patch', '-p1', '--forward', '-l', '--binary', '-i', patch_file],
+            ['patch', '-p1', '--forward', '-l', '--binary', '--no-backup-if-mismatch',
+             '-i', patch_file],
             stdin=sys.stdin,
             stdout=sys.stdout,
             stderr=sys.stderr,
@@ -177,6 +200,15 @@ class Patcher:
 
         # Add target option
         content += f"\nac_add_options --target={self.moz_target}\n"
+
+        # A local build for patch work: no release configuration, whose extra
+        # optimisation and Rust settings cost build time and change nothing a
+        # patch needs to be checked against. Never for a build that ships.
+        if os.environ.get('CAMOUFOX_DEV_BUILD') == '1':
+            content = content.replace(
+                'ac_add_options --enable-release',
+                '# ac_add_options --enable-release  # CAMOUFOX_DEV_BUILD=1',
+            )
 
         # Add target-specific mozconfig if it exists
         target_mozconfig = os.path.join("..", "assets", f"{self.target}.mozconfig")
@@ -236,7 +268,22 @@ def extract_build_target():
         assert target in AVAILABLE_TARGETS, f"Unsupported target: {target}"
         assert arch in AVAILABLE_ARCHS, f"Unsupported architecture: {arch}"
     else:
-        target, arch = "macos", "arm64"
+        target, arch = host_build_target()
+    return target, arch
+
+
+def host_build_target():
+    """The machine's own target, the default when BUILD_TARGET is unset.
+
+    This used to be macos/arm64 everywhere, so a plain `make dir` on Linux
+    configured a macOS cross build that stops at the missing macOS SDK.
+    """
+    import platform
+
+    system = platform.system()
+    target = {'Linux': 'linux', 'Darwin': 'macos', 'Windows': 'windows'}.get(system, 'linux')
+    machine = platform.machine().lower()
+    arch = 'arm64' if machine in ('arm64', 'aarch64') else 'x86_64'
     return target, arch
 
 

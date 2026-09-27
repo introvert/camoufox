@@ -151,6 +151,7 @@ export class PageAgent {
         dispatchTouchEvent: this._dispatchTouchEvent.bind(this),
         dispatchTapEvent: this._dispatchTapEvent.bind(this),
         getContentQuads: this._getContentQuads.bind(this),
+        getVisualViewport: this._getVisualViewport.bind(this),
         getFullAXTree: this._getFullAXTree.bind(this),
         insertText: this._insertText.bind(this),
         scrollIntoViewIfNeeded: this._scrollIntoViewIfNeeded.bind(this),
@@ -395,6 +396,22 @@ export class PageAgent {
     ];
     for (const event of events)
       unsafeObject.dispatchEvent(event);
+  }
+
+  _getVisualViewport() {
+    const win = this._frameTree.mainFrame().domWindow();
+    const vv = win.visualViewport;
+    return {
+      offsetLeft: vv.offsetLeft,
+      offsetTop: vv.offsetTop,
+      pageLeft: vv.pageLeft,
+      pageTop: vv.pageTop,
+      width: vv.width,
+      height: vv.height,
+      scale: vv.scale,
+      scrollX: win.scrollX,
+      scrollY: win.scrollY,
+    };
   }
 
   _getContentQuads({objectId, frameId}) {

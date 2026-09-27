@@ -1,13 +1,19 @@
 diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
 --- a/dom/base/Navigator.cpp
 +++ b/dom/base/Navigator.cpp
-@@ -893,12 +977,21 @@ bool Navigator::Vibrate(const nsTArray<uint32_t>& aPattern) {
- 
- //*****************************************************************************
- //  Pointer Events interface
+@@ -1018,12 +1018,35 @@ bool Navigator::Vibrate(const nsTArray<uint32_t>& aPattern) {
  //*****************************************************************************
  
  uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
+   nsIDocShell* docshell = GetDocShell();
+   BrowsingContext* bc = docshell ? docshell->GetBrowsingContext() : nullptr;
+ 
++  // A context that asked for touch (Playwright's hasTouch) has to report a
++  // digitizer: touch events next to maxTouchPoints == 0 contradict each other.
++  const bool touchContext =
++      bc && bc->TouchEventsOverride() ==
++                mozilla::dom::TouchEventsOverride::Enabled;
++
 +  // Allow spoofing navigator.maxTouchPoints via config. A headless build has
 +  // no digitizer, so the real value is 0 and Firefox's RFP path only ever
 +  // collapses it to 0. The target is not a phone: it is the ordinary Windows
@@ -15,14 +21,22 @@ diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
 +  // primary pointer. See force-default-pointer.patch for the matching
 +  // `any-pointer: coarse` half.
 +  if (auto value = MaskConfig::GetUint32("navigator.maxTouchPoints")) {
-+    return value.value();
++    if (value.value() > 0 || !touchContext) {
++      return value.value();
++    }
 +  }
-   nsIDocShell* docshell = GetDocShell();
-   BrowsingContext* bc = docshell ? docshell->GetBrowsingContext() : nullptr;
- 
++  // A touch context or mobile mode without a count of its own: the five touch
++  // points Firefox for Android reports on ordinary phones.
++  if (touchContext || MaskConfig::CheckBool("mobile")) {
++    return 5;
++  }
++
    // Responsive Design Mode overrides the maxTouchPoints property when
    // touch simulation is enabled.
    if (bc && bc->Top()->InRDMPane()) {
+     return bc->Top()->GetMaxTouchPointsOverride();
+   }
+ 
 diff --git a/dom/events/TouchEvent.cpp b/dom/events/TouchEvent.cpp
 --- a/dom/events/TouchEvent.cpp
 +++ b/dom/events/TouchEvent.cpp
@@ -41,13 +55,16 @@ diff --git a/dom/events/TouchEvent.cpp b/dom/events/TouchEvent.cpp
  #include "mozilla/Preferences.h"
  #include "mozilla/StaticPrefs_dom.h"
  #include "mozilla/TouchEvents.h"
-@@ -221,12 +223,24 @@ bool TouchEvent::PrefEnabled(nsIDocShell* aDocShell) {
+@@ -221,12 +223,28 @@ bool TouchEvent::PrefEnabled(nsIDocShell* aDocShell) {
    bool enabled = false;
    if (touchEventsOverride == mozilla::dom::TouchEventsOverride::Enabled) {
      enabled = true;
    } else if (touchEventsOverride ==
               mozilla::dom::TouchEventsOverride::Disabled) {
      enabled = false;
++  } else if (MaskConfig::CheckBool("mobile")) {
++    // A phone always has its touchscreen.
++    enabled = true;
 +  } else if (auto maxTouchPoints =
 +                 MaskConfig::GetUint32("navigator.maxTouchPoints")) {
 +    // A spoofed digitizer has to bring the touch interfaces with it: a
@@ -59,6 +76,7 @@ diff --git a/dom/events/TouchEvent.cpp b/dom/events/TouchEvent.cpp
 +    // false everywhere but Android, so a real Windows touchscreen laptop
 +    // exposes TouchEvent and Touch while `'ontouchstart' in window` is false.
 +    // Matching that shape matters more than exposing the whole touch API.
++    // Mobile mode, above and in LegacyAPIEnabled, is the Android shape.
 +    enabled = maxTouchPoints.value() > 0;
    } else if (nsContentUtils::ShouldResistFingerprinting(
                   aDocShell, RFPTarget::PointerEvents)) {
@@ -66,6 +84,25 @@ diff --git a/dom/events/TouchEvent.cpp b/dom/events/TouchEvent.cpp
      enabled = false;
  #else
      enabled = true;
+@@ -282,14 +300,18 @@ bool TouchEvent::LegacyAPIEnabled(JSContext* aCx, JSObject* aGlobal) {
+   return LegacyAPIEnabled(docShell, isSystem);
+ }
+ 
+ // static
+ bool TouchEvent::LegacyAPIEnabled(nsIDocShell* aDocShell,
+                                   bool aCallerIsSystem) {
++  // Mobile mode claims Firefox for Android, the one platform where
++  // dom.w3c_touch_events.legacy_apis.enabled defaults to true: `ontouchstart`,
++  // document.createTouch and createEvent('TouchEvent') all exist there.
+   return (aCallerIsSystem ||
+           StaticPrefs::dom_w3c_touch_events_legacy_apis_enabled() ||
++          MaskConfig::CheckBool("mobile") ||
+           (aDocShell && aDocShell->GetBrowsingContext() &&
+            aDocShell->GetBrowsingContext()->TouchEventsOverride() ==
+                mozilla::dom::TouchEventsOverride::Enabled)) &&
+          PrefEnabled(aDocShell);
+ }
+ 
 diff --git a/dom/events/moz.build b/dom/events/moz.build
 --- a/dom/events/moz.build
 +++ b/dom/events/moz.build

@@ -24,6 +24,24 @@ make run args="--headless https://test.com"
 python3 multibuild.py --target linux windows macos --arch x86_64 arm64 i686   # full cross-platform build + package
 ```
 
+### Faster iteration
+
+A cold build is long; most changes need far less than `make dir` + `make build`:
+
+```bash
+CAMOUFOX_DEV_BUILD=1 make dir   # local patch work: no --enable-release (never for a shipped build)
+make sync && make build-js      # Juggler / settings / other additions/: ./mach build faster, seconds
+make build-cpp                  # C++/Rust only: ./mach build binaries
+make verify-patches             # replay the stack on clean upstream files in ~1s, no make dir
+make verify-patches compare=true  # ...and fail if the source dir holds edits no patch records
+python3 scripts/patchstack.py regen patches/<name>.patch  # rewrite one patch from the tree
+```
+
+- The build uses sccache when present (`mach bootstrap` installs it; it caches Rust too), else ccache. `CCACHE_MAXSIZE` / `SCCACHE_CACHE_SIZE` default to 20G. Docker keeps both caches in the `/root/.mozbuild` volume, so reuse that volume across `docker run`s.
+- `make dir` no longer clobbers the object directory: re-patching recompiles only what the patches touch. `CAMOUFOX_CLOBBER=1` restores the from-scratch reset.
+- `make set-target` (`patch.py --mozconfig-only`) only rewrites the mozconfig; the default target is now the host, not macos/arm64.
+- Do not edit the source dir while `./mach build` runs: a file changed mid-compile can fail the build with errors that are not in the code.
+
 `make dir` is the pipeline that matters: `setup` (fetch tarball via `aria2c` → extract → `copy-additions.sh`) → `python3 scripts/patch.py` (applies every patch, writes `mozconfig`) → `_READY`. `mach` requires **Python ≥ 3.11** (stdlib `tomllib`); older `python3` crashes with `ModuleNotFoundError: No module named 'tomllib'`.
 
 Docker is the portable path: `docker build -t camoufox-builder .` then `docker run -v "$(pwd)/dist:/app/dist" camoufox-builder --target <os> --arch <arch>`.

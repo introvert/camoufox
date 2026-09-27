@@ -1,0 +1,102 @@
+diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
+--- a/dom/base/Navigator.cpp
++++ b/dom/base/Navigator.cpp
+@@ -592,12 +592,18 @@ nsPluginArray* Navigator::GetPlugins(ErrorResult& aRv) {
+   }
+ 
+   return mPlugins;
+ }
+ 
+ bool Navigator::PdfViewerEnabled() {
++  // Camoufox: pdfViewerEnabled decides the whole PDF surface -- this flag and
++  // the spec's hard-coded plugins/mimeTypes (nsPluginArray, nsMimeTypeArray)
++  // -- so the three agree unless navigator.plugins is set on its own.
++  if (auto value = MaskConfig::GetBool("pdfViewerEnabled")) {
++    return value.value();
++  }
+   return !StaticPrefs::pdfjs_disabled() ||
+          nsContentUtils::ShouldResistFingerprinting(GetDocShell(),
+                                                     RFPTarget::PdfjsSpoof);
+ }
+ 
+ Permissions* Navigator::GetPermissions(ErrorResult& aRv) {
+diff --git a/dom/base/nsMimeTypeArray.cpp b/dom/base/nsMimeTypeArray.cpp
+--- a/dom/base/nsMimeTypeArray.cpp
++++ b/dom/base/nsMimeTypeArray.cpp
+@@ -1,12 +1,14 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "nsMimeTypeArray.h"
+ 
++#include "MaskConfig.hpp"
++
+ #include "mozilla/StaticPrefs_pdfjs.h"
+ #include "mozilla/dom/MimeTypeArrayBinding.h"
+ #include "mozilla/dom/MimeTypeBinding.h"
+ #include "nsContentUtils.h"
+ #include "nsPIDOMWindowInlines.h"
+ #include "nsPluginArray.h"
+@@ -76,12 +78,21 @@ void nsMimeTypeArray::GetSupportedNames(nsTArray<nsString>& retval) {
+   for (auto& mimeType : mMimeTypes) {
+     retval.AppendElement(mimeType->Name());
+   }
+ }
+ 
+ bool nsMimeTypeArray::ForceNoPlugins() {
++  // Camoufox: navigator.plugins exposes or hides the spec's PDF plugins and
++  // their MIME types on its own; unset, they follow navigator.pdfViewerEnabled
++  // (see Navigator.cpp), which is the only shape a real Firefox has.
++  if (auto value = MaskConfig::GetBool("navigator.plugins")) {
++    return !value.value();
++  }
++  if (auto value = MaskConfig::GetBool("pdfViewerEnabled")) {
++    return !value.value();
++  }
+   return StaticPrefs::pdfjs_disabled() &&
+          !nsContentUtils::ShouldResistFingerprinting(
+              mWindow ? mWindow->GetDocShell() : nullptr, RFPTarget::PdfjsSpoof);
+ }
+ 
+ NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(nsMimeType, mPluginElement)
+diff --git a/dom/base/nsPluginArray.cpp b/dom/base/nsPluginArray.cpp
+--- a/dom/base/nsPluginArray.cpp
++++ b/dom/base/nsPluginArray.cpp
+@@ -1,12 +1,14 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "nsPluginArray.h"
+ 
++#include "MaskConfig.hpp"
++
+ #include "mozilla/StaticPrefs_pdfjs.h"
+ #include "mozilla/dom/PluginArrayBinding.h"
+ #include "mozilla/dom/PluginBinding.h"
+ #include "nsContentUtils.h"
+ #include "nsMimeTypeArray.h"
+ #include "nsPIDOMWindow.h"
+@@ -93,12 +95,21 @@ void nsPluginArray::GetSupportedNames(nsTArray<nsString>& aRetval) {
+   for (auto& plugin : mPlugins) {
+     aRetval.AppendElement(plugin->Name());
+   }
+ }
+ 
+ bool nsPluginArray::ForceNoPlugins() {
++  // Camoufox: navigator.plugins exposes or hides the spec's PDF plugins and
++  // their MIME types on its own; unset, they follow navigator.pdfViewerEnabled
++  // (see Navigator.cpp), which is the only shape a real Firefox has.
++  if (auto value = MaskConfig::GetBool("navigator.plugins")) {
++    return !value.value();
++  }
++  if (auto value = MaskConfig::GetBool("pdfViewerEnabled")) {
++    return !value.value();
++  }
+   return StaticPrefs::pdfjs_disabled() &&
+          !nsContentUtils::ShouldResistFingerprinting(
+              mWindow ? mWindow->GetDocShell() : nullptr, RFPTarget::PdfjsSpoof);
+ }
+ 
+ NS_IMPL_CYCLE_COLLECTING_ADDREF(nsPluginArray)

@@ -1,0 +1,219 @@
+diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
+--- a/dom/base/Navigator.cpp
++++ b/dom/base/Navigator.cpp
+@@ -321,12 +321,16 @@ void Navigator::GetUserAgent(nsAString& aUserAgent, CallerType aCallerType,
+   if (NS_WARN_IF(NS_FAILED(rv))) {
+     aRv.Throw(rv);
+   }
+ }
+ 
+ void Navigator::GetAppCodeName(nsAString& aAppCodeName, ErrorResult& aRv) {
++  if (auto value = MaskConfig::GetString("navigator.appCodeName")) {
++    aAppCodeName.Assign(NS_ConvertUTF8toUTF16(value.value()));
++    return;
++  }
+   nsresult rv;
+ 
+   nsCOMPtr<nsIHttpProtocolHandler> service(
+       do_GetService(NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "http", &rv));
+   if (NS_WARN_IF(NS_FAILED(rv))) {
+     aRv.Throw(rv);
+@@ -358,12 +362,16 @@ void Navigator::GetAppVersion(nsAString& aAppVersion, CallerType aCallerType,
+   if (NS_WARN_IF(NS_FAILED(rv))) {
+     aRv.Throw(rv);
+   }
+ }
+ 
+ void Navigator::GetAppName(nsAString& aAppName) const {
++  if (auto value = MaskConfig::GetString("navigator.appName")) {
++    aAppName.Assign(NS_ConvertUTF8toUTF16(value.value()));
++    return;
++  }
+   aAppName.AssignLiteral("Netscape");
+ }
+ 
+ /**
+  * Returns the value of Accept-Languages (HTTP header) as a nsTArray of
+  * languages. The value is set in the preference by the user ("Content
+@@ -557,21 +565,35 @@ void Navigator::GetOscpu(nsAString& aOSCPU, CallerType aCallerType,
+     return;
+   }
+ 
+   CopyASCIItoUTF16(oscpu, aOSCPU);
+ }
+ 
+-void Navigator::GetVendor(nsAString& aVendor) { aVendor.Truncate(); }
++void Navigator::GetVendor(nsAString& aVendor) {
++  if (auto value = MaskConfig::GetString("navigator.vendor")) {
++    aVendor.Assign(NS_ConvertUTF8toUTF16(value.value()));
++    return;
++  }
++  aVendor.Truncate();
++}
+ 
+ void Navigator::GetVendorSub(nsAString& aVendorSub) { aVendorSub.Truncate(); }
+ 
+ void Navigator::GetProduct(nsAString& aProduct) {
++  if (auto value = MaskConfig::GetString("navigator.product")) {
++    aProduct.Assign(NS_ConvertUTF8toUTF16(value.value()));
++    return;
++  }
+   aProduct.AssignLiteral("Gecko");
+ }
+ 
+ void Navigator::GetProductSub(nsAString& aProductSub) {
++  if (auto value = MaskConfig::GetString("navigator.productSub")) {
++    aProductSub.Assign(NS_ConvertUTF8toUTF16(value.value()));
++    return;
++  }
+   // Legacy build date hardcoded for backward compatibility (bug 776376)
+   aProductSub.AssignLiteral(LEGACY_UA_GECKO_TRAIL);
+ }
+ 
+ nsMimeTypeArray* Navigator::GetMimeTypes(ErrorResult& aRv) {
+   auto* plugins = GetPlugins(aRv);
+@@ -627,12 +649,15 @@ StorageManager* Navigator::Storage() {
+   }
+ 
+   return mStorageManager;
+ }
+ 
+ bool Navigator::CookieEnabled() {
++  if (auto value = MaskConfig::GetBool("navigator.cookieEnabled")) {
++    return value.value();
++  }
+   // Check whether an exception overrides the global cookie behavior
+   // Note that the code for getting the URI here matches that in
+   // nsHTMLDocument::SetCookie.
+   if (!mWindow || !mWindow->GetDocShell()) {
+     return nsICookieManager::GetCookieBehavior(false) !=
+            nsICookieService::BEHAVIOR_REJECT;
+@@ -673,12 +698,15 @@ bool Navigator::CookieEnabled() {
+               : ContentBlockingNotifier::BlockingDecision::eBlock,
+       rejectedReason);
+   return granted;
+ }
+ 
+ bool Navigator::OnLine() {
++  if (auto value = MaskConfig::GetBool("navigator.onLine")) {
++    return value.value();
++  }
+   if (nsContentUtils::ShouldResistFingerprinting(
+           GetDocShell(), RFPTarget::NetworkConnection)) {
+     return true;
+   }
+ 
+   if (mWindow) {
+@@ -692,12 +720,16 @@ bool Navigator::OnLine() {
+   return !NS_IsOffline();
+ }
+ 
+ void Navigator::GetBuildID(nsAString& aBuildID, CallerType aCallerType,
+                            ErrorResult& aRv) const {
+   if (aCallerType != CallerType::System) {
++    if (auto value = MaskConfig::GetString("navigator.buildID")) {
++      aBuildID.Assign(NS_ConvertUTF8toUTF16(value.value()));
++      return;
++    }
+     // If fingerprinting resistance is on, we will spoof this value. See
+     // nsRFPService.h for details about spoofed values.
+     if (nsContentUtils::ShouldResistFingerprinting(
+             GetDocShell(), RFPTarget::NavigatorBuildID)) {
+       aBuildID.AssignLiteral(LEGACY_BUILD_ID);
+       return;
+diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
+--- a/dom/workers/WorkerNavigator.cpp
++++ b/dom/workers/WorkerNavigator.cpp
+@@ -128,12 +128,44 @@ bool WorkerNavigator::GlobalPrivacyControl() const {
+     }
+   }
+   return StaticPrefs::privacy_globalprivacycontrol_functionality_enabled() &&
+          gpcStatus;
+ }
+ 
++void WorkerNavigator::GetAppCodeName(nsString& aAppCodeName,
++                                     ErrorResult& /* unused */) const {
++  if (auto value = MaskConfig::GetString("navigator.appCodeName")) {
++    aAppCodeName.Assign(NS_ConvertUTF8toUTF16(value.value()));
++    return;
++  }
++  aAppCodeName.AssignLiteral("Mozilla");
++}
++
++void WorkerNavigator::GetAppName(nsString& aAppName) const {
++  if (auto value = MaskConfig::GetString("navigator.appName")) {
++    aAppName.Assign(NS_ConvertUTF8toUTF16(value.value()));
++    return;
++  }
++  aAppName.AssignLiteral("Netscape");
++}
++
++void WorkerNavigator::GetProduct(nsString& aProduct) const {
++  if (auto value = MaskConfig::GetString("navigator.product")) {
++    aProduct.Assign(NS_ConvertUTF8toUTF16(value.value()));
++    return;
++  }
++  aProduct.AssignLiteral("Gecko");
++}
++
++bool WorkerNavigator::OnLine() const {
++  if (auto value = MaskConfig::GetBool("navigator.onLine")) {
++    return value.value();
++  }
++  return mOnline;
++}
++
+ void WorkerNavigator::SetLanguages(const nsTArray<nsString>& aLanguages) {
+   WorkerNavigator_Binding::ClearCachedLanguageValue(this);
+   WorkerNavigator_Binding::ClearCachedLanguagesValue(this);
+   mProperties.mLanguages = aLanguages.Clone();
+ }
+ 
+diff --git a/dom/workers/WorkerNavigator.h b/dom/workers/WorkerNavigator.h
+--- a/dom/workers/WorkerNavigator.h
++++ b/dom/workers/WorkerNavigator.h
+@@ -66,26 +66,22 @@ class WorkerNavigator final : public nsWrapperCache {
+ 
+   virtual JSObject* WrapObject(JSContext* aCx,
+                                JS::Handle<JSObject*> aGivenProto) override;
+ 
+   nsISupports* GetParentObject() const { return nullptr; }
+ 
+-  void GetAppCodeName(nsString& aAppCodeName, ErrorResult& /* unused */) const {
+-    aAppCodeName.AssignLiteral("Mozilla");
+-  }
+-  void GetAppName(nsString& aAppName) const {
+-    aAppName.AssignLiteral("Netscape");
+-  }
++  void GetAppCodeName(nsString& aAppCodeName, ErrorResult& /* unused */) const;
++  void GetAppName(nsString& aAppName) const;
+ 
+   void GetAppVersion(nsString& aAppVersion, CallerType aCallerType,
+                      ErrorResult& aRv) const;
+ 
+   void GetPlatform(nsString& aPlatform, CallerType aCallerType,
+                    ErrorResult& aRv) const;
+ 
+-  void GetProduct(nsString& aProduct) const { aProduct.AssignLiteral("Gecko"); }
++  void GetProduct(nsString& aProduct) const;
+ 
+   bool TaintEnabled() const { return false; }
+ 
+   void GetLanguage(nsString& aLanguage) const {
+     MOZ_ASSERT(mProperties.mLanguages.Length() >= 1);
+     aLanguage.Assign(mProperties.mLanguages[0]);
+@@ -95,13 +91,13 @@ class WorkerNavigator final : public nsWrapperCache {
+     aLanguages = mProperties.mLanguages.Clone();
+   }
+ 
+   void GetUserAgent(nsString& aUserAgent, CallerType aCallerType,
+                     ErrorResult& aRv) const;
+ 
+-  bool OnLine() const { return mOnline; }
++  bool OnLine() const;
+ 
+   // Worker thread only!
+   void SetOnLine(bool aOnline) { mOnline = aOnline; }
+ 
+   bool GlobalPrivacyControl() const;
+ 

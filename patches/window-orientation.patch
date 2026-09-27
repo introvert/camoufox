@@ -1,0 +1,309 @@
+diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
+--- a/dom/webidl/Window.webidl
++++ b/dom/webidl/Window.webidl
+@@ -712,20 +712,22 @@ partial interface Window {
+ };
+ 
+ Window includes TouchEventHandlers;
+ 
+ Window includes OnErrorEventHandlerForWindow;
+ 
+-#if defined(MOZ_WIDGET_ANDROID)
+ // https://compat.spec.whatwg.org/#windoworientation-interface
++// Camoufox: built everywhere, exposed where the page is a phone -- always on
++// Android, and in mobile mode or an isMobile context elsewhere.
+ partial interface Window {
+-  [UseCounter, NeedsCallerType]
++  [UseCounter, NeedsCallerType,
++   Func="nsGlobalWindowInner::IsWindowOrientationEnabled"]
+   readonly attribute short orientation;
++  [Func="nsGlobalWindowInner::IsWindowOrientationEnabled"]
+            attribute EventHandler onorientationchange;
+ };
+-#endif
+ 
+ [MOZ_CAN_RUN_SCRIPT_BOUNDARY]
+ callback PromiseDocumentFlushedCallback = any ();
+ 
+ // Mozilla extensions for Chrome windows.
+ partial interface Window {
+diff --git a/dom/events/EventNameList.inc b/dom/events/EventNameList.inc
+--- a/dom/events/EventNameList.inc
++++ b/dom/events/EventNameList.inc
+@@ -302,12 +302,19 @@ WINDOW_EVENT(offline, eOffline,
+ WINDOW_EVENT(online, eOnline,
+              EventNameType_XUL | EventNameType_HTMLBodyOrFramesetOnly,
+              eBasicEventClass)
+ #if defined(MOZ_WIDGET_ANDROID)
+ WINDOW_EVENT(orientationchange, eOrientationChange,
+              EventNameType_HTMLBodyOrFramesetOnly, eBasicEventClass)
++#else
++// Camoufox: the window.onorientationchange IDL attribute is gated by
++// nsGlobalWindowInner::IsWindowOrientationEnabled, but a content attribute
++// cannot be. Desktop Firefox has no onorientationchange at all, so it must not
++// become a live <body>/<frameset> event handler attribute here either.
++WINDOW_EVENT(orientationchange, eOrientationChange, EventNameType_None,
++             eBasicEventClass)
+ #endif
+ WINDOW_EVENT(pagehide, ePageHide, EventNameType_HTMLBodyOrFramesetOnly,
+              eBasicEventClass)
+ WINDOW_EVENT(pagereveal, ePageReveal, EventNameType_HTMLBodyOrFramesetOnly,
+              eBasicEventClass)
+ WINDOW_EVENT(pageshow, ePageShow, EventNameType_HTMLBodyOrFramesetOnly,
+diff --git a/dom/events/EventListenerManager.cpp b/dom/events/EventListenerManager.cpp
+--- a/dom/events/EventListenerManager.cpp
++++ b/dom/events/EventListenerManager.cpp
+@@ -402,15 +402,13 @@ void EventListenerManager::AddEventListenerInternal(
+         break;
+       case eDeviceOrientation:
+       case eDeviceOrientationAbsolute:
+       case eUserProximity:
+       case eDeviceLight:
+       case eDeviceMotion:
+-#if defined(MOZ_WIDGET_ANDROID)
+       case eOrientationChange:
+-#endif  // #if defined(MOZ_WIDGET_ANDROID)
+         EnableDevice(aTypeAtom);
+         break;
+       case eTouchStart:
+       case eTouchEnd:
+       case eTouchMove:
+       case eTouchCancel:
+@@ -529,18 +527,16 @@ void EventListenerManager::AddEventListenerInternal(
+                                      ToChar(resolvedEventMessage))
+                          .get());
+         NS_ASSERTION(aTypeAtom != nsGkAtoms::ondevicemotion,
+                      nsPrintfCString("resolvedEventMessage=%s",
+                                      ToChar(resolvedEventMessage))
+                          .get());
+-#if defined(MOZ_WIDGET_ANDROID)
+         NS_ASSERTION(aTypeAtom != nsGkAtoms::onorientationchange,
+                      nsPrintfCString("resolvedEventMessage=%s",
+                                      ToChar(resolvedEventMessage))
+                          .get());
+-#endif  // #if defined(MOZ_WIDGET_ANDROID)
+         NS_ASSERTION(aTypeAtom != nsGkAtoms::ontouchstart,
+                      nsPrintfCString("resolvedEventMessage=%s",
+                                      ToChar(resolvedEventMessage))
+                          .get());
+         NS_ASSERTION(aTypeAtom != nsGkAtoms::ontouchend,
+                      nsPrintfCString("resolvedEventMessage=%s",
+@@ -700,17 +696,15 @@ void EventListenerManager::ProcessApzAwareEventListenerAdd(nsAtom* aEvent) {
+ }
+ 
+ bool EventListenerManager::IsDeviceType(nsAtom* aTypeAtom) {
+   return aTypeAtom == nsGkAtoms::ondeviceorientation ||
+          aTypeAtom == nsGkAtoms::ondeviceorientationabsolute ||
+          aTypeAtom == nsGkAtoms::ondevicemotion ||
+-         aTypeAtom == nsGkAtoms::ondevicelight
+-#if defined(MOZ_WIDGET_ANDROID)
+-         || aTypeAtom == nsGkAtoms::onorientationchange
+-#endif
+-         || aTypeAtom == nsGkAtoms::onuserproximity;
++         aTypeAtom == nsGkAtoms::ondevicelight ||
++         aTypeAtom == nsGkAtoms::onorientationchange ||
++         aTypeAtom == nsGkAtoms::onuserproximity;
+ }
+ 
+ void EventListenerManager::EnableDevice(nsAtom* aTypeAtom) {
+   nsCOMPtr<nsPIDOMWindowInner> window = GetTargetAsInnerWindow();
+   if (!window) {
+     return;
+@@ -749,18 +743,16 @@ void EventListenerManager::EnableDevice(nsAtom* aTypeAtom) {
+     window->EnableDeviceSensor(SENSOR_ACCELERATION);
+     window->EnableDeviceSensor(SENSOR_LINEAR_ACCELERATION);
+     window->EnableDeviceSensor(SENSOR_GYROSCOPE);
+     return;
+   }
+ 
+-#if defined(MOZ_WIDGET_ANDROID)
+   if (aTypeAtom == nsGkAtoms::onorientationchange) {
+     window->EnableOrientationChangeListener();
+     return;
+   }
+-#endif
+ 
+   NS_WARNING("Enabling an unknown device sensor.");
+ }
+ 
+ void EventListenerManager::DisableDevice(nsAtom* aTypeAtom) {
+   nsCOMPtr<nsPIDOMWindowInner> window = GetTargetAsInnerWindow();
+@@ -799,18 +791,16 @@ void EventListenerManager::DisableDevice(nsAtom* aTypeAtom) {
+ 
+   if (aTypeAtom == nsGkAtoms::ondevicelight) {
+     window->DisableDeviceSensor(SENSOR_LIGHT);
+     return;
+   }
+ 
+-#if defined(MOZ_WIDGET_ANDROID)
+   if (aTypeAtom == nsGkAtoms::onorientationchange) {
+     window->DisableOrientationChangeListener();
+     return;
+   }
+-#endif
+ 
+   NS_WARNING("Disabling an unknown device sensor.");
+ }
+ 
+ void EventListenerManager::NotifyEventListenerRemoved(nsAtom* aUserType) {
+   // If the following code is changed, other callsites of EventListenerRemoved
+diff --git a/dom/base/nsPIDOMWindow.h b/dom/base/nsPIDOMWindow.h
+--- a/dom/base/nsPIDOMWindow.h
++++ b/dom/base/nsPIDOMWindow.h
+@@ -552,16 +552,14 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
+   /**
+    * Tell this window that it should remove itself from sensor change
+    * notifications.
+    */
+   virtual void DisableDeviceSensor(uint32_t aType) = 0;
+ 
+-#if defined(MOZ_WIDGET_ANDROID)
+   virtual void EnableOrientationChangeListener() = 0;
+   virtual void DisableOrientationChangeListener() = 0;
+-#endif
+ 
+   /**
+    * Tell this window that there is an observer for gamepad input
+    *
+    * Inner windows only.
+    */
+diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
+--- a/dom/base/nsGlobalWindowInner.h
++++ b/dom/base/nsGlobalWindowInner.h
+@@ -486,16 +486,14 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+   virtual nsresult DispatchSyncPopState() override;
+ 
+   // Inner windows only.
+   virtual void EnableDeviceSensor(uint32_t aType) override;
+   virtual void DisableDeviceSensor(uint32_t aType) override;
+ 
+-#if defined(MOZ_WIDGET_ANDROID)
+   virtual void EnableOrientationChangeListener() override;
+   virtual void DisableOrientationChangeListener() override;
+-#endif
+ 
+   void AddSizeOfIncludingThis(nsWindowSizes& aWindowSizes) const;
+ 
+   void CollectDOMSizesForDataDocuments(nsWindowSizes&) const;
+   void RegisterDataDocumentForMemoryReporting(Document*);
+   void UnregisterDataDocumentForMemoryReporting(Document*);
+@@ -654,12 +652,13 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+   mozilla::dom::Element* GetFrameElement(nsIPrincipal& aSubjectPrincipal,
+                                          mozilla::ErrorResult& aError);
+   mozilla::dom::Nullable<mozilla::dom::WindowProxyHolder> Open(
+       const nsAString& aUrl, const nsAString& aName, const nsAString& aOptions,
+       mozilla::ErrorResult& aError);
+   int16_t Orientation(mozilla::dom::CallerType aCallerType);
++  static bool IsWindowOrientationEnabled(JSContext* aCx, JSObject* aObj);
+ 
+   already_AddRefed<mozilla::dom::Console> GetConsole(JSContext* aCx,
+                                                      mozilla::ErrorResult& aRv);
+ 
+   already_AddRefed<mozilla::dom::CookieStore> CookieStore();
+ 
+diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
+--- a/dom/base/nsGlobalWindowInner.cpp
++++ b/dom/base/nsGlobalWindowInner.cpp
+@@ -1289,15 +1289,13 @@ void nsGlobalWindowInner::FreeInnerObjects() {
+   // If we have any promiseDocumentFlushed callbacks, fire them now so
+   // that the Promises can resolve.
+   CallDocumentFlushedResolvers(/* aUntilExhaustion = */ true);
+ 
+   DisconnectGlobalTeardownObservers();
+ 
+-#ifdef MOZ_WIDGET_ANDROID
+   DisableOrientationChangeListener();
+-#endif
+ 
+   if (mObserver) {
+     if (nsCOMPtr<nsIObserverService> os = services::GetObserverService()) {
+       os->RemoveObserver(mObserver, NS_IOSERVICE_OFFLINE_STATUS_TOPIC);
+       os->RemoveObserver(mObserver, MEMORY_PRESSURE_OBSERVER_TOPIC);
+       os->RemoveObserver(mObserver, PERMISSION_CHANGED_TOPIC);
+@@ -6750,24 +6748,22 @@ void nsGlobalWindowInner::DisableDeviceSensor(uint32_t aType) {
+   nsCOMPtr<nsIDeviceSensors> ac = do_GetService(NS_DEVICE_SENSORS_CONTRACTID);
+   if (ac) {
+     ac->RemoveWindowListener(aType, this);
+   }
+ }
+ 
+-#if defined(MOZ_WIDGET_ANDROID)
+ void nsGlobalWindowInner::EnableOrientationChangeListener() {
+   if (!ShouldResistFingerprinting(RFPTarget::ScreenOrientation)) {
+     mHasOrientationChangeListeners = true;
+     mOrientationAngle = Orientation(CallerType::System);
+   }
+ }
+ 
+ void nsGlobalWindowInner::DisableOrientationChangeListener() {
+   mHasOrientationChangeListeners = false;
+ }
+-#endif
+ 
+ void nsGlobalWindowInner::SetHasGamepadEventListener(
+     bool aHasGamepad /* = true*/) {
+   mHasGamepad = aHasGamepad;
+   if (aHasGamepad) {
+     EnableGamepadUpdates();
+@@ -7626,16 +7622,40 @@ ChromeMessageBroadcaster* nsGlobalWindowInner::GetGroupMessageManager(
+           })
+       .get();
+ }
+ 
+ void nsGlobalWindowInner::InitWasOffline() { mWasOffline = NS_IsOffline(); }
+ 
++/* static */
++bool nsGlobalWindowInner::IsWindowOrientationEnabled(JSContext* aCx,
++                                                     JSObject* aObj) {
++#if defined(MOZ_WIDGET_ANDROID)
++  return true;
++#else
++  // The same rule as the meta viewport (nsLayoutUtils::
++  // ShouldHandleMetaViewport): the whole browser in mobile mode, or a page
++  // Juggler put in RDM for an isMobile context.
++  if (MaskConfig::CheckBool("mobile")) {
++    return true;
++  }
++  nsGlobalWindowInner* win = xpc::WindowOrNull(aObj);
++  BrowsingContext* bc = win ? win->GetBrowsingContext() : nullptr;
++  return bc && bc->Top()->InRDMPane() && !bc->Top()->ForceDesktopViewport();
++#endif
++}
++
+ int16_t nsGlobalWindowInner::Orientation(CallerType aCallerType) {
+   // GetOrientationAngle() returns 0, 90, 180 or 270.
+   // window.orientation returns -90, 0, 90 or 180.
+   uint16_t screenAngle = Screen()->GetOrientationAngle();
++  // Camoufox: follow screen.orientation's override (set by Juggler from the
++  // config or a phone's screen shape), so the two APIs agree.
++  if (mBrowsingContext && mBrowsingContext->HasOrientationOverride()) {
++    screenAngle = static_cast<uint16_t>(
++        mBrowsingContext->Top()->GetCurrentOrientationAngle());
++  }
+   if (nsIGlobalObject::ShouldResistFingerprinting(
+           aCallerType, RFPTarget::ScreenOrientation)) {
+     CSSIntSize size = mBrowsingContext->TopInnerSizeSpoofedForRFP();
+     screenAngle = nsRFPService::ViewportSizeToAngle(size.width, size.height);
+   }
+   int16_t angle = AssertedCast<int16_t>(screenAngle);
+diff --git a/widget/EventMessageList.h b/widget/EventMessageList.h
+--- a/widget/EventMessageList.h
++++ b/widget/EventMessageList.h
+@@ -407,15 +407,15 @@ NS_EVENT_MESSAGE(eOpen)
+ // Device motion and orientation
+ NS_EVENT_MESSAGE(eDeviceOrientation)
+ NS_EVENT_MESSAGE(eDeviceOrientationAbsolute)
+ NS_EVENT_MESSAGE(eDeviceMotion)
+ NS_EVENT_MESSAGE(eUserProximity)
+ NS_EVENT_MESSAGE(eDeviceLight)
+-#if defined(MOZ_WIDGET_ANDROID)
++// Camoufox: built everywhere for window.onorientationchange; see
++// window-orientation.patch.
+ NS_EVENT_MESSAGE(eOrientationChange)
+-#endif
+ 
+ // WebVR events
+ NS_EVENT_MESSAGE(eVRDisplayActivate)
+ NS_EVENT_MESSAGE(eVRDisplayDeactivate)
+ NS_EVENT_MESSAGE(eVRDisplayConnect)
+ NS_EVENT_MESSAGE(eVRDisplayDisconnect)

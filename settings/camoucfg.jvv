@@ -8,6 +8,7 @@
     "navigator.appName$__PROD_CODE": "str",
     "navigator.product$__PROD_CODE": "str",
     "navigator.productSub": "str[/^\\d+$/]",
+    "navigator.vendor": "str",
     "navigator.buildID": "str[/^\\d+$/]",
     
     "screen.height$__SC": "int[>0]",
@@ -34,11 +35,15 @@
     "navigator.doNotTrack": "str[0, 1, unspecified]",
     "navigator.hardwareConcurrency": "int[>0]",
     "navigator.maxTouchPoints": "int[>=0]",
+    "mobile": "bool",
+    "mobile:zoom": "bool",
+    "screen.orientation": "str[portrait-primary, portrait-secondary, landscape-primary, landscape-secondary]",
     "navigator.cookieEnabled": "bool",
     "navigator.globalPrivacyControl": "bool",
     "navigator.onLine": "bool",
     "window.history.length": "int[>=0]",
     "pdfViewerEnabled": "bool",
+    "navigator.plugins": "bool",
     
     "window.outerHeight$__W_OUTER": "int[>0]",
     "window.outerWidth$__W_OUTER": "int[>0]",

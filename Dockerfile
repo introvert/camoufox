@@ -30,6 +30,12 @@ RUN make setup-minimal && \
     make mozbootstrap && \
     mkdir -p /app/dist
 
+# Keep the compiler caches in the .mozbuild volume. Their default homes
+# (~/.cache/ccache, ~/.cache/sccache) are inside the container, so every
+# `docker run` started cold.
+ENV CCACHE_DIR=/root/.mozbuild/ccache \
+    SCCACHE_DIR=/root/.mozbuild/sccache-cache
+
 # Mount .mozbuild directory and dist folder
 VOLUME /root/.mozbuild
 VOLUME /app/dist

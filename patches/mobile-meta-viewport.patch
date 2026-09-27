@@ -1,0 +1,56 @@
+diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
+--- a/layout/base/nsLayoutUtils.cpp
++++ b/layout/base/nsLayoutUtils.cpp
+@@ -702,13 +702,21 @@ bool nsLayoutUtils::AllowZoomingForDocument(const Document* aDocument) {
+   if (aDocument->GetPresShell() &&
+       !aDocument->GetPresShell()->AsyncPanZoomEnabled()) {
+     return false;
+   }
+ 
+   /* Playwright: disable zooming as we don't support meta viewport tag */
+-  if (1 == 1) return false;
++  // Camoufox: a phone zooms like Firefox for Android: a page without a meta
++  // viewport, or wider than the screen, is zoomed out to fit. Without it the
++  // layout viewport outgrows a visual viewport that can never pan, and
++  // everything past the screen edge is unreachable. Juggler maps input from
++  // page to screen coordinates. `mobile:zoom: false` opts out.
++  if (1 == 1) {
++    return MaskConfig::GetBool("mobile:zoom").value_or(true) &&
++           ShouldHandleMetaViewport(aDocument);
++  }
+ 
+   // True if we allow zooming for all documents on this platform, or if we are
+   // in RDM.
+   BrowsingContext* bc = aDocument->GetBrowsingContext();
+   return StaticPrefs::apz_allow_zooming() || (bc && bc->InRDMPane());
+ }
+@@ -10026,13 +10034,28 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
+   }
+ }
+ 
+ /* static */
+ bool nsLayoutUtils::ShouldHandleMetaViewport(const Document* aDocument) {
+   /* Playwright: disable meta viewport handling since we don't require one */
+-  if (1 == 1) return false;
++  // Camoufox: except for a phone. Firefox for Android lays every page out
++  // against its <meta name="viewport">, and mobile pages are written for it.
++  // That is the whole browser in mobile mode, or a page Juggler put in RDM
++  // for a Playwright context with isMobile -- Juggler sets
++  // forceDesktopViewport on every other page it sizes.
++  // Zooming (AllowZoomingForDocument) stays off unless mobile:zoom asks for
++  // it. Needs APZ on the widget, like any MobileViewportManager.
++  if (1 == 1) {
++    if (MaskConfig::CheckBool("mobile")) {
++      return true;
++    }
++    BrowsingContext* top = aDocument->GetBrowsingContext()
++                               ? aDocument->GetBrowsingContext()->Top()
++                               : nullptr;
++    return top && top->InRDMPane() && !top->ForceDesktopViewport();
++  }
+ 
+   BrowsingContext* bc = aDocument->GetBrowsingContext();
+   return StaticPrefs::dom_meta_viewport_enabled() || (bc && bc->InRDMPane());
+ }
+ 
+ static nsIContent* GetOriginatingElementForScrollbarPart(

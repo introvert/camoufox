@@ -240,8 +240,8 @@ export class PageHandler {
     });
   }
 
-  async ['Page.setViewportSize']({viewportSize}) {
-    await this._pageTarget.setViewportSize(viewportSize === null ? undefined : viewportSize);
+  async ['Page.setViewportSize']({viewportSize, isMobile, screenSize}) {
+    await this._pageTarget.setViewportSize(viewportSize === null ? undefined : viewportSize, isMobile, screenSize);
   }
 
   async ['Page.setZoom']({zoom}) {
@@ -331,14 +331,30 @@ export class PageHandler {
   }
 
   async ['Page.screenshot']({ mimeType, clip, omitDeviceScaleFactor, quality }) {
-    const rect = new DOMRect(clip.x, clip.y, clip.width, clip.height);
+    let rect = new DOMRect(clip.x, clip.y, clip.width, clip.height);
+    // Camoufox: on a zoomed phone page the screen shows the visual viewport --
+    // more of the document, scaled down. A viewport screenshot (Playwright
+    // sends the scroll position and viewport size) has to capture that, not a
+    // 1:1 slice of the layout viewport. Element and full-page clips are
+    // document rects and stay as they are.
+    let zoom = 1;
+    if (this._pageTarget._isMobile()) {
+      const vv = await this._contentPage.send('getVisualViewport');
+      const near = (a, b) => Math.abs(a - b) < 1;
+      if (vv && vv.scale !== 1 &&
+          near(clip.x, vv.scrollX) && near(clip.y, vv.scrollY) &&
+          near(clip.width, vv.width * vv.scale) && near(clip.height, vv.height * vv.scale)) {
+        rect = new DOMRect(vv.pageLeft, vv.pageTop, vv.width, vv.height);
+        zoom = vv.scale;
+      }
+    }
 
     const browsingContext = this._pageTarget.linkedBrowser().browsingContext;
     // `win.devicePixelRatio` returns a non-overriden value to priveleged code.
     // See https://bugzilla.mozilla.org/show_bug.cgi?id=1761032
     // See https://phabricator.services.mozilla.com/D141323
     const devicePixelRatio = browsingContext.overrideDPPX || this._pageTarget._window.devicePixelRatio;
-    const scale = omitDeviceScaleFactor ? 1 : devicePixelRatio;
+    const scale = (omitDeviceScaleFactor ? 1 : devicePixelRatio) * zoom;
     const canvasWidth = rect.width * scale;
     const canvasHeight = rect.height * scale;
 
@@ -516,7 +532,26 @@ export class PageHandler {
     return await this._contentPage.send('dispatchTapEvent', options);
   }
 
-  async ['Page.dispatchMouseEvent']({type, x, y, button, clickCount, modifiers, buttons}) {
+  // Camoufox: page coordinates (getBoxQuads, getBoundingClientRect,
+  // elementFromPoint) are layout-viewport ones; events land where the visual
+  // viewport shows them. On desktop the two coincide. On a phone page the
+  // visual viewport can sit at an offset and zoom scale inside the layout one
+  // (a page wider than the screen, Android's zoom-out), so convert before
+  // dispatching. Only phones pay for the round trip to the content process.
+  async _toScreenPoint(x, y) {
+    if (!this._pageTarget._isMobile())
+      return {x, y};
+    const vv = await this._contentPage.send('getVisualViewport');
+    if (!vv || (vv.scale === 1 && !vv.offsetLeft && !vv.offsetTop))
+      return {x, y};
+    return {x: (x - vv.offsetLeft) * vv.scale, y: (y - vv.offsetTop) * vv.scale};
+  }
+
+  async ['Page.dispatchMouseEvent']({type, x: pageX, y: pageY, button, clickCount, modifiers, buttons}) {
+    // Drag events go to the content process, which wants page coordinates;
+    // everything dispatched through the widget gets screen ones.
+    let x = pageX;
+    let y = pageY;
     const win = this._pageTarget._window;
     const eventArgs = {button, clickCount, modifiers, buttons};
     const sendEvents = async (types) => {
@@ -559,6 +594,7 @@ export class PageHandler {
     // 2. We receive an ack from the renderer for the dispatched event.
     await this._pageTarget.activateAndRun(async () => {
       this._pageTarget.ensureContextMenuClosed();
+      ({x, y} = await this._toScreenPoint(pageX, pageY));
       // If someone asks us to dispatch mouse event outside of viewport, then we normally would drop it.
       const dispatch = MouseDispatch.forBrowser(win, this._pageTarget._linkedBrowser, eventArgs);
       if (!dispatch.isInViewport(x, y)) {
@@ -582,10 +618,10 @@ export class PageHandler {
       }
 
       if (type === 'mousemove') {
-        this._lastMousePosition = { x, y };
+        this._lastMousePosition = { x: pageX, y: pageY };
         if (this._isDragging) {
           const watcher = new EventWatcher(this._pageEventSink, ['dragover'], this._pendingEventWatchers);
-          await this._contentPage.send('dispatchDragEvent', {type:'dragover', x, y, modifiers});
+          await this._contentPage.send('dispatchDragEvent', {type:'dragover', x: pageX, y: pageY, modifiers});
           await watcher.ensureEventsAndDispose(['dragover']);
           return;
         }
@@ -627,9 +663,9 @@ export class PageHandler {
       if (type === 'mouseup') {
         if (this._isDragging) {
           const watcher = new EventWatcher(this._pageEventSink, ['dragover'], this._pendingEventWatchers);
-          await this._contentPage.send('dispatchDragEvent', {type: 'dragover', x, y, modifiers});
-          await this._contentPage.send('dispatchDragEvent', {type: 'drop', x, y, modifiers});
-          await this._contentPage.send('dispatchDragEvent', {type: 'dragend', x, y, modifiers});
+          await this._contentPage.send('dispatchDragEvent', {type: 'dragover', x: pageX, y: pageY, modifiers});
+          await this._contentPage.send('dispatchDragEvent', {type: 'drop', x: pageX, y: pageY, modifiers});
+          await this._contentPage.send('dispatchDragEvent', {type: 'dragend', x: pageX, y: pageY, modifiers});
           // NOTE:
           // - 'drop' event might not be dispatched at all, depending on dropAction.
           // - 'dragend' event might not be dispatched at all, if the source element was removed
@@ -651,6 +687,7 @@ export class PageHandler {
 
     await this._pageTarget.activateAndRun(async () => {
       this._pageTarget.ensureContextMenuClosed();
+      ({x, y} = await this._toScreenPoint(x, y));
 
       // 1. Scroll element to the desired location first; the coordinates are relative to the element.
       this._pageTarget._linkedBrowser.scrollRectIntoViewIfNeeded(x, y, 0, 0);
