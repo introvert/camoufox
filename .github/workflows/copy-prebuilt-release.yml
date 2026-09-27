@@ -1,0 +1,100 @@
+# Attach binaries that have already been built to a release, instead of
+# building them again.
+#
+# A tag build takes about two hours per architecture. When the code a tag
+# points at is byte for byte the code a pull request already compiled -- the
+# usual case, since the release bump is the last commit on the branch -- the
+# zips exist already, as that run's artifacts. This copies them onto the
+# release, inside GitHub's own network, in a couple of minutes.
+#
+# It never builds anything. Give it the run whose artifacts you want and the
+# tag to attach them to, and check that the run's head commit is the code the
+# tag holds: the workflow prints both so the answer is in the log, but only a
+# human knows whether a difference matters.
+name: Copy Prebuilt Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run id whose CamoufoxBuilds-* artifacts to copy"
+        required: true
+      tag:
+        description: "Tag to attach them to (must already exist)"
+        required: true
+      notes_from_tag:
+        description: "Use the tag's annotation as the release notes"
+        type: boolean
+        default: true
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The tag annotation is the release notes; a shallow clone of the
+          # default branch does not carry it.
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Show what is being copied, and from where
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          src_sha=$(gh api "repos/${{ github.repository }}/actions/runs/${{ inputs.run_id }}" --jq .head_sha)
+          tag_sha=$(git rev-parse "${{ inputs.tag }}^{commit}")
+          echo "source run  ${{ inputs.run_id }}  head $src_sha"
+          echo "target tag  ${{ inputs.tag }}  commit $tag_sha"
+          if [ "$src_sha" = "$tag_sha" ]; then
+            echo "Same commit: the artifacts are this tag's code."
+          else
+            # Not fatal. A merge commit has a different sha than the branch tip
+            # it merged while holding the same tree, which is exactly the case
+            # this workflow exists for.
+            echo "::warning::Run head and tag commit differ; check the trees match."
+            echo "source tree $(git rev-parse "$src_sha^{tree}" 2>/dev/null || echo unknown)"
+            echo "target tree $(git rev-parse "$tag_sha^{tree}")"
+          fi
+
+      - name: Download the artifacts
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: CamoufoxBuilds-*
+          path: artifacts
+
+      - name: List what arrived
+        run: |
+          find artifacts -type f -printf '%s\t%p\n' | sort -rn
+          test -n "$(find artifacts -name '*.zip' -print -quit)" || {
+            echo "::error::No zips in run ${{ inputs.run_id }}; nothing to copy."
+            exit 1
+          }
+
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          notes=()
+          if [ "${{ inputs.notes_from_tag }}" = "true" ]; then
+            git tag -l --format='%(contents)' "${{ inputs.tag }}" > notes.md
+            [ -s notes.md ] && notes=(--notes-file notes.md)
+          fi
+          if gh release view "${{ inputs.tag }}" >/dev/null 2>&1; then
+            # Keep an existing release's notes; only add the binaries.
+            gh release upload "${{ inputs.tag }}" $(find artifacts -name '*.zip') --clobber
+          else
+            tag="${{ inputs.tag }}"
+            gh release create "$tag" \
+              --title "cfox${tag#v} (lin+mac, x86_64)" \
+              --prerelease \
+              "${notes[@]}" \
+              $(find artifacts -name '*.zip')
+          fi
+          gh release view "${{ inputs.tag }}" --json assets --jq '.assets[] | "\(.name)\t\(.size)"'
