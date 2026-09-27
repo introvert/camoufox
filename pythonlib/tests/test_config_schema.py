@@ -108,20 +108,13 @@ def test_known_previously_missing_keys_stay_declared(key):
 
 
 # Declared in settings/properties.json but read by nothing in patches/ or
-# additions/, so setting them does nothing. Recorded rather than fixed: wiring
-# any of these up changes the fingerprint of every existing profile that sets
-# them (from_browserforge already sets several). Shrink this list as they get
-# a reader; never grow it.
+# additions/, so setting them does nothing. Recorded rather than fixed:
+# navigator.doNotTrack is written as "1" by from_browserforge for every
+# profile, so a reader would switch DNT on for all of them; the rest are not
+# fingerprint surfaces a page reads directly. Shrink this list as they get a
+# reader; never grow it.
 KNOWN_UNREAD = {
     "navigator.doNotTrack",
-    "navigator.appCodeName",
-    "navigator.appName",
-    "navigator.languages",
-    "navigator.product",
-    "navigator.productSub",
-    "navigator.cookieEnabled",
-    "navigator.buildID",
-    "navigator.onLine",
     "webrtc:localipv4",
     "webrtc:localipv6",
     "canvas:seed",
@@ -160,7 +153,25 @@ def test_every_declared_key_is_read():
     assert not now_read, f"these now have a reader; drop them from KNOWN_UNREAD: {now_read}"
 
 
-@pytest.mark.parametrize("key", ["pdfViewerEnabled", "navigator.plugins", "mobile"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "pdfViewerEnabled",
+        "navigator.plugins",
+        "mobile",
+        "navigator.appCodeName",
+        "navigator.appName",
+        "navigator.product",
+        "navigator.productSub",
+        "navigator.vendor",
+        "navigator.buildID",
+        "navigator.cookieEnabled",
+        "navigator.onLine",
+    ],
+)
 def test_new_keys_are_declared_and_read(key):
+    """Keys read straight through a MaskConfig call. navigator.languages and
+    screen.orientation are read by chrome JS (browser-init.js, Juggler), so the
+    general scan above covers them."""
     assert key in _declared_keys()
     assert key in _keys_read(), f"{key} is declared but no MaskConfig call reads it"

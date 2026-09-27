@@ -240,8 +240,8 @@ export class PageHandler {
     });
   }
 
-  async ['Page.setViewportSize']({viewportSize, isMobile}) {
-    await this._pageTarget.setViewportSize(viewportSize === null ? undefined : viewportSize, isMobile);
+  async ['Page.setViewportSize']({viewportSize, isMobile, screenSize}) {
+    await this._pageTarget.setViewportSize(viewportSize === null ? undefined : viewportSize, isMobile, screenSize);
   }
 
   async ['Page.setZoom']({zoom}) {

@@ -39,7 +39,7 @@ from .pkgman import (
 )
 from .virtdisplay import VirtualDisplay
 from ._warnings import LeakWarning
-from .webgl import sample_webgl
+from .webgl import has_webgl_pair, sample_webgl
 
 ListOrString: TypeAlias = Union[Tuple[str, ...], List[str], str]
 
@@ -437,6 +437,17 @@ def is_domain_set(
     return False
 
 
+# Keys under navigator. / screen. that are switches rather than device
+# properties: setting one says nothing about the generated navigator or screen,
+# so it must not trip the manual-config warnings or turn off the fixes that
+# only stand down when the caller drives the device values themselves.
+_SWITCH_KEYS = frozenset({'navigator.plugins', 'screen.orientation'})
+
+
+def _device_keys(config: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in config.items() if k not in _SWITCH_KEYS}
+
+
 def warn_manual_config(config: Dict[str, Any]) -> None:
     """
     Warns the user if they are manually setting properties that Camoufox already sets internally.
@@ -453,7 +464,7 @@ def warn_manual_config(config: Dict[str, Any]) -> None:
     if is_domain_set(config, 'headers.User-Agent'):
         LeakWarning.warn('header-ua', False)
     # Manual navigator setting
-    if is_domain_set(config, 'navigator.'):
+    if is_domain_set(_device_keys(config), 'navigator.'):
         LeakWarning.warn('navigator', False)
     # Touchscreen digitizer spoofing. Called out separately from the blanket
     # navigator warning because the knock-on effects reach past navigator into
@@ -461,7 +472,7 @@ def warn_manual_config(config: Dict[str, Any]) -> None:
     if is_domain_set(config, 'navigator.maxTouchPoints'):
         LeakWarning.warn('max_touch_points', False)
     # Manual screen/window setting
-    if is_domain_set(config, 'screen.', 'window.', 'document.body.'):
+    if is_domain_set(_device_keys(config), 'screen.', 'window.', 'document.body.'):
         LeakWarning.warn('viewport', False)
 
 
@@ -600,6 +611,22 @@ def webgl_config_from_env() -> Optional[Tuple[str, str]]:
             f'"Mesa|llvmpipe, or similar". Got: {raw!r}'
         )
     return vendor.strip(), renderer.strip()
+
+
+def _webgl_for_pair(
+    target_os: str, vendor: str, renderer: str, i_know_what_im_doing: Optional[bool]
+) -> Dict[str, Any]:
+    """WebGL config for a named GPU, even one webgl_data.db has no data for.
+
+    The database only holds desktop GPUs, so a phone's (vendor "Qualcomm",
+    renderer "Adreno (TM) 650, or similar") used to raise here and could not be
+    set at all. An unknown pair now keeps its two strings and warns: every
+    other WebGL parameter is then the host's own.
+    """
+    if has_webgl_pair(vendor, renderer):
+        return sample_webgl(target_os, vendor, renderer)
+    LeakWarning.warn('webgl_unknown_pair', i_know_what_im_doing)
+    return {'webGl:vendor': vendor, 'webGl:renderer': renderer, 'webGl2Enabled': True}
 
 
 def launch_options(
@@ -778,8 +805,9 @@ def launch_options(
     # Snapshot which domains the USER set before fingerprint generation fills in
     # the rest. The post-generation BrowserForge-correction fixes below must
     # only touch generated values, never override what the user passed.
-    _user_set_navigator = is_domain_set(config, 'navigator.')
-    _user_set_screen_window = is_domain_set(config, 'screen.', 'window.')
+    _user_set_navigator = is_domain_set(_device_keys(config), 'navigator.')
+    _user_set_screen_window = is_domain_set(_device_keys(config), 'screen.', 'window.')
+    _user_set_touch_points = 'navigator.maxTouchPoints' in config
     _user_set_media_devices = is_domain_set(config, 'mediaDevices:')
 
     # A fleet-wide default, applied here so it meets the same OS requirement an
@@ -862,7 +890,9 @@ def launch_options(
     _mobile_dpr = None
     if is_mobile_config(config) and (headless or virtual_display):
         _mobile_dpr = getattr(getattr(fingerprint, 'screen', None), 'devicePixelRatio', None)
-    if apply_mobile_mode(config, firefox_user_prefs, _mobile_dpr):
+    if apply_mobile_mode(
+        config, firefox_user_prefs, _mobile_dpr, keep_touch_points=_user_set_touch_points
+    ):
         LeakWarning.warn('mobile_resources', i_know_what_im_doing)
 
     # Correct BrowserForge fingerprint inconsistencies that leak as headless /
@@ -1045,7 +1075,7 @@ def launch_options(
     else:
         # If the user has provided a specific WebGL vendor/renderer pair, use it
         if webgl_config:
-            webgl_fp = sample_webgl(target_os, *webgl_config)
+            webgl_fp = _webgl_for_pair(target_os, *webgl_config, i_know_what_im_doing)
             # merge_into() leaves keys the config already holds, so a preset that
             # named its own GPU would keep its vendor and renderer strings while
             # the pinned parameter table landed underneath them -- getParameter
@@ -1067,7 +1097,9 @@ def launch_options(
                 LeakWarning.warn('webgl_pinned_software', i_know_what_im_doing)
         elif config.get('webGl:vendor') and config.get('webGl:renderer'):
             # Preset already set vendor/renderer — sample matching WebGL params
-            webgl_fp = sample_webgl(target_os, config['webGl:vendor'], config['webGl:renderer'])
+            webgl_fp = _webgl_for_pair(
+                target_os, config['webGl:vendor'], config['webGl:renderer'], i_know_what_im_doing
+            )
         else:
             # Synthetic path: keep the GPU coherent with the screen BrowserForge
             # already picked. Sampling the two independently yields pairs no

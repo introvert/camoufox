@@ -446,6 +446,8 @@ export class PageTarget {
     this._browserContext = browserContext;
     this._viewportSize = undefined;
     this._viewportIsMobile = undefined;
+    this._viewportScreenSize = undefined;
+    this._orientationOverridden = false;
     this._zoom = 1;
     this._initialDPPX = this._linkedBrowser.browsingContext.overrideDPPX;
     this._url = 'about:blank';
@@ -591,6 +593,7 @@ export class PageTarget {
   updateOverridesForBrowsingContext(browsingContext = undefined) {
     this.updateTouchOverride(browsingContext);
     this.updateMobileOverride(browsingContext);
+    this.updateOrientationOverride(browsingContext);
     this.updateUserAgent(browsingContext);
     this.updatePlatform(browsingContext);
     this.updateDPPXOverride(browsingContext);
@@ -629,18 +632,6 @@ export class PageTarget {
   updateTouchOverride(browsingContext = undefined) {
     browsingContext ||= this._linkedBrowser.browsingContext;
     browsingContext.touchEventsOverride = this._browserContext.touchOverride ? 'enabled' : 'none';
-    this._updateTouchPoints(browsingContext);
-  }
-
-  // Camoufox: a touch-enabled context has to report a digitizer too, or it
-  // exposes TouchEvent and `(pointer: coarse)` next to navigator.maxTouchPoints
-  // of 0. Five is what Firefox for Android reports. The override only exists
-  // in RDM, which a Playwright viewport puts the page in, so this also runs
-  // once updateViewportSize has set inRDMPane.
-  _updateTouchPoints(browsingContext = undefined) {
-    browsingContext ||= this._linkedBrowser.browsingContext;
-    if (browsingContext.inRDMPane)
-      browsingContext.setRDMPaneMaxTouchPoints(this._browserContext.touchOverride ? 5 : 0);
   }
 
   // Camoufox: with a Playwright viewport the page sits in RDM, and RDM obeys
@@ -651,9 +642,64 @@ export class PageTarget {
   // every ordinary context, and forceDesktopViewport outside RDM would put the
   // page in Gecko's fake 980px desktop mode. See mobile-meta-viewport.patch.
   updateMobileOverride(browsingContext = undefined) {
-    const isMobile = ChromeUtils.camouGetBool('mobile', false) ||
+    (browsingContext || this._linkedBrowser.browsingContext).forceDesktopViewport = !this._isMobile();
+  }
+
+  // Camoufox: leaving RDM drops the orientation override, and entering it does
+  // not rebuild the page's MobileViewportManager, so an isMobile page that was
+  // laid out before its viewport arrived (the initial about:blank that
+  // set_content() writes into) would keep ignoring its meta viewport.
+  // forceDesktopViewport's setter is what rebuilds it.
+  _afterRDMChange() {
+    const browsingContext = this._linkedBrowser.browsingContext;
+    if (this._isMobile()) {
+      browsingContext.forceDesktopViewport = true;
+      browsingContext.forceDesktopViewport = false;
+    }
+    this.updateOrientationOverride(browsingContext);
+  }
+
+  _isMobile() {
+    return ChromeUtils.camouGetBool('mobile', false) ||
         !!(this._viewportIsMobile ?? this._browserContext.defaultIsMobile);
-    (browsingContext || this._linkedBrowser.browsingContext).forceDesktopViewport = !isMobile;
+  }
+
+  // Camoufox: screen.orientation reads the browsing context's orientation
+  // override. Take it from the config, or for a phone from which way its screen
+  // is longer, so a portrait phone does not report the host's landscape-primary.
+  // Desktop pages without the config key keep the host's own value.
+  updateOrientationOverride(browsingContext = undefined) {
+    browsingContext ||= this._linkedBrowser.browsingContext;
+    let type = ChromeUtils.camouGetString('screen.orientation');
+    if (!type && this._isMobile()) {
+      const configured = {
+        width: ChromeUtils.camouGetInt('screen.width'),
+        height: ChromeUtils.camouGetInt('screen.height'),
+      };
+      const size = [
+        configured,
+        this._viewportScreenSize,
+        this._browserContext.defaultScreenSize,
+        this._viewportSize,
+        this._browserContext.defaultViewportSize,
+      ].find(s => s && s.width && s.height);
+      if (size)
+        type = size.width > size.height ? 'landscape-primary' : 'portrait-primary';
+    }
+    if (type) {
+      // The angles Android reports for each orientation.
+      const angles = {
+        'portrait-primary': 0,
+        'landscape-primary': 90,
+        'portrait-secondary': 180,
+        'landscape-secondary': 270,
+      };
+      browsingContext.setOrientationOverride(type, angles[type] ?? 0);
+      this._orientationOverridden = true;
+    } else if (this._orientationOverridden) {
+      browsingContext.resetOrientationOverride();
+      this._orientationOverridden = false;
+    }
   }
 
   updateUserAgent(browsingContext = undefined) {
@@ -719,7 +765,7 @@ export class PageTarget {
       this._linkedBrowser.closest('.browserStack').style.setProperty('contain', 'size');
       this._linkedBrowser.closest('.browserStack').style.setProperty('scrollbar-width', 'none');
       this._linkedBrowser.browsingContext.inRDMPane = true;
-      this._updateTouchPoints();
+      this._afterRDMChange();
 
       const stackRect = this._linkedBrowser.closest('.browserStack').getBoundingClientRect();
       const toolbarTop = stackRect.y;
@@ -734,6 +780,7 @@ export class PageTarget {
       this._linkedBrowser.closest('.browserStack').style.removeProperty('contain');
       this._linkedBrowser.closest('.browserStack').style.removeProperty('scrollbar-width');
       this._linkedBrowser.browsingContext.inRDMPane = false;
+      this._afterRDMChange();
 
       const actualSize = this._linkedBrowser.getBoundingClientRect();
       await this._channel.connect('').send('awaitViewportDimensions', {
@@ -795,10 +842,12 @@ export class PageTarget {
     await this._channel.connect('').send('setInterceptFileChooserDialog', enabled).catch(e => {});
   }
 
-  async setViewportSize(viewportSize, isMobile) {
+  async setViewportSize(viewportSize, isMobile, screenSize) {
     this._viewportSize = viewportSize;
     this._viewportIsMobile = viewportSize ? isMobile : undefined;
+    this._viewportScreenSize = viewportSize ? screenSize : undefined;
     this.updateMobileOverride();
+    this.updateOrientationOverride();
     await this.updateViewportSize();
   }
 
@@ -1189,6 +1238,7 @@ class BrowserContext {
     this.defaultViewportSize = undefined;
     this.deviceScaleFactor = undefined;
     this.defaultIsMobile = undefined;
+    this.defaultScreenSize = undefined;
     this.defaultUserAgent = null;
     this.defaultPlatform = null;
     this.touchOverride = false;
@@ -1317,8 +1367,11 @@ class BrowserContext {
     this.defaultViewportSize = viewport ? viewport.viewportSize : undefined;
     this.deviceScaleFactor = viewport ? viewport.deviceScaleFactor : undefined;
     this.defaultIsMobile = viewport ? viewport.isMobile : undefined;
-    for (const page of this.pages)
+    this.defaultScreenSize = viewport ? viewport.screenSize : undefined;
+    for (const page of this.pages) {
       page.updateMobileOverride();
+      page.updateOrientationOverride();
+    }
     await Promise.all(Array.from(this.pages).map(page => page.updateViewportSize()));
   }
 

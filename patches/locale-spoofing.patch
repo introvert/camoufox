@@ -1,13 +1,19 @@
 diff --git a/browser/base/content/browser-init.js b/browser/base/content/browser-init.js
-index 28f294db75..50426aafca 100644
 --- a/browser/base/content/browser-init.js
 +++ b/browser/base/content/browser-init.js
-@@ -237,6 +237,22 @@ var gBrowserInit = {
+@@ -198,12 +198,32 @@ var gBrowserInit = {
+     );
+ 
+     // Update the customtitlebar attribute so the window can be sized
      // correctly.
      window.TabBarVisibility.update();
  
 +    // If a list of languages were passed, use them.
++    // navigator.languages goes through the same pref, so the list a page reads
++    // and the Accept-Language header the server sees stay one list.
++    let camouLanguages = ChromeUtils.camouGetStringList("navigator.languages");
 +    let camouLocale = ChromeUtils.camouGetString("locale:all")
++      || (camouLanguages.length ? camouLanguages.join(", ") : "")
 +      || ChromeUtils.camouGetString("navigator.language");
 +    // If locale:all was NOT passed, but locale:language and locale:region was,
 +    // fall back to it instead.
@@ -25,6 +31,9 @@ index 28f294db75..50426aafca 100644
      if (
        Services.prefs.getBoolPref(
          "toolkit.legacyUserProfileCustomizations.windowIcon",
+         false
+       )
+     ) {
 diff --git a/intl/components/moz.build b/intl/components/moz.build
 index a3319c7a59..0a86aec7d2 100644
 --- a/intl/components/moz.build

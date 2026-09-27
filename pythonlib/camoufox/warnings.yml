@@ -80,3 +80,9 @@ plugins_pdf_mismatch: >-
     and two PDF MIME types exactly when it has a PDF viewer, so this pairing does not exist
     on any real Firefox and a page can see the contradiction. Leave navigator.plugins unset
     to have it follow pdfViewerEnabled.
+
+webgl_unknown_pair: >-
+    Camoufox has no WebGL parameter data for this vendor/renderer pair (its database only
+    covers desktop GPUs). The vendor and renderer strings are set as given, but every other
+    WebGL parameter (limits, extensions, precision formats) is the host's own, and a page
+    that compares them with the named GPU can see they do not belong together.

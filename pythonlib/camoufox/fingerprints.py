@@ -364,10 +364,36 @@ def is_mobile_config(config: Dict[str, Any]) -> bool:
     return is_mobile_user_agent(config.get('navigator.userAgent'))
 
 
+# Web-visible defaults where Firefox for Android differs from desktop Firefox
+# 155 release: StaticPrefList.yaml (@IS_ANDROID@ values and #ifdef ANDROID
+# branches) and mobile/android/app/geckoview-prefs.js.
+MOBILE_FIREFOX_PREFS: Dict[str, Any] = {
+    # Android draws its scrollbars over the content, so they take no width:
+    # innerWidth == documentElement.clientWidth.
+    'ui.useOverlayScrollbars': 1,
+    # navigator.share / navigator.canShare (geckoview-prefs.js).
+    'dom.webshare.enabled': True,
+    # HTMLInputElement.capture (geckoview-prefs.js).
+    'dom.capture.enabled': True,
+    # <input type=month|week> are real pickers on Android only.
+    'dom.forms.datetime.others': True,
+    # WebCodecs (VideoEncoder, AudioDecoder, ...) is Nightly-only on Android.
+    'dom.media.webcodecs.enabled': False,
+    # HTMLMediaElement.setSinkId, documentPictureInPicture and
+    # navigator.keyboard.lock() do not exist on Android.
+    'media.setsinkid.enabled': False,
+    'dom.documentpip.enabled': False,
+    'dom.fullscreen.keyboard_lock.enabled': False,
+    # getContextAttributes().antialias defaults to false on Android.
+    'webgl.default-antialias': False,
+}
+
+
 def apply_mobile_mode(
     config: Dict[str, Any],
     firefox_user_prefs: Dict[str, Any],
     device_pixel_ratio: Optional[float] = None,
+    keep_touch_points: bool = False,
 ) -> bool:
     """Turn a config that claims Firefox for Android into one that behaves like it.
 
@@ -375,19 +401,25 @@ def apply_mobile_mode(
     what the server sends back: the page then asks the browser itself, and
     without this it answers like a desktop -- a hovering mouse, no
     `ontouchstart`, a meta viewport that is ignored, scrollbars that take up
-    layout width, one device pixel per CSS pixel. `mobile` is the switch the
-    browser reads for the first three (force-default-pointer.patch,
-    touchscreen-fingerprint-spoofing.patch, mobile-meta-viewport.patch); the
-    other two are ordinary prefs.
+    layout width, one device pixel per CSS pixel, desktop-only APIs. `mobile`
+    is the switch the browser reads for the first three
+    (force-default-pointer.patch, touchscreen-fingerprint-spoofing.patch,
+    mobile-meta-viewport.patch) and for screen.orientation (Juggler); the rest
+    are the prefs in MOBILE_FIREFOX_PREFS plus the device pixel ratio.
 
-    setdefault throughout, so anything the caller set explicitly stays.
+    setdefault throughout, so anything the caller set explicitly stays. The
+    one exception is navigator.maxTouchPoints, which the browser reads before
+    `mobile`: a desktop fingerprint under an Android UA carries 0 or 1 there,
+    which next to touch events and a coarse pointer is a contradiction. It is
+    raised to a phone's 5 unless `keep_touch_points` says the caller chose it.
     """
     if not is_mobile_config(config):
         return False
     config.setdefault('mobile', True)
-    # Android draws its scrollbars over the content, so they take no width:
-    # innerWidth == documentElement.clientWidth.
-    firefox_user_prefs.setdefault('ui.useOverlayScrollbars', 1)
+    if not keep_touch_points and config.get('navigator.maxTouchPoints', 0) < 2:
+        config['navigator.maxTouchPoints'] = 5
+    for pref, value in MOBILE_FIREFOX_PREFS.items():
+        firefox_user_prefs.setdefault(pref, value)
     if device_pixel_ratio:
         # A real device pixel ratio rather than window.devicePixelRatio alone,
         # so `(resolution)` media queries, srcset and canvas backing stores
@@ -1026,6 +1058,20 @@ def _build_init_script(values: Dict[str, Any]) -> str:
     return '\n'.join(lines)
 
 
+def firefox_accepts_is_mobile() -> bool:
+    """Whether the installed Playwright lets a Firefox context set isMobile.
+
+    Before 1.61 Playwright's Firefox driver threw "options.isMobile is not
+    supported in Firefox" for any such context. Without it an Android context
+    still gets touch and the coarse pointer from has_touch; only the meta
+    viewport is lost. An unreadable version is assumed current.
+    """
+    from .pkgman import _resolved_playwright_version
+
+    installed = _resolved_playwright_version()
+    return installed is None or tuple(installed[:2]) >= (1, 61)
+
+
 def generate_context_fingerprint(
     preset: Optional[Dict] = None,
     os: Optional[str] = None,
@@ -1197,8 +1243,15 @@ def generate_context_fingerprint(
         # Playwright's own options reach the same places through Juggler:
         # hasTouch gives the touch-only pointer, touch events and a digitizer,
         # isMobile the meta viewport (see mobile-meta-viewport.patch).
-        context_options['is_mobile'] = True
         context_options['has_touch'] = True
+        if firefox_accepts_is_mobile():
+            context_options['is_mobile'] = True
+        from ._warnings import LeakWarning
+
+        LeakWarning.warn('mobile_resources', False)
+        if sw and sh:
+            # Juggler reads the screen size to report screen.orientation.
+            context_options['screen'] = {'width': sw, 'height': sh}
     if sw and sh:
         context_options['viewport'] = {
             'width': sw,

@@ -1,3 +1,3 @@
-from .sample import sample_webgl
+from .sample import has_webgl_pair, sample_webgl
 
-__all__ = ['sample_webgl']
+__all__ = ['has_webgl_pair', 'sample_webgl']

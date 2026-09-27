@@ -24,6 +24,7 @@ import pytest
 
 from camoufox import utils
 from camoufox.fingerprints import (
+    MOBILE_FIREFOX_PREFS,
     apply_mobile_mode,
     fix_screen_no_taskbar,
     generate_context_fingerprint,
@@ -84,7 +85,7 @@ class TestApplyMobileMode:
         prefs = {}
         assert apply_mobile_mode(config, prefs, 2.75)
         assert config['mobile'] is True
-        assert prefs == {'ui.useOverlayScrollbars': 1, 'layout.css.devPixelsPerPx': '2.75'}
+        assert prefs == {**MOBILE_FIREFOX_PREFS, 'layout.css.devPixelsPerPx': '2.75'}
 
     def test_desktop_is_left_alone(self):
         config = {'navigator.userAgent': WINDOWS_UA}
@@ -97,7 +98,8 @@ class TestApplyMobileMode:
         config = {'navigator.userAgent': ANDROID_UA}
         prefs = {'ui.useOverlayScrollbars': 0, 'layout.css.devPixelsPerPx': '1.0'}
         apply_mobile_mode(config, prefs, 3.0)
-        assert prefs == {'ui.useOverlayScrollbars': 0, 'layout.css.devPixelsPerPx': '1.0'}
+        assert prefs['ui.useOverlayScrollbars'] == 0
+        assert prefs['layout.css.devPixelsPerPx'] == '1.0'
 
     def test_no_ratio_no_pref(self):
         prefs = {}
@@ -167,8 +169,15 @@ class TestLaunchOptions:
     def test_desktop_launch_is_untouched(self, os_name):
         config, prefs = launch(os=os_name)
         assert 'mobile' not in config
-        assert 'ui.useOverlayScrollbars' not in prefs
+        assert not set(MOBILE_FIREFOX_PREFS) & set(prefs)
         assert 'layout.css.devPixelsPerPx' not in prefs
+
+    def test_android_launch_gets_the_android_api_surface(self):
+        _, prefs = launch(os='android')
+        assert prefs['dom.webshare.enabled'] is True
+        assert prefs['dom.media.webcodecs.enabled'] is False
+        assert prefs['media.setsinkid.enabled'] is False
+        assert prefs['webgl.default-antialias'] is False
 
 
 class TestContextFingerprint:
@@ -180,6 +189,8 @@ class TestContextFingerprint:
         assert opts['has_touch'] is True
         assert opts['device_scale_factor'] > 1
         assert opts['viewport']['width'] < opts['viewport']['height'] < 1366
+        # Juggler derives screen.orientation from it.
+        assert opts['screen']['width'] < opts['screen']['height']
         assert 'setNavigatorPlatform("Linux arm' in fp['init_script']
 
     def test_desktop_context_is_unchanged(self):
@@ -187,5 +198,59 @@ class TestContextFingerprint:
         assert 'is_mobile' not in opts
         assert 'has_touch' not in opts
         assert 'device_scale_factor' not in opts
+        assert 'screen' not in opts
         assert opts['viewport']['height'] >= 600
 
+
+
+class TestReviewFixes:
+    def test_desktop_fingerprint_under_android_ua_gets_a_digitizer(self):
+        config, _ = launch(os='linux', config={'navigator.userAgent': ANDROID_UA})
+        assert config['navigator.maxTouchPoints'] == 5
+
+    def test_caller_touch_points_are_kept(self):
+        config = {'navigator.userAgent': ANDROID_UA, 'navigator.maxTouchPoints': 1}
+        apply_mobile_mode(config, {}, keep_touch_points=True)
+        assert config['navigator.maxTouchPoints'] == 1
+
+    def test_switch_keys_do_not_turn_off_the_device_fixes(self):
+        with mock.patch.object(utils, 'fix_navigator_arch') as arch, mock.patch.object(
+            utils, 'fix_screen_no_taskbar'
+        ) as taskbar:
+            launch(os='linux', config={'navigator.plugins': True, 'screen.orientation': 'landscape-primary'})
+        assert arch.called
+        assert taskbar.called
+
+    def test_old_playwright_gets_touch_without_is_mobile(self):
+        with mock.patch('camoufox.pkgman._resolved_playwright_version', return_value=(1, 58, 0)):
+            opts = generate_context_fingerprint(os='android', ff_version='155')['context_options']
+        assert 'is_mobile' not in opts
+        assert opts['has_touch'] is True
+
+    def test_current_playwright_gets_is_mobile(self):
+        with mock.patch('camoufox.pkgman._resolved_playwright_version', return_value=(1, 62, 0)):
+            opts = generate_context_fingerprint(os='android', ff_version='155')['context_options']
+        assert opts['is_mobile'] is True
+
+    def test_android_context_warns_about_linux_resources(self):
+        with pytest.warns(Warning, match='Linux pools'):
+            generate_context_fingerprint(os='android', ff_version='155')
+
+
+class TestPhoneGpu:
+    ADRENO = ('Qualcomm', 'Adreno (TM) 650, or similar')
+
+    def test_config_pair_unknown_to_the_database_is_kept(self):
+        config, _ = launch(
+            os='android',
+            config={'webGl:vendor': self.ADRENO[0], 'webGl:renderer': self.ADRENO[1]},
+        )
+        assert (config['webGl:vendor'], config['webGl:renderer']) == self.ADRENO
+
+    def test_webgl_config_pair_unknown_to_the_database_is_kept(self):
+        config, _ = launch(os='android', webgl_config=self.ADRENO)
+        assert (config['webGl:vendor'], config['webGl:renderer']) == self.ADRENO
+
+    def test_unknown_pair_warns(self):
+        with pytest.warns(Warning, match='no WebGL parameter data'):
+            launch(os='android', webgl_config=self.ADRENO, i_know_what_im_doing=False)

@@ -8,6 +8,7 @@
     "navigator.appName$__PROD_CODE": "str",
     "navigator.product$__PROD_CODE": "str",
     "navigator.productSub": "str[/^\\d+$/]",
+    "navigator.vendor": "str",
     "navigator.buildID": "str[/^\\d+$/]",
     
     "screen.height$__SC": "int[>0]",
@@ -35,6 +36,7 @@
     "navigator.hardwareConcurrency": "int[>0]",
     "navigator.maxTouchPoints": "int[>=0]",
     "mobile": "bool",
+    "screen.orientation": "str[portrait-primary, portrait-secondary, landscape-primary, landscape-secondary]",
     "navigator.cookieEnabled": "bool",
     "navigator.globalPrivacyControl": "bool",
     "navigator.onLine": "bool",

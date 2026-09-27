@@ -1,21 +1,19 @@
 diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
 --- a/dom/base/Navigator.cpp
 +++ b/dom/base/Navigator.cpp
-@@ -980,12 +980,35 @@ bool Navigator::Vibrate(const nsTArray<uint32_t>& aPattern) {
+@@ -1018,12 +1018,35 @@ bool Navigator::Vibrate(const nsTArray<uint32_t>& aPattern) {
  //*****************************************************************************
  
  uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
    nsIDocShell* docshell = GetDocShell();
    BrowsingContext* bc = docshell ? docshell->GetBrowsingContext() : nullptr;
  
-+  // A context that asked for touch (Playwright's hasTouch) reports the
-+  // digitizer Juggler gave it, whatever the launch-wide config says: touch
-+  // events next to maxTouchPoints == 0 would contradict each other.
-+  if (bc && bc->Top()->InRDMPane() &&
-+      bc->TouchEventsOverride() ==
-+          mozilla::dom::TouchEventsOverride::Enabled) {
-+    return bc->Top()->GetMaxTouchPointsOverride();
-+  }
++  // A context that asked for touch (Playwright's hasTouch) has to report a
++  // digitizer: touch events next to maxTouchPoints == 0 contradict each other.
++  const bool touchContext =
++      bc && bc->TouchEventsOverride() ==
++                mozilla::dom::TouchEventsOverride::Enabled;
++
 +  // Allow spoofing navigator.maxTouchPoints via config. A headless build has
 +  // no digitizer, so the real value is 0 and Firefox's RFP path only ever
 +  // collapses it to 0. The target is not a phone: it is the ordinary Windows
@@ -23,11 +21,13 @@ diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
 +  // primary pointer. See force-default-pointer.patch for the matching
 +  // `any-pointer: coarse` half.
 +  if (auto value = MaskConfig::GetUint32("navigator.maxTouchPoints")) {
-+    return value.value();
++    if (value.value() > 0 || !touchContext) {
++      return value.value();
++    }
 +  }
-+  // Mobile mode without an explicit count: the five touch points Firefox for
-+  // Android reports on ordinary phones.
-+  if (MaskConfig::CheckBool("mobile")) {
++  // A touch context or mobile mode without a count of its own: the five touch
++  // points Firefox for Android reports on ordinary phones.
++  if (touchContext || MaskConfig::CheckBool("mobile")) {
 +    return 5;
 +  }
 +

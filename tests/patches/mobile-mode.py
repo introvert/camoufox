@@ -66,6 +66,9 @@ PHONE: Dict[str, Any] = {
     "(hover: hover)": False,
     "(any-hover: none)": True,
     "(any-hover: hover)": False,
+    # Juggler's orientation override, from the phone's taller-than-wide screen.
+    "screen.orientation.type": "portrait-primary",
+    "screen.orientation.angle": 0,
 }
 
 DESKTOP: Dict[str, Any] = {
@@ -102,6 +105,8 @@ PROBE_JS = r"""() => {
     "'ontouchstart' in window":          "ontouchstart" in window,
     "'ontouchstart' in document":        "ontouchstart" in document,
     "'ontouchstart' in documentElement": "ontouchstart" in document.documentElement,
+    "screen.orientation.type":           screen.orientation.type,
+    "screen.orientation.angle":          screen.orientation.angle,
   };
 }"""
 
@@ -197,6 +202,18 @@ async def run(binary: Path) -> bool:
                           await page.evaluate(PROBE_JS), PHONE)
             vp = await read_viewports(page, viewport["width"], mobile=True)
             ok &= compare("per-context phone: meta viewport", vp, vp)
+
+            # Camoufox defaults to no_viewport when the window is spoofed, which
+            # keeps the page out of RDM; touch still has to bring a digitizer.
+            touch_only = await browser.new_context(no_viewport=True, has_touch=True)
+            page = await touch_only.new_page()
+            await page.goto("about:blank")
+            got = await page.evaluate(PROBE_JS)
+            ok &= compare("has_touch without a viewport", got, {
+                "navigator.maxTouchPoints": 5,
+                "window.TouchEvent": True,
+                "(pointer: coarse)": True,
+            })
 
             plain = await browser.new_context(viewport=viewport)
             page = await plain.new_page()

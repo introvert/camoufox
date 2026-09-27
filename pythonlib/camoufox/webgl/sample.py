@@ -87,6 +87,21 @@ def sample_webgl(
     return orjson.loads(data_strs[idx])
 
 
+def has_webgl_pair(vendor: str, renderer: str) -> bool:
+    """Whether webgl_data.db holds parameters for this vendor/renderer pair."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        return (
+            conn.execute(
+                'SELECT 1 FROM webgl_fingerprints WHERE vendor = ? AND renderer = ?',
+                (vendor, renderer),
+            ).fetchone()
+            is not None
+        )
+    finally:
+        conn.close()
+
+
 def get_possible_pairs() -> Dict[str, List[Tuple[str, str]]]:
     """
     Get all possible (vendor, renderer) pairs for all OS, where the probability is greater than 0.

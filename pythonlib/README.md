@@ -327,3 +327,5 @@ A mobile user agent on its own only changes what the server sends. The page's sc
 For one phone context in a desktop browser, pass `os="android"` to `AsyncNewContext`/`NewContext`. It opens the context with Playwright's `is_mobile=True` and `has_touch=True`, which give the same pointer, touch and viewport behaviour for that context only.
 
 Limitations: fonts, speech voices and the WebGL GPU come from the Linux pools, because Camoufox bundles no Android fonts and has no WebGL data for phone GPUs. `window.orientation` is compiled out of desktop Firefox and stays absent.
+
+Every field a Firefox for Android check can read, what a real device reports, and how to set each one: [docs/android-persona-fields.md](../docs/android-persona-fields.md).
