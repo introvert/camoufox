@@ -629,6 +629,24 @@ export class NetworkObserver {
           proxyFilter.onProxyFilterResult(defaultProxyInfo);
           return;
         }
+        // SOCKS has no auth prompt: its credentials must ride on the proxy info,
+        // which only newProxyInfoWithAuth sets (and only accepts for SOCKS types).
+        // HTTP(S) proxies keep answering a 407 through promptAuth below.
+        if ((proxy.type === 'socks' || proxy.type === 'socks4') && (proxy.username || proxy.password)) {
+          proxyFilter.onProxyFilterResult(protocolProxyService.newProxyInfoWithAuth(
+              proxy.type,
+              proxy.host,
+              proxy.port,
+              proxy.username || '',
+              proxy.password || '',
+              '', /* aProxyAuthorizationHeader */
+              '', /* aConnectionIsolationKey */
+              Ci.nsIProxyInfo.TRANSPARENT_PROXY_RESOLVES_HOST, /* aFlags */
+              UINT32_MAX, /* aFailoverTimeout */
+              null, /* failover proxy */
+          ));
+          return;
+        }
         proxyFilter.onProxyFilterResult(protocolProxyService.newProxyInfo(
             proxy.type,
             proxy.host,

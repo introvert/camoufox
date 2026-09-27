@@ -1,14 +1,12 @@
 import asyncio
-import json
 import sys
-import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
 
 
 def load_proxies(path: Path) -> list:
     """
-    Load proxies from a file. Each line must be: user:pass@domain:port
+    Load proxies from a file. Each line must be: [scheme://]user:pass@domain:port
+    The scheme defaults to http; socks5:// is also supported.
     Returns a list of Playwright-format proxy dicts.
     """
     if not path.exists():
@@ -21,6 +19,9 @@ def load_proxies(path: Path) -> list:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        scheme = "http"
+        if "://" in line:
+            scheme, line = line.split("://", 1)
         try:
             creds, hostport = line.rsplit("@", 1)
             user, password = creds.split(":", 1)
@@ -29,7 +30,7 @@ def load_proxies(path: Path) -> list:
             print(f"ERROR: proxies.txt line {lineno}: expected user:pass@domain:port, got: {line!r}", file=sys.stderr)
             sys.exit(1)
         proxies.append({
-            "server": f"http://{domain}:{port}",
+            "server": f"{scheme}://{domain}:{port}",
             "username": user,
             "password": password,
             "bypass": "127.0.0.1,localhost",
@@ -44,17 +45,20 @@ def load_proxies(path: Path) -> list:
 
 async def resolve_proxy_geo(proxy: dict) -> dict:
     """Queries ip-api.com through the proxy for IP, city, country, and timezone."""
-    p = urlparse(proxy.get("server", ""))
-    user = proxy.get("username", "")
-    pwd = proxy.get("password", "")
-    proxy_url = f"{p.scheme}://{user}:{pwd}@{p.netloc}" if user and pwd else proxy.get("server", "")
+    # urllib cannot speak SOCKS; requests (with PySocks, a camoufox dependency) can.
+    import requests
+    from camoufox.socks import requests_proxy_url
+
+    proxy_url = requests_proxy_url(proxy)
 
     def _fetch() -> dict:
-        handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-        opener = urllib.request.build_opener(handler)
         try:
-            with opener.open("http://ip-api.com/json?fields=query,city,country,timezone", timeout=10) as resp:
-                return json.loads(resp.read())
+            resp = requests.get(
+                "http://ip-api.com/json?fields=query,city,country,timezone",
+                proxies={"http": proxy_url, "https": proxy_url},
+                timeout=10,
+            )
+            return resp.json()
         except Exception:
             return {}
 

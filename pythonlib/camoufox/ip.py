@@ -107,3 +107,22 @@ def public_ip(proxy: Optional[str] = None) -> str:
         except (requests.exceptions.ProxyError, requests.RequestException, InvalidIP) as exception:
             end_exception = exception
     raise InvalidIP(f"Failed to get IP address: {end_exception}")
+
+
+def resolve_proxy_geo(proxy: Dict[str, str]) -> Dict[str, Optional[str]]:
+    """
+    Queries ip-api.com through the proxy for the exit IP and timezone.
+    Works for HTTP(S) and SOCKS proxies, with or without credentials.
+    """
+    from .socks import requests_proxy_url
+
+    try:
+        resp = requests.get(
+            "http://ip-api.com/json?fields=query,timezone",
+            proxies=Proxy.as_requests_proxy(requests_proxy_url(proxy)),
+            timeout=10,
+        )
+        data = resp.json()
+        return {"ip": data.get("query") or None, "timezone": data.get("timezone") or None}
+    except Exception:
+        return {"ip": None, "timezone": None}

@@ -1,9 +1,6 @@
 import asyncio
-import json as _json
-import urllib.request
 from functools import partial
 from typing import Any, Dict, List, Optional, Union, overload
-from urllib.parse import urlparse
 
 from playwright.async_api import (
     Browser,
@@ -16,6 +13,8 @@ from typing_extensions import Literal
 from camoufox.virtdisplay import VirtualDisplay
 
 from .fingerprints import generate_context_fingerprint
+from .ip import resolve_proxy_geo
+from .socks import prepare_proxy
 from .utils import (
     async_attach_vd,
     attach_no_viewport_default,
@@ -128,31 +127,9 @@ async def AsyncNewBrowser(
     return await async_attach_vd(browser, virtual_display)
 
 
-def _proxy_url_with_creds(proxy: Dict[str, str]) -> str:
-    """Builds a proxy URL string with embedded credentials."""
-    parsed = urlparse(proxy.get("server", ""))
-    user = proxy.get("username", "")
-    pwd = proxy.get("password", "")
-    if user and pwd:
-        return f"{parsed.scheme}://{user}:{pwd}@{parsed.netloc}"
-    return proxy.get("server", "")
-
-
 async def _resolve_proxy_geo(proxy: Dict[str, str]) -> Dict[str, Optional[str]]:
     """Queries ip-api.com through the proxy for the exit IP and timezone."""
-    proxy_url = _proxy_url_with_creds(proxy)
-
-    def _fetch() -> Dict[str, Optional[str]]:
-        handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-        opener = urllib.request.build_opener(handler)
-        try:
-            with opener.open("http://ip-api.com/json?fields=query,timezone", timeout=10) as resp:
-                data = _json.loads(resp.read())
-                return {"ip": data.get("query") or None, "timezone": data.get("timezone") or None}
-        except Exception:
-            return {"ip": None, "timezone": None}
-
-    return await asyncio.get_event_loop().run_in_executor(None, _fetch)
+    return await asyncio.get_event_loop().run_in_executor(None, partial(resolve_proxy_geo, proxy))
 
 
 async def AsyncNewContext(
@@ -181,6 +158,7 @@ async def AsyncNewContext(
         ff_version: Firefox version string for UA patching.
         webrtc_ip: IPv4 address to spoof for WebRTC ICE candidates.
         proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).
+            SOCKS5 with a username and password is supported.
         geolocation: Per-context geolocation ({"latitude": float, "longitude": float}).
         **context_kwargs: Additional Playwright new_context() options.
     """
@@ -199,12 +177,19 @@ async def AsyncNewContext(
 
     # Merge generated context options with user overrides (user wins)
     opts: Dict[str, Any] = {**fp['context_options'], **context_kwargs}
+    release_proxy = lambda: None
     if proxy:
-        opts['proxy'] = proxy
+        # Authenticated SOCKS5 runs through a local relay (see socks.py), held until the context closes.
+        opts['proxy'], release_proxy = prepare_proxy(proxy)
     if geolocation:
         opts['geolocation'] = geolocation
         opts.setdefault('permissions', ['geolocation'])
 
-    context = await browser.new_context(**opts)
+    try:
+        context = await browser.new_context(**opts)
+    except BaseException:
+        release_proxy()
+        raise
+    context.on('close', lambda _: release_proxy())
     await context.add_init_script(fp['init_script'])
     return context

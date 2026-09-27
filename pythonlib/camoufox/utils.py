@@ -23,7 +23,8 @@ from .exceptions import (
 )
 from .fingerprints import apply_mobile_mode, is_mobile_config, from_browserforge, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults, gpu_screen_is_plausible, is_software_renderer
 from .geolocation import geoip_allowed, get_geolocation
-from .ip import Proxy, public_ip, valid_ipv4, valid_ipv6
+from .ip import public_ip, valid_ipv4, valid_ipv6
+from .socks import prepare_proxy, requests_proxy_url
 from .locales import handle_locales
 import warnings
 
@@ -745,7 +746,9 @@ def launch_options(
         firefox_user_prefs (Optional[Dict[str, Any]]):
             Firefox user preferences to set.
         proxy (Optional[Dict[str, str]]):
-            Proxy to use for the browser.
+            Proxy to use for the browser. HTTP, HTTPS, SOCKS4 and SOCKS5 are supported;
+            SOCKS5 may carry a username and password (`socks5://user:pass@host:port`
+            or the `username` / `password` keys).
             Note: If geoip is True, a request will be sent through this proxy to find the target IP.
         enable_cache (Optional[bool]):
             Cache previous pages, requests, etc (uses more memory).
@@ -995,7 +998,7 @@ def launch_options(
         if geoip is True:
             # Find the user's IP address
             if proxy:
-                geoip = public_ip(Proxy(**proxy).as_string())
+                geoip = public_ip(requests_proxy_url(proxy))
             else:
                 geoip = public_ip()
 
@@ -1167,6 +1170,9 @@ def launch_options(
     # https://github.com/coryking/camoufox/commit/1336e8e509e8c12a896a09d9ee51f131f739f106
     # Thanks @coryking
     if proxy is not None:
-        result["proxy"] = proxy
+        # An authenticated SOCKS5 proxy goes through a local relay (see socks.py),
+        # since Playwright rejects SOCKS5 credentials. The relay lives as long as
+        # this process: launch options carry no handle to release it with.
+        result["proxy"], _ = prepare_proxy(proxy)
 
     return result
