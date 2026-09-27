@@ -37,8 +37,10 @@ Which binary is tested, in order of precedence:
 """
 
 import asyncio
+import base64
 import json
 import os
+import struct
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -147,6 +149,60 @@ META_CASES = {
 }
 
 
+# No meta viewport, content wider than the screen: B sits past the right edge
+# of a 412px screen at 1:1, so it is only reachable once the page is zoomed out.
+WIDE_PAGE = (
+    '<!doctype html><html><head></head><body style="margin:0">'
+    '<button id="a" style="position:absolute;left:40px;top:40px;width:80px;height:40px;'
+    'background:#fff">A</button>'
+    '<button id="b" style="position:absolute;left:700px;top:600px;width:160px;height:80px;'
+    'background:#ff0000;border:0">B</button>'
+    '<div style="width:960px;height:1400px"></div></body></html>'
+)
+
+
+async def probe_wide_page(page, viewport) -> Dict[str, Any]:
+    """Zoom state, Playwright clicks and a viewport screenshot on WIDE_PAGE."""
+    await page.goto("data:text/html," + quote(WIDE_PAGE))
+    await page.evaluate("""() => {
+      for (const id of ["a", "b"])
+        document.getElementById(id).addEventListener("click",
+          () => document.body.dataset["hit" + id] = "1");
+    }""")
+    result: Dict[str, Any] = {
+        "zoomed out": await page.evaluate("() => visualViewport.scale < 1"),
+    }
+    for sel, key in (("#a", "clicked A (on screen at 1:1)"),
+                     ("#b", "clicked B (past the screen edge at 1:1)")):
+        try:
+            await page.click(sel, timeout=5000)
+        except Exception:
+            pass
+        result[key] = await page.evaluate(
+            f"() => document.body.dataset.hit{sel[1:]} === '1'")
+
+    png = await page.screenshot()
+    width, height = struct.unpack(">II", png[16:24])
+    dpr = await page.evaluate("() => devicePixelRatio")
+    result["screenshot is the viewport size"] = (
+        abs(width - viewport["width"] * dpr) <= 1 and abs(height - viewport["height"] * dpr) <= 1)
+    # B is pure red; at 1:1 it would be off the right edge of the capture.
+    result["screenshot shows B"] = await page.evaluate("""async (b64) => {
+      const img = new Image();
+      img.src = "data:image/png;base64," + b64;
+      await img.decode();
+      const c = document.createElement("canvas");
+      c.width = img.width; c.height = img.height;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      const d = ctx.getImageData(0, 0, c.width, c.height).data;
+      for (let i = 0; i < d.length; i += 4)
+        if (d[i] > 240 && d[i + 1] < 20 && d[i + 2] < 20) return true;
+      return false;
+    }""", base64.b64encode(png).decode())
+    return result
+
+
 def resolve_binary(argv) -> Optional[Path]:
     if "--binary" in argv:
         return Path(argv[argv.index("--binary") + 1]).resolve()
@@ -209,20 +265,29 @@ async def run(binary: Path) -> bool:
         finally:
             await browser.close()
 
-        # --- mobile:zoom: a page without a meta viewport is zoomed out to fit ---
-        browser = await launch({"mobile": True, "mobile:zoom": True,
+        # --- zoom: a page wider than the screen is zoomed out to fit, like
+        # Android, and Playwright still clicks and screenshots what is shown ---
+        browser = await launch({"mobile": True, "navigator.userAgent": ANDROID_UA})
+        try:
+            page = await browser.new_page(viewport=viewport)
+            ok &= compare("zoom, clicks and screenshot", await probe_wide_page(page, viewport), {
+                "zoomed out": True,
+                "clicked A (on screen at 1:1)": True,
+                "clicked B (past the screen edge at 1:1)": True,
+                "screenshot is the viewport size": True,
+                "screenshot shows B": True,
+            })
+        finally:
+            await browser.close()
+
+        # --- mobile:zoom: false opts out of zooming ---
+        browser = await launch({"mobile": True, "mobile:zoom": False,
                                 "navigator.userAgent": ANDROID_UA})
         try:
             page = await browser.new_page(viewport=viewport)
             await page.goto(page_with_meta(None))
-            got = await page.evaluate("""() => ({
-              "layout width, no meta tag": document.documentElement.clientWidth,
-              "zoomed out": visualViewport.scale < 1,
-            })""")
-            ok &= compare("mobile:zoom", got, {
-                "layout width, no meta tag": 980,
-                "zoomed out": True,
-            })
+            got = await page.evaluate("() => visualViewport.scale")
+            ok &= compare("mobile:zoom false", {"scale": got}, {"scale": 1})
         finally:
             await browser.close()
 
@@ -238,6 +303,14 @@ async def run(binary: Path) -> bool:
                           await page.evaluate(PROBE_JS), PHONE)
             vp = await read_viewports(page, viewport["width"], mobile=True)
             ok &= compare("per-context phone: meta viewport", vp, vp)
+            ok &= compare("per-context phone: zoom, clicks and screenshot",
+                          await probe_wide_page(page, viewport), {
+                "zoomed out": True,
+                "clicked A (on screen at 1:1)": True,
+                "clicked B (past the screen edge at 1:1)": True,
+                "screenshot is the viewport size": True,
+                "screenshot shows B": True,
+            })
 
             # Camoufox defaults to no_viewport when the window is spoofed, which
             # keeps the page out of RDM; touch still has to bring a digitizer.

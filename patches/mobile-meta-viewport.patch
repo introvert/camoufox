@@ -1,7 +1,7 @@
 diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
 --- a/layout/base/nsLayoutUtils.cpp
 +++ b/layout/base/nsLayoutUtils.cpp
-@@ -702,13 +702,20 @@ bool nsLayoutUtils::AllowZoomingForDocument(const Document* aDocument) {
+@@ -702,13 +702,21 @@ bool nsLayoutUtils::AllowZoomingForDocument(const Document* aDocument) {
    if (aDocument->GetPresShell() &&
        !aDocument->GetPresShell()->AsyncPanZoomEnabled()) {
      return false;
@@ -9,12 +9,13 @@ diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
  
    /* Playwright: disable zooming as we don't support meta viewport tag */
 -  if (1 == 1) return false;
-+  // Camoufox: mobile:zoom opts a phone into Android's zoom, so a page without
-+  // a meta viewport is zoomed out to fit instead of laid out 980px wide at
-+  // 1:1. Off by default: Juggler's input and screenshot coordinates do not
-+  // account for the visual viewport's resolution.
++  // Camoufox: a phone zooms like Firefox for Android: a page without a meta
++  // viewport, or wider than the screen, is zoomed out to fit. Without it the
++  // layout viewport outgrows a visual viewport that can never pan, and
++  // everything past the screen edge is unreachable. Juggler maps input from
++  // page to screen coordinates. `mobile:zoom: false` opts out.
 +  if (1 == 1) {
-+    return MaskConfig::CheckBool("mobile:zoom") &&
++    return MaskConfig::GetBool("mobile:zoom").value_or(true) &&
 +           ShouldHandleMetaViewport(aDocument);
 +  }
  
@@ -23,7 +24,7 @@ diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
    BrowsingContext* bc = aDocument->GetBrowsingContext();
    return StaticPrefs::apz_allow_zooming() || (bc && bc->InRDMPane());
  }
-@@ -10026,13 +10033,28 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
+@@ -10026,13 +10034,28 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
    }
  }
  

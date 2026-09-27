@@ -44,7 +44,7 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 | `TouchEvent` | `function` | `mobile`, `has_touch`, or `navigator.maxTouchPoints` > 0 | auto |
 | `ondevicemotion`, `ondeviceorientation` | present | present on desktop too | present |
 | `<meta name="viewport">` | obeyed | `mobile`, or an `is_mobile` context | auto |
-| Pages without a meta viewport | laid out 980px wide and zoomed out to fit | `mobile:zoom: true` zooms out like Android. Off by default: Juggler's click and screenshot coordinates do not account for the zoom, so a zoomed-out page can mis-click | 980px wide at 1:1 |
+| Pages without a meta viewport, or wider than the screen | laid out 980px wide and zoomed out to fit | zoom is on in mobile mode; Juggler maps clicks and viewport screenshots to the zoomed screen. `mobile:zoom: false` turns it off | zoomed out, like Android |
 | `navigator.doNotTrack` + `DNT` header | `unspecified`, no header | `navigator.doNotTrack` (`"1"`, `"0"`, `"unspecified"`); the header is sent only for `"1"` | Firefox default |
 | `navigator.globalPrivacyControl` + `Sec-GPC` header | `false`, no header, outside private browsing | `navigator.globalPrivacyControl`; window, workers and header move together | Firefox default |
 | WebGL vendor / renderer | the device GPU, sanitized, e.g. `Qualcomm` / `Adreno (TM) 650, or similar` | `webGl:vendor` / `webGl:renderer`, or `webgl_config=`. Camoufox has no parameter data for phone GPUs: the strings are set and the rest of WebGL is the host's, with a warning | a Linux desktop GPU, with a warning |

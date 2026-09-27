@@ -20,7 +20,7 @@ Most patches read config via `MaskConfig::GetBool()`, `MaskConfig::GetString()`,
 | `privacy-signals-spoofing.patch` | `navigator.doNotTrack`, `navigator.globalPrivacyControl` | The window, workers (GPC) and the `DNT` / `Sec-GPC` headers answer from the same config value |
 | `window-orientation.patch` | `mobile` | Builds `window.orientation` / `onorientationchange` on desktop and exposes them for a phone (mobile mode or an `isMobile` context); the angle follows the orientation override |
 | `pdf-viewer-spoofing.patch` | `pdfViewerEnabled`, `navigator.plugins` | Answers `navigator.pdfViewerEnabled` from the config and makes `navigator.plugins` / `navigator.mimeTypes` follow it, both ways. `navigator.plugins` (bool) moves the two lists alone, with a launcher warning since no real Firefox splits them. The launcher also sets `pdfjs.disabled` to match `pdfViewerEnabled` |
-| `mobile-meta-viewport.patch` | `mobile`, `mobile:zoom` | Honours `<meta name="viewport">` in mobile mode, or in RDM for a Playwright `isMobile` context (Juggler sets `forceDesktopViewport` on every other page). Applies on top of `0-playwright.patch`'s disabled meta viewport. `mobile:zoom` also allows zooming, so pages without the tag zoom out to fit |
+| `mobile-meta-viewport.patch` | `mobile`, `mobile:zoom` | Honours `<meta name="viewport">` in mobile mode, or in RDM for a Playwright `isMobile` context (Juggler sets `forceDesktopViewport` on every other page). Applies on top of `0-playwright.patch`'s disabled meta viewport. Zooming is on for a phone (`mobile:zoom: false` turns it off), so pages without the tag, or wider than the screen, zoom out to fit; Juggler maps input and viewport screenshots to the zoomed screen |
 
 ## RoverfoxStorageManager
 

@@ -321,7 +321,7 @@ A mobile user agent on its own only changes what the server sends. The page's sc
 
 - `(pointer: coarse)` and `(hover: none)` for the primary pointer and the any- set
 - touch events with Android's legacy touch APIs (`'ontouchstart' in window`, `document.createTouch`), and `navigator.maxTouchPoints` of 5
-- `<meta name="viewport">` is obeyed. Zoom stays off by default, so a page without the tag gets a 980px layout at 1:1 scale; `config={"mobile:zoom": True}` zooms it out to fit like Android, at the cost of Playwright click and screenshot coordinates on those pages
+- `<meta name="viewport">` is obeyed, and a page without the tag, or wider than the screen, is zoomed out to fit, as on Android. Playwright's clicks and viewport screenshots follow the zoom. `config={"mobile:zoom": False}` turns zooming off
 - `window.orientation` and `onorientationchange` exist, and `screen.orientation` reports the phone's portrait orientation
 - overlay scrollbars, and the phone's device pixel ratio when headless or on a virtual display
 
