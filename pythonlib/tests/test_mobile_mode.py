@@ -188,3 +188,4 @@ class TestContextFingerprint:
         assert 'has_touch' not in opts
         assert 'device_scale_factor' not in opts
         assert opts['viewport']['height'] >= 600
+

@@ -1014,6 +1014,13 @@ def launch_options(
     if allow_addon_new_tab:
         set_into(config, 'allowAddonNewtab', True)
 
+    # navigator.pdfViewerEnabled (with navigator.plugins and mimeTypes) is
+    # answered from the config by pdf-viewer-spoofing.patch. Bring the viewer
+    # itself along, so a claimed "no viewer" also downloads PDFs instead of
+    # rendering them inline, as a browser without one does.
+    if isinstance(config.get('pdfViewerEnabled'), bool):
+        firefox_user_prefs.setdefault('pdfjs.disabled', not config['pdfViewerEnabled'])
+
     # Set Firefox user preferences
     if block_images:
         LeakWarning.warn('block_images', i_know_what_im_doing)
