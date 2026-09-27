@@ -12,6 +12,7 @@
   { "property": "navigator.product", "type": "str" },
   { "property": "navigator.productSub", "type": "str" },
   { "property": "navigator.maxTouchPoints", "type": "uint" },
+  { "property": "mobile", "type": "bool" },
   { "property": "navigator.cookieEnabled", "type": "bool" },
   { "property": "navigator.globalPrivacyControl", "type": "bool" },
   { "property": "navigator.buildID", "type": "str" },

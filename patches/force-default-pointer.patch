@@ -1,9 +1,7 @@
 diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
 --- a/layout/style/nsMediaFeatures.cpp
 +++ b/layout/style/nsMediaFeatures.cpp
-@@ -408,34 +433,41 @@ static PointerCapabilities GetPointerCapabilities(const Document* aDocument,
-     // that we don't need to care about ResistFingerprinting.
-     if (bc->TouchEventsOverride() == dom::TouchEventsOverride::Enabled) {
+@@ -435,30 +435,44 @@ static PointerCapabilities GetPointerCapabilities(const Document* aDocument,
        return PointerCapabilities::Coarse;
      }
    }
@@ -15,26 +13,24 @@ diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
 -      PointerCapabilities::Coarse;
 +  return PointerCapabilities::Coarse;
  #else
++  // Mobile mode claims Firefox for Android, which only has the touchscreen:
++  // coarse and unable to hover, as the primary pointer and in the any- set
++  // alike. This is the ANDROID branch above, chosen at runtime.
++  if (MaskConfig::CheckBool("mobile")) {
++    return PointerCapabilities::Coarse;
++  }
++
 +  // Report the desktop default rather than whatever the host toolkit
 +  // advertises, so the capability set never varies with the machine the
 +  // browser happens to be running on.
 +  PointerCapabilities capabilities =
        PointerCapabilities::Fine | PointerCapabilities::Hover;
--#endif
--  if (aDocument->ShouldResistFingerprinting(
--          RFPTarget::CSSPointerCapabilities)) {
--    return kDefaultCapabilities;
--  }
- 
--  int32_t intValue;
--  nsresult rv = LookAndFeel::GetInt(aID, &intValue);
--  if (NS_FAILED(rv)) {
--    return kDefaultCapabilities;
++
 +  // A touchscreen laptop still drives a fine, hovering *primary* pointer --
 +  // its trackpad -- and the digitizer only ever joins the `any-pointer` set.
 +  // Keeping that split is the whole point: a spoofed maxTouchPoints paired
 +  // with `(pointer: coarse)` would claim a phone, while the accompanying
-+  // desktop UA said otherwise.
++  // desktop UA said otherwise. Claiming a phone is `mobile`'s job.
 +  if (aID == LookAndFeel::IntID::AllPointerCapabilities) {
 +    if (auto maxTouchPoints =
 +            MaskConfig::GetUint32("navigator.maxTouchPoints")) {
@@ -42,16 +38,25 @@ diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
 +        capabilities |= PointerCapabilities::Coarse;
 +      }
 +    }
-   }
- 
--  return static_cast<PointerCapabilities>(intValue);
++  }
++
 +  return capabilities;
-+#endif
+ #endif
+-  if (aDocument->ShouldResistFingerprinting(
+-          RFPTarget::CSSPointerCapabilities)) {
+-    return kDefaultCapabilities;
+-  }
+-
+-  int32_t intValue;
+-  nsresult rv = LookAndFeel::GetInt(aID, &intValue);
+-  if (NS_FAILED(rv)) {
+-    return kDefaultCapabilities;
+-  }
+-
+-  return static_cast<PointerCapabilities>(intValue);
  }
  
  PointerCapabilities Gecko_MediaFeatures_PrimaryPointerCapabilities(
      const Document* aDocument) {
    return GetPointerCapabilities(aDocument,
                                  LookAndFeel::IntID::PrimaryPointerCapabilities);
- }
- 

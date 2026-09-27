@@ -171,7 +171,8 @@ def NewContext(
     Parameters:
         browser: A Browser instance from NewBrowser or Camoufox.
         preset: A specific fingerprint preset dict to use. If None, picks randomly.
-        os: Target OS for preset selection ("windows", "macos", "linux").
+        os: Target OS for preset selection ("windows", "macos", "linux", "android").
+            "android" also opens the context with is_mobile and has_touch.
         ff_version: Firefox version string for UA patching.
         webrtc_ip: IPv4 address to spoof for WebRTC ICE candidates.
         proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).

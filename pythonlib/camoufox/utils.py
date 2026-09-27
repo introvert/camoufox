@@ -21,7 +21,7 @@ from .exceptions import (
     InvalidPropertyType,
     NonFirefoxFingerprint,
 )
-from .fingerprints import from_browserforge, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults, gpu_screen_is_plausible, is_software_renderer
+from .fingerprints import apply_mobile_mode, is_mobile_config, from_browserforge, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults, gpu_screen_is_plausible, is_software_renderer
 from .geolocation import geoip_allowed, get_geolocation
 from .ip import Proxy, public_ip, valid_ipv4, valid_ipv6
 from .locales import handle_locales
@@ -312,6 +312,9 @@ def get_target_os(config: Dict[str, Any]) -> Literal['mac', 'win', 'lin']:
 def determine_ua_os(user_agent: str) -> Literal['mac', 'win', 'lin']:
     """
     Determines the OS from the user agent string.
+
+    Android lands on "lin" deliberately: it is the closest of the bundled font,
+    voice and WebGL pools, and nothing Android-specific ships to replace them.
     """
     parsed_ua = user_agent_parser.ParseOS(user_agent).get('family')
     if not parsed_ua:
@@ -383,7 +386,7 @@ def check_valid_os(os: ListOrString) -> None:
     if not os.islower():
         raise InvalidOS(f"OS values must be lowercase: '{os}'")
     # Assert that the OS is supported by Camoufox
-    if os not in ('windows', 'macos', 'linux'):
+    if os not in ('windows', 'macos', 'linux', 'android'):
         raise InvalidOS(f"Camoufox does not support the OS: '{os}'")
 
 
@@ -645,7 +648,9 @@ def launch_options(
             Camoufox properties to use. (read https://github.com/daijro/camoufox/blob/main/README.md)
         os (Optional[ListOrString]):
             Operating system to use for the fingerprint generation.
-            Can be "windows", "macos", "linux", or a list to randomly choose from.
+            Can be "windows", "macos", "linux", "android", or a list to randomly choose from.
+            "android" generates a Firefox for Android phone and runs the browser in
+            mobile mode (touch-only pointer, touch events, meta viewport).
             Default: ["windows", "macos", "linux"]
         block_images (Optional[bool]):
             Whether to block all images.
@@ -849,6 +854,16 @@ def launch_options(
         )
 
     target_os = get_target_os(config)
+
+    # A phone -- os="android", or a caller-supplied Android user agent -- has to
+    # behave like one, not only claim it in the UA. The device pixel ratio only
+    # moves where the window has no real monitor to overflow: at a phone's 2.5-4
+    # dppx a headful window grows past any desktop screen.
+    _mobile_dpr = None
+    if is_mobile_config(config) and (headless or virtual_display):
+        _mobile_dpr = getattr(getattr(fingerprint, 'screen', None), 'devicePixelRatio', None)
+    if apply_mobile_mode(config, firefox_user_prefs, _mobile_dpr):
+        LeakWarning.warn('mobile_resources', i_know_what_im_doing)
 
     # Correct BrowserForge fingerprint inconsistencies that leak as headless /
     # impossible-geometry tells, unless the user is driving these themselves.

@@ -14,6 +14,9 @@ Most patches read config via `MaskConfig::GetBool()`, `MaskConfig::GetString()`,
 | `navigator-spoofing.patch` | Various `navigator:*` keys | Per-context navigator property spoofing |
 | `geolocation-spoofing.patch` | `geo:*` keys | Geolocation coordinate spoofing |
 | `locale-spoofing.patch` | `locale:*` keys | Language/locale spoofing |
+| `force-default-pointer.patch` | `navigator.maxTouchPoints`, `mobile` | Fixed desktop pointer/hover media features; `mobile` switches both pointer sets to Android's coarse, non-hovering touchscreen |
+| `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints`, `mobile` | Touch interfaces for a spoofed digitizer; `mobile` adds Android's legacy touch APIs (`ontouchstart`, `createTouch`) and defaults `maxTouchPoints` to 5. A Playwright `hasTouch` context reports the digitizer Juggler gives it |
+| `mobile-meta-viewport.patch` | `mobile` | Honours `<meta name="viewport">` in mobile mode, or in RDM for a Playwright `isMobile` context (Juggler sets `forceDesktopViewport` on every other page). Applies on top of `0-playwright.patch`'s disabled meta viewport |
 
 ## RoverfoxStorageManager
 

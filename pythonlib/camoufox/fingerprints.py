@@ -343,6 +343,59 @@ def fix_navigator_arch(config: Dict[str, Any], target_os: str) -> None:
         config['navigator.oscpu'] = target
 
 
+# Firefox for Android is the one Gecko that ships with "Android" in its UA
+# ("Mozilla/5.0 (Android 16; Mobile; rv:155.0) Gecko/155.0 Firefox/155.0").
+_ANDROID_UA_RE = re.compile(r'\bAndroid\b')
+
+
+def is_mobile_user_agent(user_agent: Optional[str]) -> bool:
+    """Whether `user_agent` claims Firefox for Android."""
+    return bool(user_agent and _ANDROID_UA_RE.search(user_agent))
+
+
+def is_mobile_config(config: Dict[str, Any]) -> bool:
+    """Whether `config` describes a phone.
+
+    An explicit `mobile` key wins; otherwise the user agent decides, so a
+    caller who only swaps in an Android UA still gets the rest of the phone.
+    """
+    if 'mobile' in config:
+        return bool(config['mobile'])
+    return is_mobile_user_agent(config.get('navigator.userAgent'))
+
+
+def apply_mobile_mode(
+    config: Dict[str, Any],
+    firefox_user_prefs: Dict[str, Any],
+    device_pixel_ratio: Optional[float] = None,
+) -> bool:
+    """Turn a config that claims Firefox for Android into one that behaves like it.
+
+    Returns whether the config is mobile. The user agent alone only changes
+    what the server sends back: the page then asks the browser itself, and
+    without this it answers like a desktop -- a hovering mouse, no
+    `ontouchstart`, a meta viewport that is ignored, scrollbars that take up
+    layout width, one device pixel per CSS pixel. `mobile` is the switch the
+    browser reads for the first three (force-default-pointer.patch,
+    touchscreen-fingerprint-spoofing.patch, mobile-meta-viewport.patch); the
+    other two are ordinary prefs.
+
+    setdefault throughout, so anything the caller set explicitly stays.
+    """
+    if not is_mobile_config(config):
+        return False
+    config.setdefault('mobile', True)
+    # Android draws its scrollbars over the content, so they take no width:
+    # innerWidth == documentElement.clientWidth.
+    firefox_user_prefs.setdefault('ui.useOverlayScrollbars', 1)
+    if device_pixel_ratio:
+        # A real device pixel ratio rather than window.devicePixelRatio alone,
+        # so `(resolution)` media queries, srcset and canvas backing stores
+        # agree with the number the page reads.
+        firefox_user_prefs.setdefault('layout.css.devPixelsPerPx', str(device_pixel_ratio))
+    return True
+
+
 def fix_screen_no_taskbar(config: Dict[str, Any], target_os: str) -> None:
     """Ensure screen.availHeight < screen.height so CreepJS's noTaskbar flag
     (screen.height == availHeight and screen.width == availWidth) doesn't flip.
@@ -352,7 +405,12 @@ def fix_screen_no_taskbar(config: Dict[str, Any], target_os: str) -> None:
     fingerprints with identical screen/avail values which leak as a headless
     tell. Also clamp window.outerHeight (and innerHeight) to the new avail so
     the window isn't taller than the available area.
+
+    Phones are the exception: Firefox for Android reports its whole screen as
+    available, so screen == avail is the honest value there.
     """
+    if is_mobile_config(config):
+        return
     sw = config.get('screen.width')
     sh = config.get('screen.height')
     aw = config.get('screen.availWidth')
@@ -579,7 +637,11 @@ def raise_screen_to_modern_floor(config: Dict[str, Any]) -> None:
     survives; the window box is reconciled by clamp_window_dimensions and
     clamp_window_position, which run after this. Call BEFORE
     clamp_screen_to_display so a genuinely small real monitor still wins.
+
+    Phone screens are small by design and are left alone.
     """
+    if is_mobile_config(config):
+        return
     min_w, min_h = MODERN_SCREEN_FLOOR
     sw = config.get('screen.width')
     sh = config.get('screen.height')
@@ -1074,7 +1136,9 @@ def generate_context_fingerprint(
             'width': config.get('screen.width'),
             'height': config.get('screen.height'),
             'colorDepth': config.get('screen.colorDepth'),
-            'devicePixelRatio': None,
+            # Desktop stays at 1 (see browserforge.yml); a phone at 1 dppx is
+            # the stranger claim.
+            'devicePixelRatio': fp.screen.devicePixelRatio if is_mobile_config(config) else None,
         }
         webgl = {
             'unmaskedVendor': config.get('webGl:vendor'),
@@ -1127,10 +1191,24 @@ def generate_context_fingerprint(
         context_options['user_agent'] = ua
     sw = screen.get('width')
     sh = screen.get('height')
+    mobile = is_mobile_config(config)
+    if mobile:
+        # The launch-wide `mobile` switch cannot differ per context, but
+        # Playwright's own options reach the same places through Juggler:
+        # hasTouch gives the touch-only pointer, touch events and a digitizer,
+        # isMobile the meta viewport (see mobile-meta-viewport.patch).
+        context_options['is_mobile'] = True
+        context_options['has_touch'] = True
     if sw and sh:
         context_options['viewport'] = {
             'width': sw,
-            'height': max(sh - 28, 600),
+            # A phone's browser chrome is its own business; the 600px floor is
+            # for desktop windows.
+            'height': (
+                config.get('window.innerHeight') or config.get('window.outerHeight') or sh
+                if mobile
+                else max(sh - 28, 600)
+            ),
         }
     dpr = screen.get('devicePixelRatio')
     if dpr:

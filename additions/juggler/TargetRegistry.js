@@ -445,6 +445,7 @@ export class PageTarget {
     this._linkedBrowser = tab.linkedBrowser;
     this._browserContext = browserContext;
     this._viewportSize = undefined;
+    this._viewportIsMobile = undefined;
     this._zoom = 1;
     this._initialDPPX = this._linkedBrowser.browsingContext.overrideDPPX;
     this._url = 'about:blank';
@@ -589,6 +590,7 @@ export class PageTarget {
 
   updateOverridesForBrowsingContext(browsingContext = undefined) {
     this.updateTouchOverride(browsingContext);
+    this.updateMobileOverride(browsingContext);
     this.updateUserAgent(browsingContext);
     this.updatePlatform(browsingContext);
     this.updateDPPXOverride(browsingContext);
@@ -625,7 +627,33 @@ export class PageTarget {
   }
 
   updateTouchOverride(browsingContext = undefined) {
-    (browsingContext || this._linkedBrowser.browsingContext).touchEventsOverride = this._browserContext.touchOverride ? 'enabled' : 'none';
+    browsingContext ||= this._linkedBrowser.browsingContext;
+    browsingContext.touchEventsOverride = this._browserContext.touchOverride ? 'enabled' : 'none';
+    this._updateTouchPoints(browsingContext);
+  }
+
+  // Camoufox: a touch-enabled context has to report a digitizer too, or it
+  // exposes TouchEvent and `(pointer: coarse)` next to navigator.maxTouchPoints
+  // of 0. Five is what Firefox for Android reports. The override only exists
+  // in RDM, which a Playwright viewport puts the page in, so this also runs
+  // once updateViewportSize has set inRDMPane.
+  _updateTouchPoints(browsingContext = undefined) {
+    browsingContext ||= this._linkedBrowser.browsingContext;
+    if (browsingContext.inRDMPane)
+      browsingContext.setRDMPaneMaxTouchPoints(this._browserContext.touchOverride ? 5 : 0);
+  }
+
+  // Camoufox: with a Playwright viewport the page sits in RDM, and RDM obeys
+  // <meta name="viewport"> unless forceDesktopViewport is set. So the page lays
+  // out like a phone only when its context asked for isMobile, or the whole
+  // browser runs in mobile mode; every other page keeps the desktop viewport.
+  // Mobile mode wins over the context: Playwright sends isMobile: false for
+  // every ordinary context, and forceDesktopViewport outside RDM would put the
+  // page in Gecko's fake 980px desktop mode. See mobile-meta-viewport.patch.
+  updateMobileOverride(browsingContext = undefined) {
+    const isMobile = ChromeUtils.camouGetBool('mobile', false) ||
+        !!(this._viewportIsMobile ?? this._browserContext.defaultIsMobile);
+    (browsingContext || this._linkedBrowser.browsingContext).forceDesktopViewport = !isMobile;
   }
 
   updateUserAgent(browsingContext = undefined) {
@@ -691,6 +719,7 @@ export class PageTarget {
       this._linkedBrowser.closest('.browserStack').style.setProperty('contain', 'size');
       this._linkedBrowser.closest('.browserStack').style.setProperty('scrollbar-width', 'none');
       this._linkedBrowser.browsingContext.inRDMPane = true;
+      this._updateTouchPoints();
 
       const stackRect = this._linkedBrowser.closest('.browserStack').getBoundingClientRect();
       const toolbarTop = stackRect.y;
@@ -766,8 +795,10 @@ export class PageTarget {
     await this._channel.connect('').send('setInterceptFileChooserDialog', enabled).catch(e => {});
   }
 
-  async setViewportSize(viewportSize) {
+  async setViewportSize(viewportSize, isMobile) {
     this._viewportSize = viewportSize;
+    this._viewportIsMobile = viewportSize ? isMobile : undefined;
+    this.updateMobileOverride();
     await this.updateViewportSize();
   }
 
@@ -1157,6 +1188,7 @@ class BrowserContext {
     this.downloadOptions = undefined;
     this.defaultViewportSize = undefined;
     this.deviceScaleFactor = undefined;
+    this.defaultIsMobile = undefined;
     this.defaultUserAgent = null;
     this.defaultPlatform = null;
     this.touchOverride = false;
@@ -1284,6 +1316,9 @@ class BrowserContext {
   async setDefaultViewport(viewport) {
     this.defaultViewportSize = viewport ? viewport.viewportSize : undefined;
     this.deviceScaleFactor = viewport ? viewport.deviceScaleFactor : undefined;
+    this.defaultIsMobile = viewport ? viewport.isMobile : undefined;
+    for (const page of this.pages)
+      page.updateMobileOverride();
     await Promise.all(Array.from(this.pages).map(page => page.updateViewportSize()));
   }
 

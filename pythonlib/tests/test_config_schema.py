@@ -31,8 +31,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 PROPERTIES = REPO / "settings" / "properties.json"
 
-# MaskConfig::GetBool("k") / GetString("k") / GetUint32("k") / HasKey("k") ...
-MASKCONFIG_READ = re.compile(r'MaskConfig::(?:Get|Has)\w*\(\s*"([^"]+)"')
+# MaskConfig::GetBool("k") / GetString("k") / CheckBool("k") / HasKey("k") ...
+MASKCONFIG_READ = re.compile(r'MaskConfig::(?:Get|Has|Check)\w*\(\s*"([^"]+)"')
 
 # Keys read through a variable or built at runtime rather than a string literal.
 # Add here (with a reason) only when the read genuinely cannot name its key.

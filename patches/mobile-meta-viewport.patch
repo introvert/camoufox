@@ -1,0 +1,34 @@
+diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
+--- a/layout/base/nsLayoutUtils.cpp
++++ b/layout/base/nsLayoutUtils.cpp
+@@ -10026,13 +10026,29 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
+   }
+ }
+ 
+ /* static */
+ bool nsLayoutUtils::ShouldHandleMetaViewport(const Document* aDocument) {
+   /* Playwright: disable meta viewport handling since we don't require one */
+-  if (1 == 1) return false;
++  // Camoufox: except for a phone. Firefox for Android lays every page out
++  // against its <meta name="viewport">, and mobile pages are written for it.
++  // That is the whole browser in mobile mode, or a page Juggler put in RDM
++  // for a Playwright context with isMobile -- Juggler sets
++  // forceDesktopViewport on every other page it sizes.
++  // Zooming (AllowZoomingForDocument) stays off: it would put the visual
++  // viewport at a resolution Juggler's input and screenshot coordinates do
++  // not account for. Needs APZ on the widget, like any MobileViewportManager.
++  if (1 == 1) {
++    if (MaskConfig::CheckBool("mobile")) {
++      return true;
++    }
++    BrowsingContext* top = aDocument->GetBrowsingContext()
++                               ? aDocument->GetBrowsingContext()->Top()
++                               : nullptr;
++    return top && top->InRDMPane() && !top->ForceDesktopViewport();
++  }
+ 
+   BrowsingContext* bc = aDocument->GetBrowsingContext();
+   return StaticPrefs::dom_meta_viewport_enabled() || (bc && bc->InRDMPane());
+ }
+ 
+ static nsIContent* GetOriginatingElementForScrollbarPart(

@@ -304,3 +304,26 @@ Launch a remote Playwright server.
 ## Usage
 
 All of the latest stable documentation is avaliable at [camoufox.com/python](https://camoufox.com/python).
+
+### Firefox for Android (mobile mode)
+
+Pass `os="android"` to generate a Firefox for Android phone instead of a desktop:
+
+```python
+from camoufox.sync_api import Camoufox
+
+with Camoufox(os="android", headless=True) as browser:
+    page = browser.new_page()
+    page.goto("https://www.google.com/search?q=camoufox")
+```
+
+A mobile user agent on its own only changes what the server sends. The page's scripts then ask the browser, and a desktop build answers like a desktop, so sites such as Google serve a different layout than they serve real Firefox for Android. Mobile mode (the `mobile` config key, set automatically for `os="android"` or any Android user agent) makes the browser answer like the phone:
+
+- `(pointer: coarse)` and `(hover: none)` for the primary pointer and the any- set
+- touch events with Android's legacy touch APIs (`'ontouchstart' in window`, `document.createTouch`), and `navigator.maxTouchPoints` of 5
+- `<meta name="viewport">` is obeyed. Pinch zoom stays off, so a page without the tag gets a 980px layout at 1:1 scale instead of being zoomed out to fit
+- overlay scrollbars, and the phone's device pixel ratio when headless or on a virtual display
+
+For one phone context in a desktop browser, pass `os="android"` to `AsyncNewContext`/`NewContext`. It opens the context with Playwright's `is_mobile=True` and `has_touch=True`, which give the same pointer, touch and viewport behaviour for that context only.
+
+Limitations: fonts, speech voices and the WebGL GPU come from the Linux pools, because Camoufox bundles no Android fonts and has no WebGL data for phone GPUs. `window.orientation` is compiled out of desktop Firefox and stays absent.
