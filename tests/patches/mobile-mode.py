@@ -69,6 +69,10 @@ PHONE: Dict[str, Any] = {
     # Juggler's orientation override, from the phone's taller-than-wide screen.
     "screen.orientation.type": "portrait-primary",
     "screen.orientation.angle": 0,
+    # Compiled out of desktop Firefox; window-orientation.patch exposes it for
+    # a phone and keeps it in step with screen.orientation.
+    "window.orientation": 0,
+    "'onorientationchange' in window": True,
 }
 
 DESKTOP: Dict[str, Any] = {
@@ -81,6 +85,8 @@ DESKTOP: Dict[str, Any] = {
     "(any-pointer: coarse)": False,
     "(hover: hover)": True,
     "(any-hover: hover)": True,
+    "window.orientation": None,
+    "'onorientationchange' in window": False,
 }
 
 PROBE_JS = r"""() => {
@@ -107,6 +113,8 @@ PROBE_JS = r"""() => {
     "'ontouchstart' in documentElement": "ontouchstart" in document.documentElement,
     "screen.orientation.type":           screen.orientation.type,
     "screen.orientation.angle":          screen.orientation.angle,
+    "window.orientation":                "orientation" in window ? window.orientation : null,
+    "'onorientationchange' in window":   "onorientationchange" in window,
   };
 }"""
 
@@ -187,6 +195,23 @@ async def run(binary: Path) -> bool:
             ua = await page.evaluate("() => navigator.userAgent")
             ok &= compare("mobile: user agent", {"navigator.userAgent": ua},
                           {"navigator.userAgent": ANDROID_UA})
+        finally:
+            await browser.close()
+
+        # --- mobile:zoom: a page without a meta viewport is zoomed out to fit ---
+        browser = await launch({"mobile": True, "mobile:zoom": True,
+                                "navigator.userAgent": ANDROID_UA})
+        try:
+            page = await browser.new_page(viewport=viewport)
+            await page.goto(page_with_meta(None))
+            got = await page.evaluate("""() => ({
+              "layout width, no meta tag": document.documentElement.clientWidth,
+              "zoomed out": visualViewport.scale < 1,
+            })""")
+            ok &= compare("mobile:zoom", got, {
+                "layout width, no meta tag": 980,
+                "zoomed out": True,
+            })
         finally:
             await browser.close()
 

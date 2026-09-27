@@ -38,12 +38,15 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 | `screen.colorDepth` | `24` | `screen.colorDepth` | auto |
 | `devicePixelRatio` | the device, e.g. `2.625`, `3` | pref `layout.css.devPixelsPerPx` (real: media queries and canvas agree), or `window.devicePixelRatio` (the JS value only) | auto, when headless or on a virtual display |
 | `screen.orientation.type` / `angle` | `portrait-primary` / `0` held upright | `screen.orientation` (`portrait-primary`, `landscape-primary`, ...), applied by Juggler | auto, from the screen's shape |
-| `window.orientation` | `0` | cannot be set: compiled out of desktop Firefox (`#if defined(MOZ_WIDGET_ANDROID)` in `Window.webidl`) | absent |
+| `window.orientation` / `onorientationchange` | `0` / present | compiled out of desktop Firefox; `window-orientation.patch` builds it everywhere and exposes it where the page is a phone (`mobile`, or an `is_mobile` context), following `screen.orientation` | auto |
 | `(pointer: coarse)`, `(hover: none)` | true, for the primary pointer and the any- set | `mobile`, or a `has_touch` context | auto |
 | `'ontouchstart' in window`, `document.createTouch` | true (legacy touch APIs are on only on Android) | `mobile`, or a `has_touch` context | auto |
 | `TouchEvent` | `function` | `mobile`, `has_touch`, or `navigator.maxTouchPoints` > 0 | auto |
 | `ondevicemotion`, `ondeviceorientation` | present | present on desktop too | present |
 | `<meta name="viewport">` | obeyed | `mobile`, or an `is_mobile` context | auto |
+| Pages without a meta viewport | laid out 980px wide and zoomed out to fit | `mobile:zoom: true` zooms out like Android. Off by default: Juggler's click and screenshot coordinates do not account for the zoom, so a zoomed-out page can mis-click | 980px wide at 1:1 |
+| `navigator.doNotTrack` + `DNT` header | `unspecified`, no header | `navigator.doNotTrack` (`"1"`, `"0"`, `"unspecified"`); the header is sent only for `"1"` | Firefox default |
+| `navigator.globalPrivacyControl` + `Sec-GPC` header | `false`, no header, outside private browsing | `navigator.globalPrivacyControl`; window, workers and header move together | Firefox default |
 | WebGL vendor / renderer | the device GPU, sanitized, e.g. `Qualcomm` / `Adreno (TM) 650, or similar` | `webGl:vendor` / `webGl:renderer`, or `webgl_config=`. Camoufox has no parameter data for phone GPUs: the strings are set and the rest of WebGL is the host's, with a warning | a Linux desktop GPU, with a warning |
 | WebGL default antialias | off (`webgl.default-antialias`) | pref `webgl.default-antialias` | auto |
 | `AudioContext().sampleRate` | the device, usually `48000` | `AudioContext:sampleRate` | host |

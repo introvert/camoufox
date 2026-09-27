@@ -108,13 +108,9 @@ def test_known_previously_missing_keys_stay_declared(key):
 
 
 # Declared in settings/properties.json but read by nothing in patches/ or
-# additions/, so setting them does nothing. Recorded rather than fixed:
-# navigator.doNotTrack is written as "1" by from_browserforge for every
-# profile, so a reader would switch DNT on for all of them; the rest are not
-# fingerprint surfaces a page reads directly. Shrink this list as they get a
-# reader; never grow it.
+# additions/, so setting them does nothing. None of these is a surface a page
+# reads directly. Shrink this list as they get a reader; never grow it.
 KNOWN_UNREAD = {
-    "navigator.doNotTrack",
     "webrtc:localipv4",
     "webrtc:localipv6",
     "canvas:seed",
@@ -167,6 +163,9 @@ def test_every_declared_key_is_read():
         "navigator.buildID",
         "navigator.cookieEnabled",
         "navigator.onLine",
+        "navigator.doNotTrack",
+        "navigator.globalPrivacyControl",
+        "mobile:zoom",
     ],
 )
 def test_new_keys_are_declared_and_read(key):

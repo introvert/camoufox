@@ -36,6 +36,7 @@
     "navigator.hardwareConcurrency": "int[>0]",
     "navigator.maxTouchPoints": "int[>=0]",
     "mobile": "bool",
+    "mobile:zoom": "bool",
     "screen.orientation": "str[portrait-primary, portrait-secondary, landscape-primary, landscape-secondary]",
     "navigator.cookieEnabled": "bool",
     "navigator.globalPrivacyControl": "bool",

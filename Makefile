@@ -12,7 +12,7 @@ pacman := python python-pip p7zip go msitools wget aria2 sqlite
         build-launcher check-arch revert edits run bootstrap mozbootstrap dir \
         package-linux package-macos package-windows vcredist_arch patch unpatch \
         workspace check-arg edit-cfg ff-dbg tests update-ubo-assets generate-assets-car \
-        setup-macos-sdk
+        setup-macos-sdk sync build-js build-cpp verify-patches
 
 help:
 	@echo "Available targets:"
@@ -27,6 +27,10 @@ help:
 	@echo "  clean           - Remove build artifacts"
 	@echo "  distclean       - Remove everything including downloads"
 	@echo "  build           - Build Camoufox"
+	@echo "  sync            - Copy additions/ and settings/ into the source without re-patching"
+	@echo "  build-js        - sync, then rebuild only JS/prefs/Juggler (./mach build faster)"
+	@echo "  build-cpp       - Rebuild only compiled code (./mach build binaries)"
+	@echo "  verify-patches  - Check the patch stack applies to clean Firefox source (no make dir)"
 	@echo "  set-target      - Change the build target with BUILD_TARGET"
 	@echo "  setup-macos-sdk - Download the macOS SDK for cross-compilation"
 	@echo "  package-linux   - Package Camoufox for Linux"
@@ -141,6 +145,21 @@ build: unbusy
 		make dir; \
 	fi
 	cd $(cf_source_dir) && ./mach build $(_ARGS)
+
+# Fast paths for iterating on a prepared source dir. `make dir` re-applies every
+# patch; these skip that. Juggler, settings and other additions are copied files,
+# not patches, so `sync` + `build-js` picks them up in seconds.
+sync:
+	cd $(cf_source_dir) && bash ../scripts/copy-additions.sh $(version) $(release)
+
+build-js: sync
+	cd $(cf_source_dir) && ./mach build faster
+
+build-cpp:
+	cd $(cf_source_dir) && ./mach build binaries
+
+verify-patches:
+	python3 scripts/patchstack.py verify $(if $(filter true,$(compare)),--compare,)
 
 edits:
 	python3 ./scripts/developer.py $(version) $(release)

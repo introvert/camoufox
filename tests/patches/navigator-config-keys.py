@@ -28,6 +28,8 @@ SET: Dict[str, Any] = {
     "navigator.cookieEnabled": False,
     "navigator.onLine": False,
     "navigator.languages": ["de-DE", "de", "en"],
+    "navigator.doNotTrack": "1",
+    "navigator.globalPrivacyControl": True,
 }
 
 # What Gecko reports on a page when nothing is set.
@@ -40,11 +42,13 @@ GECKO_DEFAULTS: Dict[str, Any] = {
     "navigator.buildID": "20181001000000",
     "navigator.cookieEnabled": True,
     "navigator.onLine": True,
+    "navigator.doNotTrack": "unspecified",
+    "navigator.globalPrivacyControl": False,
 }
 
 # Workers expose only some of these.
 WORKER_KEYS = ("navigator.appCodeName", "navigator.appName", "navigator.product",
-               "navigator.onLine", "navigator.languages")
+               "navigator.onLine", "navigator.languages", "navigator.globalPrivacyControl")
 
 WINDOW_JS = r"""() => ({
   "navigator.appCodeName": navigator.appCodeName,
@@ -56,6 +60,8 @@ WINDOW_JS = r"""() => ({
   "navigator.cookieEnabled": navigator.cookieEnabled,
   "navigator.onLine": navigator.onLine,
   "navigator.languages": Array.from(navigator.languages),
+  "navigator.doNotTrack": navigator.doNotTrack,
+  "navigator.globalPrivacyControl": navigator.globalPrivacyControl,
 })"""
 
 WORKER_JS = r"""() => new Promise(resolve => {
@@ -65,6 +71,7 @@ WORKER_JS = r"""() => new Promise(resolve => {
     "navigator.product": navigator.product,
     "navigator.onLine": navigator.onLine,
     "navigator.languages": Array.from(navigator.languages),
+    "navigator.globalPrivacyControl": navigator.globalPrivacyControl,
   })`;
   const w = new Worker(URL.createObjectURL(new Blob([src], {type: "text/javascript"})));
   w.onmessage = e => resolve(e.data);
@@ -90,10 +97,20 @@ async def probe(binary: Path, config: Dict[str, Any]):
         try:
             page = await browser.new_page()
             # A real https origin: cookieEnabled is false on an opaque data: one.
-            await page.route("https://probe.test/**", lambda route: route.fulfill(
-                status=200, content_type="text/html", body="<p>probe</p>"))
+            headers: Dict[str, str] = {}
+
+            async def serve(route):
+                headers.update(await route.request.all_headers())
+                await route.fulfill(status=200, content_type="text/html", body="<p>probe</p>")
+
+            await page.route("https://probe.test/**", serve)
             await page.goto("https://probe.test/")
-            return await page.evaluate(WINDOW_JS), await page.evaluate(WORKER_JS)
+            window = await page.evaluate(WINDOW_JS)
+            # The headers the page's own request went out with, beside the JS.
+            window["header DNT"] = headers.get("dnt")
+            window["header Sec-GPC"] = headers.get("sec-gpc")
+            window["header Accept-Language"] = headers.get("accept-language", "").split(",")[0]
+            return window, await page.evaluate(WORKER_JS)
         finally:
             await browser.close()
 
@@ -120,11 +137,20 @@ async def main() -> int:
 
     ok = True
     window, worker = await probe(binary, SET)
-    ok &= compare("set: window", window, SET)
+    ok &= compare("set: window", window, {
+        **SET,
+        "header DNT": "1",
+        "header Sec-GPC": "1",
+        "header Accept-Language": "de-DE",
+    })
     ok &= compare("set: worker", worker, {k: SET[k] for k in WORKER_KEYS})
 
     window, worker = await probe(binary, {})
-    ok &= compare("unset: window keeps Gecko's values", window, GECKO_DEFAULTS)
+    ok &= compare("unset: window keeps Gecko's values", window, {
+        **GECKO_DEFAULTS,
+        "header DNT": None,
+        "header Sec-GPC": None,
+    })
     ok &= compare("unset: worker matches the window", worker,
                   {k: window[k] for k in WORKER_KEYS})
 

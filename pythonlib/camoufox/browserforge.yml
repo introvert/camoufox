@@ -5,7 +5,10 @@ navigator:
   # The version will be replaced in Camoufox.
   userAgent: navigator.userAgent
   # userAgentData not in Firefox
-  doNotTrack: navigator.doNotTrack
+  # doNotTrack is left to Firefox's default ("unspecified", no DNT header):
+  # BrowserForge draws "1" for nearly every profile, which no current Firefox
+  # ships with. Set navigator.doNotTrack by hand to change it; the DNT header
+  # follows (privacy-signals-spoofing.patch).
   appCodeName: navigator.appCodeName
   appName: navigator.appName
   appVersion: navigator.appVersion
@@ -25,7 +28,10 @@ navigator:
   maxTouchPoints: navigator.maxTouchPoints
   extraProperties:
     # Note: Changing pdfViewerEnabled is not recommended. This will be kept to True.
-    globalPrivacyControl: navigator.globalPrivacyControl
+    # globalPrivacyControl is left to Firefox's default (false outside private
+    # browsing). Mapping BrowserForge's draw set it only in workers, so a worker
+    # said true while the window said false and no Sec-GPC header went out.
+    # Set navigator.globalPrivacyControl by hand to change all three.
 
 screen:
   # hasHDR is not implemented in Camoufox

@@ -14,6 +14,7 @@
   { "property": "navigator.vendor", "type": "str" },
   { "property": "navigator.maxTouchPoints", "type": "uint" },
   { "property": "mobile", "type": "bool" },
+  { "property": "mobile:zoom", "type": "bool" },
   { "property": "screen.orientation", "type": "str" },
   { "property": "navigator.cookieEnabled", "type": "bool" },
   { "property": "navigator.globalPrivacyControl", "type": "bool" },

@@ -69,3 +69,22 @@ class TestNavigatorPlugins:
         config, prefs = launch(os='windows', config={'navigator.plugins': False})
         assert config['navigator.plugins'] is False
         assert 'pdfjs.disabled' not in prefs
+
+
+class TestPrivacySignals:
+    """doNotTrack and globalPrivacyControl are Firefox's own unless the caller
+    sets them; BrowserForge's draw ("1" / true) is no longer copied in."""
+
+    def test_generated_profiles_leave_them_to_firefox(self):
+        for os_name in ('windows', 'macos', 'linux', 'android'):
+            config, _ = launch(os=os_name)
+            assert 'navigator.doNotTrack' not in config
+            assert 'navigator.globalPrivacyControl' not in config
+
+    def test_caller_values_are_passed_through(self):
+        config, _ = launch(
+            os='windows',
+            config={'navigator.doNotTrack': '1', 'navigator.globalPrivacyControl': True},
+        )
+        assert config['navigator.doNotTrack'] == '1'
+        assert config['navigator.globalPrivacyControl'] is True

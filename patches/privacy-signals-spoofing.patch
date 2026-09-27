@@ -1,0 +1,95 @@
+diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
+--- a/dom/base/Navigator.cpp
++++ b/dom/base/Navigator.cpp
+@@ -780,20 +780,31 @@ void Navigator::GetBuildID(nsAString& aBuildID, CallerType aCallerType,
+ 
+   aBuildID.Truncate();
+   AppendASCIItoUTF16(buildID, aBuildID);
+ }
+ 
+ void Navigator::GetDoNotTrack(nsAString& aResult) {
++  // Camoufox: navigator.doNotTrack and the DNT header (nsHttpChannel) answer
++  // from the same config value, as they answer from the same pref in Gecko.
++  if (auto value = MaskConfig::GetString("navigator.doNotTrack")) {
++    aResult.Assign(NS_ConvertUTF8toUTF16(value.value()));
++    return;
++  }
+   if (StaticPrefs::privacy_donottrackheader_enabled()) {
+     aResult.AssignLiteral("1");
+   } else {
+     aResult.AssignLiteral("unspecified");
+   }
+ }
+ 
+ bool Navigator::GlobalPrivacyControl() {
++  // Camoufox: the window, workers (WorkerNavigator) and the Sec-GPC header
++  // (nsHttpChannel) all answer from navigator.globalPrivacyControl.
++  if (auto value = MaskConfig::GetBool("navigator.globalPrivacyControl")) {
++    return value.value();
++  }
+   bool gpcStatus = StaticPrefs::privacy_globalprivacycontrol_enabled();
+   if (!gpcStatus) {
+     nsCOMPtr<nsILoadContext> loadContext = do_GetInterface(mWindow);
+     gpcStatus = loadContext && loadContext->UsePrivateBrowsing() &&
+                 StaticPrefs::privacy_globalprivacycontrol_pbmode_enabled();
+   }
+diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsHttpChannel.cpp
+--- a/netwerk/protocol/http/nsHttpChannel.cpp
++++ b/netwerk/protocol/http/nsHttpChannel.cpp
+@@ -2,12 +2,14 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ // HttpLog.h should generally be included first
+ #include "nsHttpChannel.h"
+ 
++#include "MaskConfig.hpp"
++
+ #include <inttypes.h>
+ 
+ #include "AlternateServices.h"
+ #include "CacheControlParser.h"
+ #include "CacheStorageService.h"
+ #include "CookieService.h"
+@@ -12055,22 +12057,41 @@ void nsHttpChannel::SetOriginHeader() {
+ 
+ void nsHttpChannel::SetDoNotTrack() {
+   /**
+    * 'DoNotTrack' header should be added if 'privacy.donottrackheader.enabled'
+    * is true.
+    */
++  // Camoufox: follows navigator.doNotTrack when it is set. Only "1" sends the
++  // header; Firefox never sends DNT: 0.
++  if (auto value = MaskConfig::GetString("navigator.doNotTrack")) {
++    if (value.value() == "1") {
++      DebugOnly<nsresult> rv =
++          mRequestHead.SetHeader(nsHttp::DoNotTrack, "1"_ns, false);
++      MOZ_ASSERT(NS_SUCCEEDED(rv));
++    }
++    return;
++  }
+   if (StaticPrefs::privacy_donottrackheader_enabled()) {
+     DebugOnly<nsresult> rv =
+         mRequestHead.SetHeader(nsHttp::DoNotTrack, "1"_ns, false);
+     MOZ_ASSERT(NS_SUCCEEDED(rv));
+   }
+ }
+ 
+ void nsHttpChannel::SetGlobalPrivacyControl() {
+   MOZ_ASSERT(NS_IsMainThread(), "Must be called on the main thread");
+ 
++  // Camoufox: follows navigator.globalPrivacyControl when it is set.
++  if (auto value = MaskConfig::GetBool("navigator.globalPrivacyControl")) {
++    if (value.value()) {
++      DebugOnly<nsresult> rv =
++          mRequestHead.SetHeader(nsHttp::GlobalPrivacyControl, "1"_ns, false);
++    }
++    return;
++  }
++
+   if (StaticPrefs::privacy_globalprivacycontrol_functionality_enabled() &&
+       (StaticPrefs::privacy_globalprivacycontrol_enabled() ||
+        (StaticPrefs::privacy_globalprivacycontrol_pbmode_enabled() &&
+         NS_UsePrivateBrowsing(this)))) {
+     // Send the header with a value of 1 to indicate opting-out
+     DebugOnly<nsresult> rv =

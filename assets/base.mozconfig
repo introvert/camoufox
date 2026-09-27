@@ -29,10 +29,19 @@ ac_add_options --with-unsigned-addon-scopes=app,system
 
 ac_add_options --enable-bootstrap
 
-# Use ccache for faster incremental rebuilds if available
-if command -v ccache >/dev/null 2>&1; then
+# Compiler cache for faster rebuilds. sccache first: it caches Rust as well as
+# C/C++, and Rust (gkrust and friends) is a large share of a Firefox build that
+# ccache always recompiles. `mach bootstrap` installs it under ~/.mozbuild,
+# where --enable-bootstrap finds it. ccache is the fallback.
+if command -v sccache >/dev/null 2>&1 || [ -x "$HOME/.mozbuild/sccache/sccache" ]; then
+  ac_add_options --with-ccache=sccache
+elif command -v ccache >/dev/null 2>&1; then
   ac_add_options --with-ccache=ccache
 fi
+# The defaults (ccache 5G, sccache 10G) evict a single Firefox configuration
+# before the next build can reuse it.
+export CCACHE_MAXSIZE=${CCACHE_MAXSIZE:-20G}
+export SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-20G}
 
 export MOZ_REQUIRE_SIGNING=
 
