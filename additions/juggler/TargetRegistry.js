@@ -650,13 +650,19 @@ export class PageTarget {
   // laid out before its viewport arrived (the initial about:blank that
   // set_content() writes into) would keep ignoring its meta viewport.
   // forceDesktopViewport's setter is what rebuilds it.
-  _afterRDMChange() {
+  //
+  // Only on entering RDM, and only for a per-context phone: in mobile mode the
+  // meta viewport never depended on RDM, and every rebuild fires resize events
+  // and resets any zoom.
+  _afterRDMChange(wasInRDM) {
     const browsingContext = this._linkedBrowser.browsingContext;
-    if (this._isMobile()) {
+    if (!wasInRDM && browsingContext.inRDMPane && this._isMobile() &&
+        !ChromeUtils.camouGetBool('mobile', false)) {
       browsingContext.forceDesktopViewport = true;
       browsingContext.forceDesktopViewport = false;
     }
-    this.updateOrientationOverride(browsingContext);
+    if (wasInRDM !== browsingContext.inRDMPane)
+      this.updateOrientationOverride(browsingContext);
   }
 
   _isMobile() {
@@ -687,12 +693,18 @@ export class PageTarget {
         type = size.width > size.height ? 'landscape-primary' : 'portrait-primary';
     }
     if (type) {
-      // The angles Android reports for each orientation.
-      const angles = {
+      // A phone's natural orientation is portrait and a desktop's landscape,
+      // so the same type sits at a different angle on each.
+      const angles = this._isMobile() ? {
         'portrait-primary': 0,
         'landscape-primary': 90,
         'portrait-secondary': 180,
         'landscape-secondary': 270,
+      } : {
+        'landscape-primary': 0,
+        'portrait-primary': 90,
+        'landscape-secondary': 180,
+        'portrait-secondary': 270,
       };
       browsingContext.setOrientationOverride(type, angles[type] ?? 0);
       this._orientationOverridden = true;
@@ -764,8 +776,9 @@ export class PageTarget {
       this._linkedBrowser.closest('.browserStack').style.setProperty('overflow', 'auto');
       this._linkedBrowser.closest('.browserStack').style.setProperty('contain', 'size');
       this._linkedBrowser.closest('.browserStack').style.setProperty('scrollbar-width', 'none');
+      const wasInRDM = this._linkedBrowser.browsingContext.inRDMPane;
       this._linkedBrowser.browsingContext.inRDMPane = true;
-      this._afterRDMChange();
+      this._afterRDMChange(wasInRDM);
 
       const stackRect = this._linkedBrowser.closest('.browserStack').getBoundingClientRect();
       const toolbarTop = stackRect.y;
@@ -779,8 +792,9 @@ export class PageTarget {
       this._linkedBrowser.closest('.browserStack').style.removeProperty('overflow');
       this._linkedBrowser.closest('.browserStack').style.removeProperty('contain');
       this._linkedBrowser.closest('.browserStack').style.removeProperty('scrollbar-width');
+      const wasInRDM = this._linkedBrowser.browsingContext.inRDMPane;
       this._linkedBrowser.browsingContext.inRDMPane = false;
-      this._afterRDMChange();
+      this._afterRDMChange(wasInRDM);
 
       const actualSize = this._linkedBrowser.getBoundingClientRect();
       await this._channel.connect('').send('awaitViewportDimensions', {

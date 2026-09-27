@@ -150,7 +150,7 @@ build: unbusy
 # patch; these skip that. Juggler, settings and other additions are copied files,
 # not patches, so `sync` + `build-js` picks them up in seconds.
 sync:
-	cd $(cf_source_dir) && bash ../scripts/copy-additions.sh $(version) $(release)
+	python3 scripts/sync-additions.py $(cf_source_dir)
 
 build-js: sync
 	cd $(cf_source_dir) && ./mach build faster

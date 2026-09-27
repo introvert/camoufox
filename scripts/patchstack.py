@@ -5,7 +5,8 @@ Work on the patch stack without a full `make dir`.
     python3 scripts/patchstack.py verify [--compare]
         Replay every patch, in the order patch.py applies them, onto clean
         upstream copies of just the files the stack touches. Fails on any patch
-        that does not apply cleanly (rejects or fuzz). Takes seconds, where
+        that does not apply (rejects), and lists the hunks that only applied
+        with fuzz, as patch.py allows them too. Takes seconds, where
         `make dir` re-extracts and re-patches the whole tree. --compare also
         checks the result against the prepared source dir, byte for byte, which
         catches a tree edit that never made it into a patch.
@@ -173,10 +174,15 @@ def verify(compare: bool) -> int:
 
     if compare:
         tree = source_dir()
-        differ = [f for f in files if os.path.exists(os.path.join(root, f))
-                  and not filecmp.cmp(os.path.join(root, f), os.path.join(tree, f), shallow=False)]
-        for f in differ:
-            print(f'DIFF {f}: the source dir holds edits no patch records')
+        differ = []
+        for f in files:
+            replayed, actual = os.path.join(root, f), os.path.join(tree, f)
+            if os.path.exists(replayed) != os.path.exists(actual):
+                differ.append((f, 'exists on one side only'))
+            elif os.path.exists(replayed) and not filecmp.cmp(replayed, actual, shallow=False):
+                differ.append((f, 'the source dir holds edits no patch records'))
+        for f, why in differ:
+            print(f'DIFF {f}: {why}')
         failures += len(differ)
     return 1 if failures else 0
 
@@ -207,13 +213,17 @@ def regen(patch_path: str) -> int:
     out = ''
     for f in files:
         old = os.path.join(base, f) if os.path.exists(os.path.join(base, f)) else '/dev/null'
+        new = os.path.join(tree, f) if os.path.exists(os.path.join(tree, f)) else '/dev/null'
+        # --no-color / --no-ext-diff: a user's color.ui=always or diff.external
+        # would otherwise end up inside the patch.
         d = subprocess.run(
-            ['git', 'diff', '--no-index', '--diff-algorithm=patience', '-U6', old, os.path.join(tree, f)],
+            ['git', '-c', 'core.quotepath=off', 'diff', '--no-index', '--no-color',
+             '--no-ext-diff', '--diff-algorithm=patience', '-U6', old, new],
             capture_output=True, text=True,
         ).stdout
         d = re.sub(r'(?m)^diff --git .*$', f'diff --git a/{f} b/{f}', d, count=1)
         d = re.sub(r'(?m)^--- (?!/dev/null).*$', f'--- a/{f}', d, count=1)
-        d = re.sub(r'(?m)^\+\+\+ .*$', f'+++ b/{f}', d, count=1)
+        d = re.sub(r'(?m)^\+\+\+ (?!/dev/null).*$', f'+++ b/{f}', d, count=1)
         d = re.sub(r'(?m)^index .*\n', '', d)
         out += d
     with open(target, 'w', encoding='utf-8') as fh:

@@ -1080,6 +1080,7 @@ def generate_context_fingerprint(
     timezone: Optional[str] = None,
     locale: Optional[str] = None,
     config_overrides: Optional[Dict[str, Any]] = None,
+    i_know_what_im_doing: bool = False,
 ) -> Dict[str, Any]:
     """
     Generate fingerprint values for a single per-context identity.
@@ -1098,6 +1099,7 @@ def generate_context_fingerprint(
         config_overrides: Dict of CAMOU_CONFIG keys to override after config
             is built but before init_script is rendered. Useful for disabling
             perturbation (e.g. {'fonts:spacing_seed': 0}).
+        i_know_what_im_doing: Silences the Android-resources warning.
     """
     if preset is not None:
         # Use real fingerprint preset
@@ -1248,7 +1250,7 @@ def generate_context_fingerprint(
             context_options['is_mobile'] = True
         from ._warnings import LeakWarning
 
-        LeakWarning.warn('mobile_resources', False)
+        LeakWarning.warn('mobile_resources', i_know_what_im_doing)
         if sw and sh:
             # Juggler reads the screen size to report screen.orientation.
             context_options['screen'] = {'width': sw, 'height': sh}

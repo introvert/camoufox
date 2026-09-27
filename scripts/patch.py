@@ -68,6 +68,11 @@ class Patcher:
             if options.mozconfig_only:
                 # Only the build target changes: leave the applied patches, the
                 # additions and the object directory exactly as they are.
+                # _update_mozconfig builds from mozconfig.backup, which a full
+                # run's `git clean` removes; drop it here too, or edits to
+                # base.mozconfig never reach the new mozconfig.
+                if os.path.exists('mozconfig.backup'):
+                    os.remove('mozconfig.backup')
                 run('cp -v ../assets/base.mozconfig mozconfig')
                 print(f'Using target: {self.moz_target}')
                 self._update_mozconfig()
@@ -148,7 +153,8 @@ class Patcher:
         # --binary flag: preserve line endings (helps with CRLF vs LF differences)
         # -l flag: ignore whitespace differences
         result = subprocess.run(
-            ['patch', '-p1', '--forward', '-l', '--binary', '-i', patch_file],
+            ['patch', '-p1', '--forward', '-l', '--binary', '--no-backup-if-mismatch',
+             '-i', patch_file],
             stdin=sys.stdin,
             stdout=sys.stdout,
             stderr=sys.stderr,
