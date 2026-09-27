@@ -22,6 +22,7 @@ What PASS means:
     * contexts sharing one proxy host with different usernames each reach the
       proxy as themselves, concurrently;
     * a wrong password never loads a page;
+    * every relay is released once its browser or context closes;
     * the proxy only ever sees hostnames, never pre-resolved addresses.
 """
 
@@ -204,8 +205,29 @@ async def main() -> int:
             await ctx.close()
 
     from camoufox.socks import _manager
-    # Launch-level relays live for the process; context relays close with their context.
-    check("relays left after contexts closed", str(_manager.active()), "2")
+
+    async def settled(want: int) -> str:
+        # Relays stop on the relay thread, shortly after the close event.
+        for _ in range(50):
+            if _manager.active() == want:
+                break
+            await asyncio.sleep(0.1)
+        return str(_manager.active())
+
+    check("relays left after every browser and context closed", await settled(0), "0")
+
+    print("closing the browser with its contexts still open")
+    async with AsyncCamoufox(
+        **launch_kwargs(proxy={"server": server, "username": "user2", "password": users["user2"]})
+    ) as browser:
+        ctx = await AsyncNewContext(
+            browser, proxy={"server": server, "username": "user3", "password": users["user3"]},
+            webrtc_ip="1.2.3.4", timezone_id="UTC",
+        )
+        check("context", await title_of(await ctx.new_page(), "http://open.camoufox.test/"),
+              "user3@open.camoufox.test")
+        check("relays while open", str(_manager.active()), "2")
+    check("relays left after browser closed", await settled(0), "0")
 
     resolved = [host for _, host in socks.log if not host.endswith(".camoufox.test")]
     check("proxy only saw hostnames", repr(resolved), "[]")

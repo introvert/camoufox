@@ -12,7 +12,7 @@ from camoufox.virtdisplay import VirtualDisplay
 
 from .fingerprints import generate_context_fingerprint
 from .ip import resolve_proxy_geo
-from .socks import prepare_proxy
+from .socks import needs_relay, prepare_proxy, release_relay
 from .utils import (
     attach_no_viewport_default,
     launch_options,
@@ -105,6 +105,9 @@ def NewBrowser(
     else:
         virtual_display = None
 
+    # A relay launch_options starts for an authenticated SOCKS5 proxy is ours to
+    # release when the browser goes away; one in caller-built options is not.
+    owns_relay = not from_options and needs_relay(kwargs.get('proxy'))
     if not from_options:
         from_options = launch_options(headless=headless, debug=debug, **kwargs)
 
@@ -116,11 +119,25 @@ def NewBrowser(
     if persistent_context:
         if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
             from_options = {**from_options, 'no_viewport': True}
-        context = playwright.firefox.launch_persistent_context(**from_options)
+        try:
+            context = playwright.firefox.launch_persistent_context(**from_options)
+        except BaseException:
+            if owns_relay:
+                release_relay(from_options.get('proxy'))
+            raise
+        if owns_relay:
+            context.on('close', lambda _: release_relay(from_options.get('proxy')))
         return sync_attach_vd(context, virtual_display)
 
     # Browser
-    browser = playwright.firefox.launch(**from_options)
+    try:
+        browser = playwright.firefox.launch(**from_options)
+    except BaseException:
+        if owns_relay:
+            release_relay(from_options.get('proxy'))
+        raise
+    if owns_relay:
+        browser.on('disconnected', lambda _: release_relay(from_options.get('proxy')))
     if no_viewport_default:
         attach_no_viewport_default(browser)
     return sync_attach_vd(browser, virtual_display)

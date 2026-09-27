@@ -9,6 +9,7 @@ import asyncio
 import json
 import socket
 import threading
+import time
 from typing import Dict, List, Tuple
 
 import pytest
@@ -21,6 +22,7 @@ from camoufox.socks import (
     needs_relay,
     normalize_proxy,
     prepare_proxy,
+    release_relay,
     requests_proxy_url,
 )
 
@@ -188,9 +190,61 @@ def test_relay_is_shared_and_reference_counted(upstream):
     release_b()
     release_c()
     assert _manager.active() == before
-    port = int(a['server'].rsplit(':', 1)[1])
-    with pytest.raises(OSError):
-        socket.create_connection(('127.0.0.1', port), timeout=2).close()
+    assert_closed(a['server'])
+
+
+def assert_closed(server: str) -> None:
+    """The listener stops asynchronously; give it a moment."""
+    port = int(server.rsplit(':', 1)[1])
+    for _ in range(50):
+        try:
+            socket.create_connection(('127.0.0.1', port), timeout=1).close()
+        except OSError:
+            return
+        time.sleep(0.05)
+    pytest.fail(f"relay {server} still accepting connections")
+
+
+def open_tunnel(server: str) -> socket.socket:
+    """A CONNECT through the relay that is then left idle, like a keep-alive connection."""
+    port = int(server.rsplit(':', 1)[1])
+    sock = socket.create_connection(('127.0.0.1', port), timeout=5)
+    sock.sendall(b'\x05\x01\x00')
+    assert sock.recv(2) == b'\x05\x00'
+    host = b'idle.camoufox.test'
+    sock.sendall(b'\x05\x01\x00\x03' + bytes([len(host)]) + host + b'\x00\x50')
+    assert sock.recv(10)[:2] == b'\x05\x00'
+    return sock
+
+
+def test_release_does_not_wait_for_open_tunnels(upstream):
+    # Server.wait_closed() waits for open connections since Python 3.12, which
+    # made context.close() hang on any idle keep-alive tunnel.
+    proxy, release = prepare_proxy(
+        {'server': f'socks5://127.0.0.1:{upstream.port}', 'username': 'bob', 'password': 'hunter2'}
+    )
+    tunnel = open_tunnel(proxy['server'])
+    started = time.monotonic()
+    release()
+    assert time.monotonic() - started < 1
+    assert_closed(proxy['server'])
+    # ...and the open tunnel is dropped with it.
+    tunnel.settimeout(5)
+    assert tunnel.recv(1) == b''
+    tunnel.close()
+
+
+def test_release_relay_by_server(upstream):
+    before = _manager.active()
+    proxy, _ = prepare_proxy(
+        {'server': f'socks5://127.0.0.1:{upstream.port}', 'username': 'alice', 'password': 'p@ss:w/rd'}
+    )
+    assert _manager.active() == before + 1
+    release_relay(proxy)
+    release_relay({'server': 'http://unrelated:1'})
+    release_relay(None)
+    assert _manager.active() == before
+    assert_closed(proxy['server'])
 
 
 def test_relay_reports_bad_credentials(upstream):

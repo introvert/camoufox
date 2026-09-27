@@ -22,7 +22,7 @@ import asyncio
 import socket
 import threading
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Set, Tuple
 from urllib.parse import quote, unquote, urlparse
 
 from .exceptions import InvalidProxy
@@ -213,15 +213,17 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
                 break
             writer.write(data)
             await writer.drain()
-    except (OSError, asyncio.IncompleteReadError):
-        pass
-    finally:
-        # Half-close so the other direction can finish sending.
-        try:
-            if writer.can_write_eof():
-                writer.write_eof()
-        except OSError:
-            pass
+    except OSError:
+        # A reset on either side: drop the writer too, so the opposite
+        # direction's read ends instead of idling on a dead tunnel.
+        writer.close()
+        return
+    # Clean EOF: half-close so the other direction can finish sending.
+    try:
+        if writer.can_write_eof():
+            writer.write_eof()
+    except OSError:
+        writer.close()
 
 
 class SocksRelay:
@@ -233,6 +235,7 @@ class SocksRelay:
         self.upstream = upstream
         self._loop = loop
         self._server: Optional[asyncio.AbstractServer] = None
+        self._connections: Set[asyncio.StreamWriter] = set()
         self.port = 0
 
     async def start(self) -> None:
@@ -240,9 +243,16 @@ class SocksRelay:
         self.port = self._server.sockets[0].getsockname()[1]
 
     async def stop(self) -> None:
+        """
+        Stops listening and drops every open tunnel. Not waiting on
+        `Server.wait_closed()`: since Python 3.12 it waits for all connections
+        to end, which an idle keep-alive tunnel may never do.
+        """
         if self._server:
             self._server.close()
-            await self._server.wait_closed()
+        for writer in list(self._connections):
+            writer.close()
+        self._connections.clear()
 
     @property
     def server(self) -> str:
@@ -250,6 +260,7 @@ class SocksRelay:
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         upstream_writer = None
+        self._connections.add(writer)
         try:
             try:
                 atyp, address = await asyncio.wait_for(
@@ -262,6 +273,7 @@ class SocksRelay:
                 writer.write(_reply(e.reply))
                 await writer.drain()
                 return
+            self._connections.add(upstream_writer)
             writer.write(reply)
             await writer.drain()
             await asyncio.gather(_pipe(reader, upstream_writer), _pipe(up_reader, writer))
@@ -270,6 +282,7 @@ class SocksRelay:
         finally:
             for w in (writer, upstream_writer):
                 if w is not None:
+                    self._connections.discard(w)
                     w.close()
 
     @staticmethod
@@ -317,6 +330,11 @@ class _RelayManager:
     def _run(self, coro):
         return asyncio.run_coroutine_threadsafe(coro, self._ensure_loop()).result()
 
+    def _submit(self, coro) -> None:
+        # Fire and forget: release() is called from Playwright event handlers,
+        # which must not block on the relay's loop.
+        asyncio.run_coroutine_threadsafe(coro, self._ensure_loop())
+
     def acquire(self, upstream: Upstream) -> SocksRelay:
         with self._lock:
             entry = self._relays.get(upstream)
@@ -339,7 +357,18 @@ class _RelayManager:
                 self._relays[upstream] = (relay, refs - 1)
                 return
             del self._relays[upstream]
-            self._run(relay.stop())
+            self._submit(relay.stop())
+
+    def release_server(self, server: str) -> bool:
+        """Releases one reference to the relay listening at `server`, if any."""
+        with self._lock:
+            upstream = next(
+                (u for u, (relay, _) in self._relays.items() if relay.server == server), None
+            )
+        if upstream is None:
+            return False
+        self.release(upstream)
+        return True
 
     def active(self) -> int:
         with self._lock:
@@ -399,3 +428,12 @@ def requests_proxy_url(proxy: Dict[str, str]) -> str:
             creds += ':' + quote(pwd, safe='')
         netloc = f'{creds}@{netloc}'
     return f'{scheme}://{netloc}'
+
+
+def release_relay(proxy: Optional[Dict[str, str]]) -> None:
+    """
+    Releases the relay a proxy dict from `prepare_proxy` / `launch_options` points
+    at. A no-op for any other proxy.
+    """
+    if proxy and proxy.get('server'):
+        _manager.release_server(proxy['server'])

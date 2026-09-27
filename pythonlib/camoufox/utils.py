@@ -1171,8 +1171,10 @@ def launch_options(
     # Thanks @coryking
     if proxy is not None:
         # An authenticated SOCKS5 proxy goes through a local relay (see socks.py),
-        # since Playwright rejects SOCKS5 credentials. The relay lives as long as
-        # this process: launch options carry no handle to release it with.
+        # since Playwright rejects SOCKS5 credentials. NewBrowser releases it when
+        # the browser closes; a caller launching from these options directly can
+        # call camoufox.socks.release_relay(options['proxy']), or it lives as long
+        # as the process.
         result["proxy"], _ = prepare_proxy(proxy)
 
     return result
