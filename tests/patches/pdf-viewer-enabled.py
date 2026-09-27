@@ -1,7 +1,8 @@
 """
 Verify pdf-viewer-spoofing.patch: `pdfViewerEnabled` in the config sets
 navigator.pdfViewerEnabled, and navigator.plugins / navigator.mimeTypes follow
-it, both to true and to false.
+it, both to true and to false. `navigator.plugins` in the config moves the two
+lists on their own, for testing one half without the other.
 
 The HTML spec ties the three together. With a viewer, a browser exposes five
 hard-coded plugins ("PDF Viewer", "Chrome PDF Viewer", ...) and two MIME types
@@ -109,6 +110,15 @@ async def main() -> int:
                   await probe(binary, {}, {"pdfjs.disabled": False}), WITH_VIEWER)
     ok &= compare("unset: follows pdfjs.disabled = true",
                   await probe(binary, {}, {"pdfjs.disabled": True}), WITHOUT_VIEWER)
+
+    # navigator.plugins alone moves the plugin and MIME lists, never the flag.
+    ok &= compare("navigator.plugins false, viewer on",
+                  await probe(binary, {"navigator.plugins": False}, {"pdfjs.disabled": False}),
+                  {**WITHOUT_VIEWER, "navigator.pdfViewerEnabled": True})
+    ok &= compare("navigator.plugins true, pdfViewerEnabled false",
+                  await probe(binary, {"navigator.plugins": True, "pdfViewerEnabled": False},
+                              {"pdfjs.disabled": True}),
+                  {**WITH_VIEWER, "navigator.pdfViewerEnabled": False})
 
     print("\nPASS" if ok else "\nFAIL: see the rows marked FAIL above.")
     return 0 if ok else 1

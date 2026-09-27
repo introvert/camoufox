@@ -51,6 +51,7 @@
   { "property": "webrtc:localipv4", "type": "str" },
   { "property": "webrtc:localipv6", "type": "str" },
   { "property": "pdfViewerEnabled", "type": "bool" },
+  { "property": "navigator.plugins", "type": "bool" },
   { "property": "battery:charging", "type": "bool" },
   { "property": "battery:chargingTime", "type": "double" },
   { "property": "battery:dischargingTime", "type": "double" },

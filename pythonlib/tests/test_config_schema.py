@@ -105,3 +105,62 @@ def test_known_previously_missing_keys_stay_declared(key):
         f"{key} is read by the browser but is not declared in "
         f"settings/properties.json -- see PR #562"
     )
+
+
+# Declared in settings/properties.json but read by nothing in patches/ or
+# additions/, so setting them does nothing. Recorded rather than fixed: wiring
+# any of these up changes the fingerprint of every existing profile that sets
+# them (from_browserforge already sets several). Shrink this list as they get
+# a reader; never grow it.
+KNOWN_UNREAD = {
+    "navigator.doNotTrack",
+    "navigator.appCodeName",
+    "navigator.appName",
+    "navigator.languages",
+    "navigator.product",
+    "navigator.productSub",
+    "navigator.cookieEnabled",
+    "navigator.buildID",
+    "navigator.onLine",
+    "webrtc:localipv4",
+    "webrtc:localipv6",
+    "canvas:seed",
+    "canvas:aaOffset",
+    "canvas:aaCapOffset",
+    "memorysaver",
+}
+
+
+def _named_in_sources(key: str, text: str) -> bool:
+    # Some keys are read through a helper or a table rather than a direct
+    # MaskConfig::Get call, so any quoted mention counts as a reader.
+    return f'"{key}"' in text or f"'{key}'" in text
+
+
+def test_every_declared_key_is_read():
+    """The other direction: pdfViewerEnabled was declared for years while no
+    patch read it, so `config={"pdfViewerEnabled": False}` silently did
+    nothing and navigator.plugins could not be tested at all."""
+    text = ""
+    for path in _sources():
+        try:
+            text += path.read_text(errors="ignore")
+        except OSError:
+            continue
+
+    unread = sorted(
+        k for k in _declared_keys() if k not in KNOWN_UNREAD and not _named_in_sources(k, text)
+    )
+    assert not unread, (
+        "declared in settings/properties.json but read by no patch or addition, "
+        f"so setting them does nothing: {unread}"
+    )
+
+    now_read = sorted(k for k in KNOWN_UNREAD if _named_in_sources(k, text))
+    assert not now_read, f"these now have a reader; drop them from KNOWN_UNREAD: {now_read}"
+
+
+@pytest.mark.parametrize("key", ["pdfViewerEnabled", "navigator.plugins", "mobile"])
+def test_new_keys_are_declared_and_read(key):
+    assert key in _declared_keys()
+    assert key in _keys_read(), f"{key} is declared but no MaskConfig call reads it"

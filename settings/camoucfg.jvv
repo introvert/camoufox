@@ -40,6 +40,7 @@
     "navigator.onLine": "bool",
     "window.history.length": "int[>=0]",
     "pdfViewerEnabled": "bool",
+    "navigator.plugins": "bool",
     
     "window.outerHeight$__W_OUTER": "int[>0]",
     "window.outerWidth$__W_OUTER": "int[>0]",

@@ -35,3 +35,37 @@ class TestPdfViewerEnabled:
             firefox_user_prefs={'pdfjs.disabled': False},
         )
         assert prefs['pdfjs.disabled'] is False
+
+
+class TestNavigatorPlugins:
+    """navigator.plugins overrides the plugin/MIME lists alone, for testing one
+    half without the other; a pairing no real Firefox has is warned about."""
+
+    @pytest.mark.parametrize(
+        'config',
+        [
+            {'navigator.plugins': True},
+            {'navigator.plugins': True, 'pdfViewerEnabled': True},
+            {'navigator.plugins': False, 'pdfViewerEnabled': False},
+        ],
+    )
+    def test_consistent_pairings_are_quiet(self, config, recwarn):
+        launch(os='windows', config=config, i_know_what_im_doing=False)
+        assert not [w for w in recwarn if 'navigator.plugins disagrees' in str(w.message)]
+
+    @pytest.mark.parametrize(
+        'config',
+        [
+            {'navigator.plugins': False},
+            {'navigator.plugins': False, 'pdfViewerEnabled': True},
+            {'navigator.plugins': True, 'pdfViewerEnabled': False},
+        ],
+    )
+    def test_contradictions_are_warned(self, config, recwarn):
+        launch(os='windows', config=config, i_know_what_im_doing=False)
+        assert [w for w in recwarn if 'navigator.plugins disagrees' in str(w.message)]
+
+    def test_plugins_alone_leaves_the_viewer_alone(self):
+        config, prefs = launch(os='windows', config={'navigator.plugins': False})
+        assert config['navigator.plugins'] is False
+        assert 'pdfjs.disabled' not in prefs

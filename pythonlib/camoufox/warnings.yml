@@ -74,3 +74,9 @@ mobile_resources: >-
     because Camoufox bundles no Android fonts and has no WebGL data for phone GPUs.
     Pages that fingerprint those will not see an Android device. The layout-facing
     signals (user agent, pointer, touch, viewport, screen) do match Firefox for Android.
+
+plugins_pdf_mismatch: >-
+    navigator.plugins disagrees with pdfViewerEnabled. Firefox exposes its five PDF plugins
+    and two PDF MIME types exactly when it has a PDF viewer, so this pairing does not exist
+    on any real Firefox and a page can see the contradiction. Leave navigator.plugins unset
+    to have it follow pdfViewerEnabled.

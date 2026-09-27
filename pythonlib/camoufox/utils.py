@@ -1020,6 +1020,13 @@ def launch_options(
     # rendering them inline, as a browser without one does.
     if isinstance(config.get('pdfViewerEnabled'), bool):
         firefox_user_prefs.setdefault('pdfjs.disabled', not config['pdfViewerEnabled'])
+    # navigator.plugins exists to test one half on its own. Every real Firefox
+    # exposes the PDF plugins exactly when it has a viewer (camoufox.cfg ships
+    # one), so any other pairing is a lie a page can read in two properties.
+    if isinstance(config.get('navigator.plugins'), bool) and config['navigator.plugins'] != (
+        config.get('pdfViewerEnabled', True) is not False
+    ):
+        LeakWarning.warn('plugins_pdf_mismatch', i_know_what_im_doing)
 
     # Set Firefox user preferences
     if block_images:
