@@ -110,6 +110,14 @@ export function initialize(browsingContext, docShell) {
     },
 
     async awaitViewportDimensions({width, height}) {
+      // Camoufox: when window.innerWidth/innerHeight are pinned by the fingerprint config,
+      // nsGlobalWindowInner::GetInnerWidth/Height return the MaskConfig value unconditionally,
+      // so `docShell.domWindow.innerWidth` never changes to match a freshly-requested viewport.
+      // The wait below then never resolves and Browser.newPage() hangs whenever a full window
+      // profile (inner + outer) is spoofed (regression on the FF152 base; see #612 / #279).
+      // The dimensions are fixed by config, so there is nothing to await — resolve immediately.
+      if (ChromeUtils.camouGetInt('window.innerWidth') || ChromeUtils.camouGetInt('window.innerHeight'))
+        return;
       await new Promise(resolve => {
         const listeners = [];
         const check = () => {
