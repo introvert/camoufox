@@ -111,9 +111,6 @@
     "webGl:shaderPrecisionFormats:blockIfNotDefined": "bool",
     "webGl2:shaderPrecisionFormats:blockIfNotDefined": "bool",
 
-    "webGl:contextAttributes": "@WEBGL_CONTEXT_ATTRIBUTES",
-    "webGl2:contextAttributes": "@WEBGL_CONTEXT_ATTRIBUTES",
-
     "@WEBGL_PARAMS": {
         "2849": "int",
         "2884": "bool",
@@ -270,17 +267,6 @@
             "*rangeMax": "int[>=0]",
             "*precision": "int[>=0]"
         }
-    },
-
-    "@WEBGL_CONTEXT_ATTRIBUTES": {
-        "alpha": "bool",
-        "antialias": "bool",
-        "depth": "bool",
-        "failIfMajorPerformanceCaveat": "bool",
-        "powerPreference": "str[low, high, default]",
-        "premultipliedAlpha": "bool",
-        "preserveDrawingBuffer": "bool",
-        "stencil": "bool"
     },
 
     "canvas:aaOffset": "int",

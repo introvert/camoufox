@@ -1,0 +1,624 @@
+diff --git a/dom/base/ChromeUtils.cpp b/dom/base/ChromeUtils.cpp
+--- a/dom/base/ChromeUtils.cpp
++++ b/dom/base/ChromeUtils.cpp
+@@ -2834,13 +2834,13 @@ void ChromeUtils::CamouGetMouseTrajectory(GlobalObject& aGlobal, long aFromX,
+ // above are listed. Kept next to the seal because the seal is the only place
+ // that needs the names as a set -- each manager otherwise knows only its own.
+ static const char* const kCamouFingerprintSetters[] = {
+     "setNavigatorPlatform", "setNavigatorOscpu",
+     "setNavigatorHardwareConcurrency", "setNavigatorUserAgent",
+     "setScreenDimensions", "setScreenColorDepth",
+-    "setWebGLVendor", "setWebGLRenderer",
++    "setWebGLVendor", "setWebGLRenderer", "setWebGLParameters",
+     "setWebRTCIPv4", "setWebRTCIPv6",
+     "setFontList", "setFontSpacingSeed",
+     "setAudioFingerprintSeed", "setSpeechVoices",
+     "setTimezone",
+ };
+ 
+@@ -2865,13 +2865,13 @@ void ChromeUtils::CamouSealFingerprintSetters(GlobalObject& aGlobal,
+   // Close every Func= gate on this window, whether or not the matching setter
+   // was ever called. The window goes back to the state it was created in.
+   win->SealCamouSetters();
+ 
+   // Closing the gate alone is not enough. These names are handed out lazily by
+   // the DOM resolve hook, and the generated init script materialises all
+-  // fifteen with its `typeof w.setX === "function"` probe before deciding
++  // setters with its `typeof w.setX === "function"` probe before deciding
+   // which to call -- so a name may already be sitting on the global. Delete
+   // those; the closed gate is what stops the hook offering them again.
+   if (!win->HasJSGlobal()) {
+     return;
+   }
+   AutoJSAPI jsapi;
+diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
+--- a/dom/base/Navigator.cpp
++++ b/dom/base/Navigator.cpp
+@@ -346,12 +346,24 @@ void Navigator::GetAppCodeName(nsAString& aAppCodeName, ErrorResult& aRv) {
+ 
+   CopyASCIItoUTF16(appName, aAppCodeName);
+ }
+ 
+ void Navigator::GetAppVersion(nsAString& aAppVersion, CallerType aCallerType,
+                               ErrorResult& aRv) const {
++  // Camoufox: a per-context user agent brings its own appVersion
++  if (mWindow) {
++    uint32_t userContextId = 0;
++    if (BrowsingContext* bc = mWindow->GetBrowsingContext()) {
++      userContextId = bc->OriginAttributesRef().mUserContextId;
++    }
++    nsAutoString stored;
++    if (NavigatorManager::GetUserAgent(userContextId, stored) &&
++        NavigatorManager::AppVersionFromUserAgent(stored, aAppVersion)) {
++      return;
++    }
++  }
+   // Camoufox: global config fallback for appVersion
+   if (auto value = MaskConfig::GetString("navigator.appVersion")) {
+     aAppVersion.Assign(NS_ConvertUTF8toUTF16(value.value()));
+     return;
+   }
+   nsCOMPtr<Document> doc = mWindow->GetExtantDoc();
+@@ -394,13 +406,14 @@ void Navigator::GetAcceptLanguages(nsTArray<nsString>& aLanguages,
+ 
+   aLanguages.Clear();
+ 
+   // E.g. "de-de, en-us,en".
+   nsAutoCString acceptLang;
+   if (aLanguageOverride && !aLanguageOverride->IsEmpty()) {
+-    acceptLang.Assign(aLanguageOverride->get());
++    // Camoufox: the language list a Firefox set to this locale reports.
++    NavigatorManager::ExpandLanguageOverride(*aLanguageOverride, acceptLang);
+   } else {
+     intl::LocaleService::GetInstance()->GetAcceptLanguages(acceptLang);
+   }
+ 
+   // Split values on commas.
+   for (nsDependentCSubstring lang :
+diff --git a/dom/base/NavigatorManager.cpp b/dom/base/NavigatorManager.cpp
+--- a/dom/base/NavigatorManager.cpp
++++ b/dom/base/NavigatorManager.cpp
+@@ -84,8 +84,74 @@ bool NavigatorManager::IsUaFunctionEnabledForWebIDL(JSContext* aCx,
+   if (BrowsingContext* bc = win->GetBrowsingContext()) {
+     id = bc->OriginAttributesRef().mUserContextId;
+   }
+   return !IsDisabled("nav_ua", id);
+ }
+ 
++/* static */
++bool NavigatorManager::AppVersionFromUserAgent(const nsAString& aUserAgent,
++                                               nsAString& aOut) {
++  constexpr auto kPrefix = u"Mozilla/5.0 ("_ns;
++  if (!StringBeginsWith(aUserAgent, kPrefix)) {
++    return false;
++  }
++  int32_t close = aUserAgent.FindChar(u')', kPrefix.Length());
++  if (close < 0) {
++    return false;
++  }
++  const nsDependentSubstring block =
++      Substring(aUserAgent, kPrefix.Length(), close - kPrefix.Length());
++
++  nsAutoString kept;
++  for (const nsAString& rawToken : block.Split(u';')) {
++    nsAutoString token(rawToken);
++    token.Trim(" ");
++    if (token.IsEmpty() || StringBeginsWith(token, u"rv:"_ns) ||
++        token.EqualsLiteral("Win64") || token.EqualsLiteral("x64") ||
++        token.EqualsLiteral("Mobile") || token.EqualsLiteral("Tablet") ||
++        StringBeginsWith(token, u"Linux "_ns) ||
++        StringBeginsWith(token, u"Intel Mac OS X"_ns)) {
++      continue;
++    }
++    if (StringBeginsWith(token, u"Windows"_ns)) {
++      token.AssignLiteral(u"Windows");
++    }
++    if (!kept.IsEmpty()) {
++      kept.AppendLiteral(u"; ");
++    }
++    kept.Append(token);
++  }
++  if (kept.IsEmpty()) {
++    return false;
++  }
++  aOut.AssignLiteral(u"5.0 (");
++  aOut.Append(kept);
++  aOut.Append(u')');
++  return true;
++}
++
++/* static */
++void NavigatorManager::ExpandLanguageOverride(const nsACString& aOverride,
++                                              nsACString& aOut) {
++  aOut.Assign(aOverride);
++  if (aOverride.FindChar(',') != kNotFound) {
++    return;
++  }
++  int32_t dash = aOverride.FindChar('-');
++  if (dash > 0) {
++    aOut.AppendLiteral(", ");
++    aOut.Append(Substring(aOverride, 0, dash));
++  }
++}
++
++/* static */
++bool NavigatorManager::GetUserAgentForRequest(uint32_t aId, nsACString& aOut) {
++  nsAutoString stored;
++  if (!GetUserAgent(aId, stored) || stored.IsEmpty()) {
++    return false;
++  }
++  CopyUTF16toUTF8(stored, aOut);
++  return true;
++}
++
+ }  // namespace dom
+ }  // namespace mozilla
+diff --git a/dom/base/NavigatorManager.h b/dom/base/NavigatorManager.h
+--- a/dom/base/NavigatorManager.h
++++ b/dom/base/NavigatorManager.h
+@@ -86,12 +86,36 @@ class NavigatorManager {
+     key.AppendPrintf("nav_ua_%u", aId);
+     return RoverfoxStorageManager::GetString(key, aOut);
+   }
+ 
+   static bool IsUaFunctionEnabledForWebIDL(JSContext* aCx, JSObject* aObj);
+ 
++  // The appVersion Firefox reports for a browser that sends `aUserAgent`:
++  // "5.0 (<OS tokens>)", the parenthesised part of the UA without rv, the
++  // architecture or the Windows build ("5.0 (Windows)", "5.0 (Macintosh)",
++  // "5.0 (X11)", "5.0 (Android 16)"). False if the UA has no such part.
++  // A per-context user agent brings its own, or appVersion keeps naming the
++  // launch's OS next to it.
++  static bool AppVersionFromUserAgent(const nsAString& aUserAgent,
++                                      nsAString& aOut);
++
++  // The per-context user agent of the user context `aId`, if one was set.
++  // For callers with no window -- worker and service worker requests -- who
++  // otherwise send the launch-wide one.
++  static bool GetUserAgentForRequest(uint32_t aId, nsACString& aOut);
++
++  // The language list behind a per-context locale override (Playwright's
++  // `locale`, which Juggler sets as the browsing context's languageOverride).
++  // Firefox used the override verbatim, so a context created with "de-DE"
++  // sent "Accept-Language: de-DE" and reported navigator.languages
++  // ["de-DE"]; a Firefox set to that locale lists the language without the
++  // region too. Same rule as the launch-wide locale (locale-spoofing.patch):
++  // "de-DE" -> "de-DE, de". A list (with commas) is kept as given.
++  static void ExpandLanguageOverride(const nsACString& aOverride,
++                                     nsACString& aOut);
++
+ };
+ 
+ }  // namespace dom
+ }  // namespace mozilla
+ 
+ #endif  // mozilla_dom_NavigatorManager_h
+diff --git a/dom/base/WebGLParamsManager.cpp b/dom/base/WebGLParamsManager.cpp
+--- a/dom/base/WebGLParamsManager.cpp
++++ b/dom/base/WebGLParamsManager.cpp
+@@ -46,12 +46,48 @@ bool WebGLParamsManager::GetRenderer(uint32_t aId, nsAString& aOut) {
+ }
+ 
+ void WebGLParamsManager::DisableVendorFunction(uint32_t aId) {
+   RoverfoxStorageManager::PutBool(VendorDisabledKey(aId), true);
+ }
+ 
++nsString WebGLParamsManager::ParametersDisabledKey(uint32_t aId) {
++  nsAutoString key;
++  key.AppendPrintf("webgl_pd_%u", aId);
++  return key;
++}
++
++void WebGLParamsManager::SetParameters(uint32_t aId, const nsAString& aJson) {
++  nsAutoString key;
++  key.AppendPrintf("webgl_params_%u", aId);
++  RoverfoxStorageManager::PutString(key, aJson);
++}
++
++bool WebGLParamsManager::GetParameters(uint32_t aId, nsAString& aOut) {
++  nsAutoString key;
++  key.AppendPrintf("webgl_params_%u", aId);
++  return RoverfoxStorageManager::GetString(key, aOut);
++}
++
++void WebGLParamsManager::DisableParametersFunction(uint32_t aId) {
++  RoverfoxStorageManager::PutBool(ParametersDisabledKey(aId), true);
++}
++
++bool WebGLParamsManager::IsParametersFunctionEnabledForWebIDL(JSContext* aCx,
++                                                               JSObject* aObj) {
++  nsGlobalWindowInner* win = xpc::WindowOrNull(aObj);
++  if (!win) return false;
++  if (win->CamouSettersSealed()) return false;
++  uint32_t id = 0;
++  if (BrowsingContext* bc = win->GetBrowsingContext()) {
++    id = bc->OriginAttributesRef().mUserContextId;
++  }
++  bool disabled = false;
++  RoverfoxStorageManager::GetBool(ParametersDisabledKey(id), disabled);
++  return !disabled;
++}
++
+ void WebGLParamsManager::DisableRendererFunction(uint32_t aId) {
+   RoverfoxStorageManager::PutBool(RendererDisabledKey(aId), true);
+ }
+ 
+ bool WebGLParamsManager::IsVendorFunctionEnabledForWebIDL(JSContext* aCx,
+                                                            JSObject* aObj) {
+diff --git a/dom/base/WebGLParamsManager.h b/dom/base/WebGLParamsManager.h
+--- a/dom/base/WebGLParamsManager.h
++++ b/dom/base/WebGLParamsManager.h
+@@ -13,20 +13,30 @@ namespace dom {
+ class WebGLParamsManager {
+  public:
+   static void SetVendor(uint32_t aId, const nsAString& aValue);
+   static bool GetVendor(uint32_t aId, nsAString& aOut);
+   static void SetRenderer(uint32_t aId, const nsAString& aValue);
+   static bool GetRenderer(uint32_t aId, nsAString& aOut);
++  // The whole WebGL persona as JSON ("webGl:parameters",
++  // "webGl:supportedExtensions", "webGl:shaderPrecisionFormats", ...,
++  // "webGl:vendor", "webGl:renderer"), so a context's limits and extensions
++  // describe the same GPU as its renderer string.
++  static void SetParameters(uint32_t aId, const nsAString& aJson);
++  static bool GetParameters(uint32_t aId, nsAString& aOut);
++  static void DisableParametersFunction(uint32_t aId);
++  static bool IsParametersFunctionEnabledForWebIDL(JSContext* aCx,
++                                                   JSObject* aObj);
+   static void DisableVendorFunction(uint32_t aId);
+   static void DisableRendererFunction(uint32_t aId);
+   static bool IsVendorFunctionEnabledForWebIDL(JSContext* aCx, JSObject* aObj);
+   static bool IsRendererFunctionEnabledForWebIDL(JSContext* aCx,
+                                                   JSObject* aObj);
+  private:
+   static nsString VendorDisabledKey(uint32_t aId);
+   static nsString RendererDisabledKey(uint32_t aId);
++  static nsString ParametersDisabledKey(uint32_t aId);
+ };
+ 
+ }  // namespace dom
+ }  // namespace mozilla
+ 
+ #endif  // mozilla_dom_WebGLParamsManager_h
+diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
+--- a/dom/base/nsGlobalWindowInner.cpp
++++ b/dom/base/nsGlobalWindowInner.cpp
+@@ -8145,16 +8145,15 @@ void nsGlobalWindowInner::SetSpeechVoices(const nsAString& aVoices,
+ void nsGlobalWindowInner::SetWebGLVendor(const nsAString& vendor,
+                                           ErrorResult& aRv) {
+   uint32_t userContextId = 0;
+   if (BrowsingContext* bc = GetBrowsingContext()) {
+     userContextId = bc->OriginAttributesRef().mUserContextId;
+   }
++  // Only this context's: copying it into the default context (0) handed one
++  // context's GPU to every context that had not set its own.
+   WebGLParamsManager::SetVendor(userContextId, vendor);
+-  if (userContextId != 0) {
+-    WebGLParamsManager::SetVendor(0, vendor);
+-  }
+   WebGLParamsManager::DisableVendorFunction(userContextId);
+   // Self-destruct: only remove setWebGLVendor (renderer must remain callable)
+   if (JSContext* cx = nsContentUtils::GetCurrentJSContext()) {
+     JS::Rooted<JSObject*> global(cx, JS::CurrentGlobalOrNull(cx));
+     if (global) {
+       JS::Rooted<JS::Value> undef(cx, JS::UndefinedValue());
+@@ -8168,27 +8167,42 @@ void nsGlobalWindowInner::SetWebGLRenderer(const nsAString& renderer,
+                                             ErrorResult& aRv) {
+   uint32_t userContextId = 0;
+   if (BrowsingContext* bc = GetBrowsingContext()) {
+     userContextId = bc->OriginAttributesRef().mUserContextId;
+   }
+   WebGLParamsManager::SetRenderer(userContextId, renderer);
+-  if (userContextId != 0) {
+-    WebGLParamsManager::SetRenderer(0, renderer);
+-  }
+   WebGLParamsManager::DisableRendererFunction(userContextId);
+   // Self-destruct: only remove setWebGLRenderer (vendor must remain callable)
+   if (JSContext* cx = nsContentUtils::GetCurrentJSContext()) {
+     JS::Rooted<JSObject*> global(cx, JS::CurrentGlobalOrNull(cx));
+     if (global) {
+       JS::Rooted<JS::Value> undef(cx, JS::UndefinedValue());
+       JS_SetProperty(cx, global, "setWebGLRenderer", undef);
+       JS_DeleteProperty(cx, global, "setWebGLRenderer");
+     }
+   }
+ }
+ 
++void nsGlobalWindowInner::SetWebGLParameters(const nsAString& parameters,
++                                              ErrorResult& aRv) {
++  uint32_t userContextId = 0;
++  if (BrowsingContext* bc = GetBrowsingContext()) {
++    userContextId = bc->OriginAttributesRef().mUserContextId;
++  }
++  WebGLParamsManager::SetParameters(userContextId, parameters);
++  WebGLParamsManager::DisableParametersFunction(userContextId);
++  if (JSContext* cx = nsContentUtils::GetCurrentJSContext()) {
++    JS::Rooted<JSObject*> global(cx, JS::CurrentGlobalOrNull(cx));
++    if (global) {
++      JS::Rooted<JS::Value> undef(cx, JS::UndefinedValue());
++      JS_SetProperty(cx, global, "setWebGLParameters", undef);
++      JS_DeleteProperty(cx, global, "setWebGLParameters");
++    }
++  }
++}
++
+ RefPtr<GenericPromise> nsGlobalWindowInner::StorageAccessPermissionChanged(
+     bool aGranted) {
+   // Invalidate cached StorageAllowed field so that calls to GetLocalStorage
+   // give us the updated localStorage object.
+   ClearStorageAllowedCache();
+ 
+diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
+--- a/dom/base/nsGlobalWindowInner.h
++++ b/dom/base/nsGlobalWindowInner.h
+@@ -748,12 +748,14 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+   // Per-context speech voices
+   void SetSpeechVoices(const nsAString& aVoices, mozilla::ErrorResult& aRv);
+ 
+   // Per-context WebGL parameter spoofing
+   void SetWebGLVendor(const nsAString& vendor, mozilla::ErrorResult& aRv);
+   void SetWebGLRenderer(const nsAString& renderer, mozilla::ErrorResult& aRv);
++  void SetWebGLParameters(const nsAString& parameters,
++                          mozilla::ErrorResult& aRv);
+ 
+  public:
+   void Alert(nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aError);
+   void Alert(const nsAString& aMessage, nsIPrincipal& aSubjectPrincipal,
+              mozilla::ErrorResult& aError);
+   bool Confirm(const nsAString& aMessage, nsIPrincipal& aSubjectPrincipal,
+diff --git a/dom/canvas/CanvasRenderingContext2D.cpp b/dom/canvas/CanvasRenderingContext2D.cpp
+--- a/dom/canvas/CanvasRenderingContext2D.cpp
++++ b/dom/canvas/CanvasRenderingContext2D.cpp
+@@ -4788,12 +4788,25 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor final
+         if (nsPIDOMWindowInner* win = doc->GetInnerWindow()) {
+           if (BrowsingContext* bc = win->GetBrowsingContext()) {
+             userContextId = bc->OriginAttributesRef().mUserContextId;
+           }
+         }
+       }
++    } else if (mCtx && mCtx->mOffscreenCanvas) {
++      // An OffscreenCanvas measures and draws text with its own context's
++      // spacing seed too, or measureText() differs between an HTML canvas
++      // and an OffscreenCanvas on the same page.
++      nsCOMPtr<nsPIDOMWindowInner> win =
++          do_QueryInterface(mCtx->mOffscreenCanvas->GetParentObject());
++      if (win) {
++        if (BrowsingContext* bc = win->GetBrowsingContext()) {
++          userContextId = bc->OriginAttributesRef().mUserContextId;
++        }
++      } else if (WorkerPrivate* wp = GetCurrentThreadWorkerPrivate()) {
++        userContextId = wp->GetOriginAttributes().mUserContextId;
++      }
+     }
+     mTextRun = mFontgrp->MakeTextRun(
+         aText, aLength, mDrawTarget, mAppUnitsPerDevPixel, flags,
+         nsTextFrameUtils::Flags::DontSkipDrawingForPendingUserFonts,
+         mMissingFonts.get(), userContextId);
+     pfl->Unlock();
+diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.cpp
+--- a/dom/canvas/ClientWebGLContext.cpp
++++ b/dom/canvas/ClientWebGLContext.cpp
+@@ -5,14 +5,18 @@
+ #include "ClientWebGLContext.h"
+ #include "MaskConfig.hpp"
+ #include "WebGLParamsManager.h"
+ #include "mozilla/dom/BrowsingContext.h"
+ #include "mozilla/dom/Document.h"
+ #include "mozilla/dom/WorkerPrivate.h"
++#include "mozilla/StaticMutex.h"
+ #include "nsPIDOMWindow.h"
+ #include <algorithm>
++#include <memory>
++#include <string_view>
++#include <unordered_map>
+ 
+ #include <fmt/format.h>
+ 
+ #include <bitset>
+ 
+ #include "ClientWebGLExtensions.h"
+@@ -806,16 +810,53 @@ uint32_t ClientWebGLContext::GetUserContextId() const {
+       }
+     }
+   }
+   return 0;
+ }
+ 
+-// The JSON object holding this context's WebGL persona ("webGl:..." keys).
+-static const nlohmann::json& MaskRootFor(
+-    [[maybe_unused]] uint32_t aUserContextId) {
+-  return MaskConfig::GetJson();
++// The JSON object holding this context's WebGL persona ("webGl:..." keys):
++// the record window.setWebGLParameters() stored for its user context, else
++// the launch-wide CAMOU_CONFIG.
++//
++// Each record is parsed once per process and kept for the process lifetime,
++// and a user context without one is remembered too: getParameter() runs in
++// render loops, and the storage read behind a miss can be a sync IPC. The
++// setter runs from the context's init script, before any page script can
++// create a WebGL context, so a miss is not cached ahead of its record.
++static const nlohmann::json& MaskRootFor(uint32_t aUserContextId) {
++  static StaticMutex sMutex MOZ_UNANNOTATED;
++  // Intentionally leaked: references into it are handed out.
++  static auto* sRecords =
++      new std::unordered_map<uint32_t, std::unique_ptr<nlohmann::json>>();
++  {
++    StaticMutexAutoLock lock(sMutex);
++    auto found = sRecords->find(aUserContextId);
++    if (found != sRecords->end()) {
++      return found->second ? *found->second : MaskConfig::GetJson();
++    }
++  }
++
++  std::unique_ptr<nlohmann::json> record;
++  nsAutoString stored;
++  if (WebGLParamsManager::GetParameters(aUserContextId, stored)) {
++    NS_ConvertUTF16toUTF8 utf8(stored);
++    std::string_view text(utf8.get(), utf8.Length());
++    if (nlohmann::json::accept(text)) {
++      auto parsed = nlohmann::json::parse(text);
++      if (parsed.is_object()) {
++        record = std::make_unique<nlohmann::json>(std::move(parsed));
++      }
++    } else {
++      printf_stderr("ERROR: invalid JSON passed to setWebGLParameters\n");
++    }
++  }
++
++  StaticMutexAutoLock lock(sMutex);
++  auto [entry, inserted] =
++      sRecords->try_emplace(aUserContextId, std::move(record));
++  return entry->second ? *entry->second : MaskConfig::GetJson();
+ }
+ 
+ std::optional<std::string> ClientWebGLContext::SpoofedRenderer() const {
+   nsAutoString stored;
+   if (WebGLParamsManager::GetRenderer(GetUserContextId(), stored)) {
+     return std::string(NS_ConvertUTF16toUTF8(stored).get());
+diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
+--- a/dom/webidl/Window.webidl
++++ b/dom/webidl/Window.webidl
+@@ -1034,12 +1034,18 @@ partial interface Window {
+ // Per-context WebGL renderer spoofing
+ partial interface Window {
+   [Throws, Func="mozilla::dom::WebGLParamsManager::IsRendererFunctionEnabledForWebIDL"]
+   undefined setWebGLRenderer(DOMString renderer);
+ };
+ 
++// Per-context WebGL persona: limits, extensions, precision formats (JSON)
++partial interface Window {
++  [Throws, Func="mozilla::dom::WebGLParamsManager::IsParametersFunctionEnabledForWebIDL"]
++  undefined setWebGLParameters(DOMString parameters);
++};
++
+ dictionary WindowPostMessageOptions : StructuredSerializeOptions {
+   USVString targetOrigin = "/";
+ };
+ 
+ // https://wicg.github.io/cookie-store/#Window
+ [SecureContext]
+diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
+--- a/dom/workers/WorkerNavigator.cpp
++++ b/dom/workers/WorkerNavigator.cpp
+@@ -169,12 +169,22 @@ void WorkerNavigator::SetLanguages(const nsTArray<nsString>& aLanguages) {
+   mProperties.mLanguages = aLanguages.Clone();
+ }
+ 
+ void WorkerNavigator::GetAppVersion(nsString& aAppVersion,
+                                     CallerType aCallerType,
+                                     ErrorResult& aRv) const {
++  // Camoufox: a per-context user agent brings its own appVersion
++  if (WorkerPrivate* wp = GetCurrentThreadWorkerPrivate()) {
++    nsAutoString stored;
++    if (mozilla::dom::NavigatorManager::GetUserAgent(
++            wp->GetOriginAttributes().mUserContextId, stored) &&
++        mozilla::dom::NavigatorManager::AppVersionFromUserAgent(stored,
++                                                                aAppVersion)) {
++      return;
++    }
++  }
+   if (auto value = MaskConfig::GetString("navigator.appVersion"))
+     return aAppVersion.Assign(NS_ConvertUTF8toUTF16(value.value()));
+   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+   MOZ_ASSERT(workerPrivate);
+ 
+   if (aCallerType != CallerType::System) {
+diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/HttpBaseChannel.cpp
+--- a/netwerk/protocol/http/HttpBaseChannel.cpp
++++ b/netwerk/protocol/http/HttpBaseChannel.cpp
+@@ -7,12 +7,13 @@
+ 
+ #include <algorithm>
+ #include <utility>
+ 
+ #include "HttpBaseChannel.h"
+ #include "HttpLog.h"
++#include "mozilla/dom/NavigatorManager.h"
+ #include "LoadInfo.h"
+ #include "ReferrerInfo.h"
+ #include "mozIRemoteLazyInputStream.h"
+ #include "mozIThirdPartyUtil.h"
+ #include "mozilla/AntiTrackingUtils.h"
+ #include "mozilla/BasePrincipal.h"
+@@ -535,12 +536,25 @@ HttpBaseChannel::SetTRRMode(nsIRequest::TRRMode aTRRMode) {
+ 
+ NS_IMETHODIMP
+ HttpBaseChannel::SetDocshellUserAgentOverride() {
+   RefPtr<dom::BrowsingContext> bc;
+   MOZ_ALWAYS_SUCCEEDS(mLoadInfo->GetBrowsingContext(getter_AddRefs(bc)));
+   if (!bc) {
++    // Camoufox: worker and service worker requests have no browsing context
++    // to carry the page's user agent override, so they used to go out with
++    // the launch-wide one -- a Windows UA from an Android context's service
++    // worker. Use the user agent the request's user context was given.
++    uint32_t userContextId = mLoadInfo->GetOriginAttributes().mUserContextId;
++    nsAutoCString contextUserAgent;
++    if (userContextId &&
++        dom::NavigatorManager::GetUserAgentForRequest(userContextId,
++                                                      contextUserAgent)) {
++      return SetRequestHeaderInternal(
++          "User-Agent"_ns, contextUserAgent, false,
++          nsHttpHeaderArray::eVarietyRequestEnforceDefault);
++    }
+     return NS_OK;
+   }
+ 
+   nsAutoString customUserAgent;
+   bc->GetCustomUserAgent(customUserAgent);
+   if (customUserAgent.IsEmpty() || customUserAgent.IsVoid()) {
+diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
+--- a/netwerk/protocol/http/nsHttpHandler.cpp
++++ b/netwerk/protocol/http/nsHttpHandler.cpp
+@@ -2,12 +2,13 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ // HttpLog.h should generally be included first
+ #include "nsHttpHandler.h"
+ #include "MaskConfig.hpp"
++#include "mozilla/dom/NavigatorManager.h"
+ 
+ #include <bitset>
+ 
+ #include "ASpdySession.h"
+ #include "AltServiceChild.h"
+ #include "EventTokenBucket.h"
+@@ -735,12 +736,15 @@ nsresult nsHttpHandler::AddAcceptAndDictionaryHeaders(
+     }
+   }
+   // guard may call aCallback here
+   return rv;
+ }
+ 
++static nsresult PrepareAcceptLanguages(const char* i_AcceptLanguages,
++                                       nsACString& o_AcceptLanguages);
++
+ nsresult nsHttpHandler::AddStandardRequestHeaders(
+     nsHttpRequestHead* request, nsIURI* aURI, bool aIsHTTPS,
+     ExtContentPolicyType aContentPolicyType, bool aShouldResistFingerprinting,
+     const nsCString& aLanguageOverride) {
+   nsresult rv;
+ 
+@@ -773,14 +777,22 @@ nsresult nsHttpHandler::AddStandardRequestHeaders(
+ 
+   rv = request->SetHeader(nsHttp::Accept, accept, false,
+                           nsHttpHeaderArray::eVarietyRequestOverride);
+   if (NS_FAILED(rv)) return rv;
+ 
+   if (!aLanguageOverride.IsEmpty()) {
++    // Camoufox: the same list navigator.languages reports for this override,
++    // with the q-values Firefox gives intl.accept_languages.
++    nsAutoCString languages;
++    mozilla::dom::NavigatorManager::ExpandLanguageOverride(aLanguageOverride,
++                                                           languages);
+     nsAutoCString acceptLanguage;
+-    acceptLanguage.Assign(aLanguageOverride.get());
++    if (NS_FAILED(PrepareAcceptLanguages(languages.get(), acceptLanguage)) ||
++        acceptLanguage.IsEmpty()) {
++      acceptLanguage.Assign(aLanguageOverride);
++    }
+     rv = request->SetHeader(nsHttp::Accept_Language, acceptLanguage, false,
+                             nsHttpHeaderArray::eVarietyRequestOverride);
+     if (NS_FAILED(rv)) return rv;
+   } else {
+     // Add the "Accept-Language" header.  This header is also exposed to the
+     // service worker.

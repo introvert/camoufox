@@ -19,6 +19,7 @@ export async function runExtendedChecks(): Promise<
     webglRenderHash: {},
     fontPlatformConsistency: {},
     webglExtended: {},
+    webglState: {},
     audioIntegrity: {},
     iframeTesting: {},
     headlessDetection: {},
@@ -482,6 +483,88 @@ export async function runExtendedChecks(): Promise<
     result.webglRenderHash.error = {
       passed: true,
       detail: "WebGL render error: " + e.message,
+    };
+  }
+
+  // ============================================================
+  // webglState
+  //
+  // A spoofed GPU may only change what the GPU decides (limits, extensions,
+  // strings). Everything the page itself sets has to read back as set, and
+  // what Firefox gates (debug renderer info) stays gated. Each of these was
+  // broken by a parameter table answering state from a frozen fresh context.
+  // ============================================================
+  try {
+    const sc = document.createElement("canvas");
+    sc.width = 256;
+    sc.height = 256;
+    const sgl = sc.getContext("webgl", {
+      antialias: false,
+      preserveDrawingBuffer: true,
+    }) as WebGLRenderingContext | null;
+    if (sgl) {
+      const v0 = Array.from(sgl.getParameter(sgl.VIEWPORT) as Int32Array);
+      result.webglState.initialViewport = {
+        passed: v0.join(",") === "0,0,256,256",
+        detail: "Initial VIEWPORT " + v0.join(",") + " (canvas is 256x256)",
+      };
+      sgl.viewport(1, 2, 3, 4);
+      const v1 = Array.from(sgl.getParameter(sgl.VIEWPORT) as Int32Array);
+      result.webglState.viewportFollowsGL = {
+        passed: v1.join(",") === "1,2,3,4",
+        detail: "VIEWPORT after viewport(1,2,3,4): " + v1.join(","),
+      };
+      const buf = sgl.createBuffer();
+      sgl.bindBuffer(sgl.ARRAY_BUFFER, buf);
+      result.webglState.bindingRoundTrip = {
+        passed: sgl.getParameter(sgl.ARRAY_BUFFER_BINDING) === buf,
+        detail: "ARRAY_BUFFER_BINDING returns the bound buffer",
+      };
+      sgl.enable(sgl.BLEND);
+      const blendParam = sgl.getParameter(sgl.BLEND);
+      result.webglState.enableFlagsAgree = {
+        passed: blendParam === true && sgl.isEnabled(sgl.BLEND),
+        detail: "getParameter(BLEND)=" + blendParam + " isEnabled(BLEND)=" + sgl.isEnabled(sgl.BLEND),
+      };
+      sgl.getError();
+      const early = sgl.getParameter(0x9246);
+      const earlyErr = sgl.getError();
+      result.webglState.unmaskedGatedByExtension = {
+        passed: early === null && earlyErr === sgl.INVALID_ENUM,
+        detail: "UNMASKED_RENDERER_WEBGL before getExtension: " + early + " (error " + earlyErr + ")",
+      };
+      const dbg = sgl.getExtension("WEBGL_debug_renderer_info");
+      if (dbg) {
+        const unmasked = sgl.getParameter(dbg.UNMASKED_RENDERER_WEBGL);
+        const renderer = sgl.getParameter(sgl.RENDERER);
+        result.webglState.rendererMatchesUnmasked = {
+          passed: unmasked === renderer,
+          detail: "RENDERER=" + renderer + " UNMASKED=" + unmasked,
+        };
+      }
+      const attrs = sgl.getContextAttributes();
+      result.webglState.contextAttributesEchoRequest = {
+        passed: !!attrs && attrs.antialias === false && attrs.preserveDrawingBuffer === true,
+        detail: "Requested antialias:false preserveDrawingBuffer:true, got " + JSON.stringify(attrs),
+      };
+      const aniso = sgl.getExtension("EXT_texture_filter_anisotropic");
+      if (aniso) {
+        const maxAniso = sgl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
+        result.webglState.extensionParamAfterEnable = {
+          passed: typeof maxAniso === "number" && maxAniso >= 1,
+          detail: "MAX_TEXTURE_MAX_ANISOTROPY_EXT after getExtension: " + maxAniso,
+        };
+      }
+      const formats = sgl.getParameter(sgl.COMPRESSED_TEXTURE_FORMATS);
+      result.webglState.compressedFormatsArray = {
+        passed: formats instanceof Uint32Array,
+        detail: "COMPRESSED_TEXTURE_FORMATS is " + Object.prototype.toString.call(formats),
+      };
+    }
+  } catch (e: any) {
+    result.webglState.error = {
+      passed: false,
+      detail: "WebGL state check error: " + e.message,
     };
   }
 

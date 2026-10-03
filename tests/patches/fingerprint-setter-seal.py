@@ -62,6 +62,7 @@ SETTERS = [
     "setScreenColorDepth",
     "setWebGLVendor",
     "setWebGLRenderer",
+    "setWebGLParameters",
     "setWebRTCIPv4",
     "setWebRTCIPv6",
     "setFontList",
