@@ -811,9 +811,38 @@ function clearRequestHeaders(httpChannel) {
   }
 }
 
+// route.continue({headers}) replaces the whole header list. Writing the caller's list in its own
+// order (a dict, usually) put every header after "cookie" -- the one header the clear keeps -- so
+// the resumed request left with Firefox's order scrambled. Keep the slot each header already has on
+// the channel, update its value in place, drop the ones the caller left out, and add the caller's
+// new headers after them, where necko puts headers added from http-on-modify-request.
 function overrideRequestHeaders(httpChannel, headers) {
+  const nameOf = header => header.name.toLowerCase();
+  const wanted = new Map();
+  for (const header of headers)
+    wanted.set(nameOf(header), header);
+
+  const merged = [];
+  for (const header of requestHeaders(httpChannel)) {
+    const name = nameOf(header);
+    if (name === 'host')
+      continue;
+    if (wanted.has(name)) {
+      merged.push(wanted.get(name));
+      wanted.delete(name);
+    } else if (name === 'cookie') {
+      // Keep the "cookie" header. If there is an override, it will be set anyway.
+      // Otherwise, we may delete a cookie that was set for a redirect.
+      merged.push(header);
+    }
+  }
+  const added = [...wanted.values()];
+  const ordered = orderInterceptedHeaders([...merged, ...added], added.map(nameOf));
+
   clearRequestHeaders(httpChannel);
-  appendExtraHTTPHeaders(httpChannel, headers);
+  for (const header of ordered)
+    httpChannel.setRequestHeader(header.name, '', false /* merge */);
+  appendExtraHTTPHeaders(httpChannel, ordered);
 }
 
 // Headers necko adds in HttpBaseChannel::Init, before anything else touches the channel.
@@ -839,7 +868,23 @@ const ON_BEFORE_CONNECT_HEADERS = ['upgrade-insecure-requests', 'sec-fetch-dest'
 // one means deleting it and adding it back.
 function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders) {
   const headers = requestHeaders(httpChannel);
+  const ordered = orderInterceptedHeaders(headers, extraHTTPHeaders.map(header => header.name.toLowerCase()));
+  if (ordered === headers)
+    return;
+  // The host header cannot be removed, and it sorts first either way.
+  const movable = ordered.filter(header => header.name.toLowerCase() !== 'host');
+  for (const header of movable)
+    httpChannel.setRequestHeader(header.name, '', false /* merge */);
+  appendExtraHTTPHeaders(httpChannel, movable);
+}
+
+// `headers` with "connection" and "cookie" moved to their slots on a channel that was never
+// intercepted (see restoreInterceptedHeaderOrder). `lateNames` are the headers added from
+// http-on-modify-request onwards, which follow "cookie". Returns `headers` itself when neither
+// header is present.
+function orderInterceptedHeaders(original, lateNames) {
   const nameOf = header => header.name.toLowerCase();
+  const headers = original.slice();
 
   const displaced = [];
   for (const name of ['connection', 'cookie']) {
@@ -848,12 +893,9 @@ function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders) {
       displaced.push(headers.splice(index, 1)[0]);
   }
   if (!displaced.length)
-    return;
+    return original;
 
-  const lateHeaders = new Set([
-    ...ON_BEFORE_CONNECT_HEADERS,
-    ...extraHTTPHeaders.map(header => header.name.toLowerCase()),
-  ]);
+  const lateHeaders = new Set([...ON_BEFORE_CONNECT_HEADERS, ...lateNames]);
   const firstIndex = predicate => {
     const index = headers.findIndex(predicate);
     return index === -1 ? headers.length : index;
@@ -865,12 +907,7 @@ function restoreInterceptedHeaderOrder(httpChannel, extraHTTPHeaders) {
         firstIndex(h => lateHeaders.has(nameOf(h)));
     headers.splice(boundary, 0, header);
   }
-
-  // The host header cannot be removed, and it sorts first either way.
-  const movable = headers.filter(header => nameOf(header) !== 'host');
-  for (const header of movable)
-    httpChannel.setRequestHeader(header.name, '', false /* merge */);
-  appendExtraHTTPHeaders(httpChannel, movable);
+  return headers;
 }
 
 const redirectStatus = [301, 302, 303, 307, 308];
