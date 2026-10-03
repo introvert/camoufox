@@ -39,6 +39,7 @@ CATEGORY_LABELS = {
     "emojiFingerprint": "Emoji",
     "canvasNoiseDetection": "Canvas Noise",
     "webglRenderHash": "WebGL Render",
+    "webglState": "WebGL State",
     "fontPlatformConsistency": "Font Platform",
     "audioIntegrity": "Audio Integrity",
     "iframeTesting": "Iframe Testing",
