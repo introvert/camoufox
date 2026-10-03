@@ -1,8 +1,10 @@
 diff --git a/netwerk/protocol/http/moz.build b/netwerk/protocol/http/moz.build
-index b090a56d88..9fe4a5e1e8 100644
 --- a/netwerk/protocol/http/moz.build
 +++ b/netwerk/protocol/http/moz.build
-@@ -218,3 +218,6 @@ XPCOM_MANIFESTS += [
+@@ -254,6 +254,9 @@ DIRS += ["happy_eyeballs_glue"]
+ 
+ XPCOM_MANIFESTS += [
+     "components.conf",
  ]
  
  include("/tools/fuzzing/libfuzzer-config.mozbuild")
@@ -11,10 +13,11 @@ index b090a56d88..9fe4a5e1e8 100644
 +LOCAL_INCLUDES += ["/camoucfg"]
 \ No newline at end of file
 diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
-index d0aebdf965..01472ec205 100644
 --- a/netwerk/protocol/http/nsHttpHandler.cpp
 +++ b/netwerk/protocol/http/nsHttpHandler.cpp
-@@ -3,6 +3,7 @@
+@@ -1,12 +1,13 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  // HttpLog.h should generally be included first
@@ -22,44 +25,87 @@ index d0aebdf965..01472ec205 100644
 +#include "MaskConfig.hpp"
  
  #include <bitset>
-@@ -747,6 +748,15 @@ uint8_t nsHttpHandler::UrgencyFromCoSFlags(uint32_t cos) {
+ 
+ #include "ASpdySession.h"
+ #include "AltServiceChild.h"
+ #include "EventTokenBucket.h"
+@@ -989,13 +990,33 @@ uint8_t nsHttpHandler::UrgencyFromCoSFlags(uint32_t cos,
+ }
+ 
+ //-----------------------------------------------------------------------------
+ // nsHttpHandler <private>
  //-----------------------------------------------------------------------------
  
++// Camoufox: the spoofed User-Agent, or null without one. CAMOU_CONFIG never
++// changes, so it is read once into a string that is never written again.
++// UserAgent() runs off the main thread too (proxy CONNECT requests), and
++// re-assigning the shared mUserAgent there on every call was a data race.
++static const nsCString* MaskedUserAgent() {
++  static const nsCString* const sMasked = []() -> const nsCString* {
++    for (const char* key : {"headers.User-Agent", "navigator.userAgent"}) {
++      if (auto value = MaskConfig::GetString(key)) {
++        return new nsCString(value.value().c_str());  // intentionally leaked
++      }
++    }
++    return nullptr;
++  }();
++  return sMasked;
++}
++
  const nsCString& nsHttpHandler::UserAgent(bool aShouldResistFingerprinting) {
-+  if (auto value = MaskConfig::GetString("headers.User-Agent")) {
-+    mUserAgent.Assign(nsCString(value.value().c_str()));
-+    return mUserAgent;
-+  }
-+  if (auto value = MaskConfig::GetString("navigator.userAgent")) {
-+    mUserAgent.Assign(nsCString(value.value().c_str()));
-+    return mUserAgent;
++  if (const nsCString* masked = MaskedUserAgent()) {
++    return *masked;
 +  }
 +
    if (aShouldResistFingerprinting && !mSpoofedUserAgent.IsEmpty()) {
      LOG(("using spoofed userAgent : %s\n", mSpoofedUserAgent.get()));
      return mSpoofedUserAgent;
-@@ -2077,5 +2087,9 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
    }
-
+ 
+   if (!mUserAgentOverride.IsVoid()) {
+@@ -2104,15 +2125,19 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
+           rv = gHttpHandler->SetAcceptLanguages();
+         }));
+     return rv;
+   }
+ 
    MOZ_ASSERT(NS_IsMainThread());
+-
+   mAcceptLanguagesIsDirty = false;
+ 
 +  if (auto value = MaskConfig::GetString("headers.Accept-Language")) {
 +    mAcceptLanguages.Assign(nsCString(value.value().c_str()));
 +    return NS_OK;
 +  }
-
-   mAcceptLanguagesIsDirty = false;
-
-@@ -2098,8 +2112,13 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
-
++
+   nsAutoCString acceptLanguages;
+   intl::LocaleService::GetInstance()->GetAcceptLanguages(acceptLanguages);
+ 
+   nsAutoCString buf;
+   nsresult rv = PrepareAcceptLanguages(acceptLanguages.get(), buf);
+   if (NS_SUCCEEDED(rv)) {
+@@ -2120,12 +2145,24 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
+   }
+   return rv;
+ }
+ 
  nsresult nsHttpHandler::SetAcceptEncodings(const char* aAcceptEncodings,
                                             bool isSecure, bool isDictionary) {
++  // Camoufox: headers.Accept-Encoding replaces the list sent over https only.
++  // Firefox keeps three lists -- plain http ("gzip, deflate"), https and
++  // dictionary-eligible requests (adds "dcb, dcz") -- and one value written
++  // over all three makes http:// requests claim encodings no Firefox sends
++  // there.
 +  nsCString encodingOverride;
-+  if (auto value = MaskConfig::GetString("headers.Accept-Encoding")) {
-+    encodingOverride.Assign(nsCString(value.value().c_str()));
-+    aAcceptEncodings = encodingOverride.get();
++  if (isSecure && !isDictionary) {
++    if (auto value = MaskConfig::GetString("headers.Accept-Encoding")) {
++      encodingOverride.Assign(value.value().c_str());
++      aAcceptEncodings = encodingOverride.get();
++    }
 +  }
    if (isDictionary) {
      mDictionaryAcceptEncodings = aAcceptEncodings;
    } else if (isSecure) {
      mHttpsAcceptEncodings = aAcceptEncodings;
    } else {
+     // use legacy list if a secure override is not specified
