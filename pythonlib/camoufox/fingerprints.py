@@ -13,7 +13,7 @@ from browserforge.fingerprints import (
 )
 
 from camoufox.pkgman import load_yaml
-from camoufox.webgl import sample_webgl
+from camoufox.webgl import sample_webgl, webgl_record_for_pair
 
 # Load the browserforge.yaml file
 BROWSERFORGE_DATA = load_yaml('browserforge.yml')
@@ -991,6 +991,18 @@ def from_preset(preset: Dict, ff_version: Optional[str] = None) -> Dict[str, Any
     return config
 
 
+def _webgl_parameters_json(record: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The WebGL keys of a webgl_data.db record, as the JSON setWebGLParameters takes."""
+    if not record:
+        return None
+    keys = {k: v for k, v in record.items() if k.startswith('webGl') and k != 'webGl2Enabled'}
+    # A record with no parameters (an unknown GPU without a relative) has
+    # nothing to add over setWebGLVendor/setWebGLRenderer.
+    if not any(k.endswith(':parameters') for k in keys):
+        return None
+    return json.dumps(keys, separators=(",", ":"))
+
+
 def _build_init_script(values: Dict[str, Any]) -> str:
     """
     Builds the JavaScript init script that calls per-context window.setXxx() functions.
@@ -1010,6 +1022,10 @@ def _build_init_script(values: Dict[str, Any]) -> str:
         ('hardwareConcurrency', 'setNavigatorHardwareConcurrency', '{val}'),
         ('webglVendor', 'setWebGLVendor', '{val}'),
         ('webglRenderer', 'setWebGLRenderer', '{val}'),
+        # The whole WebGL persona (limits, extensions, precision formats) as a
+        # JSON string, so the context's parameters describe the same GPU as its
+        # renderer string instead of the launch-wide one.
+        ('webglParameters', 'setWebGLParameters', '{val}'),
     ]
 
     for key, fn_name, _template in setters:
@@ -1122,12 +1138,29 @@ def generate_context_fingerprint(
             perturbation (e.g. {'fonts:spacing_seed': 0}).
         i_know_what_im_doing: Silences the Android-resources warning.
     """
+    webgl_record: Optional[Dict[str, Any]] = None
     if preset is not None:
         # Use real fingerprint preset
         config = from_preset(preset, ff_version)
         nav = preset.get('navigator', {})
         screen = preset.get('screen', {})
         webgl = preset.get('webgl', {})
+        # The preset names its GPU; give the context that GPU's parameters too.
+        if webgl.get('unmaskedVendor') and webgl.get('unmaskedRenderer'):
+            plat = nav.get('platform', '')
+            pool = (
+                'android' if is_mobile_config(config)
+                else 'win' if plat == 'Win32'
+                else 'mac' if plat == 'MacIntel'
+                else 'lin'
+            )
+            try:
+                webgl_record, _ = webgl_record_for_pair(
+                    pool, webgl['unmaskedVendor'], webgl['unmaskedRenderer']
+                )
+                webgl_record.pop('webGl2Enabled', None)
+            except Exception:
+                webgl_record = None
     else:
         # Fall back to BrowserForge synthetic generation
         fp = generate_fingerprint(os=os)
@@ -1167,13 +1200,16 @@ def generate_context_fingerprint(
                 config['navigator.oscpu'] = 'Intel Mac OS X 10.15'
             elif plat == 'Win32':
                 config['navigator.oscpu'] = 'Windows NT 10.0; Win64; x64'
+            elif plat.startswith('Linux arm') or plat.startswith('Linux aarch'):
+                # Firefox for Android: oscpu is the same string as platform.
+                config['navigator.oscpu'] = plat
             elif 'Linux' in plat or 'linux' in plat:
                 config['navigator.oscpu'] = 'Linux x86_64'
 
         # Sample WebGL vendor/renderer from database (BrowserForge doesn't generate these)
         if not config.get('webGl:vendor') or not config.get('webGl:renderer'):
-            _os_map = {'macos': 'mac', 'linux': 'lin', 'windows': 'win'}
-            _target_os = _os_map.get(os or '', None)
+            _os_map = {'macos': 'mac', 'linux': 'lin', 'windows': 'win', 'android': 'android'}
+            _target_os = 'android' if is_mobile_config(config) else _os_map.get(os or '', None)
             if not _target_os:
                 plat = config.get('navigator.platform', '')
                 if plat == 'Win32':
@@ -1193,6 +1229,7 @@ def generate_context_fingerprint(
                 )
                 webgl_fp.pop('webGl2Enabled', None)
                 config.update(webgl_fp)
+                webgl_record = webgl_fp
             except Exception:
                 pass
 
@@ -1242,6 +1279,7 @@ def generate_context_fingerprint(
         'hardwareConcurrency': nav.get('hardwareConcurrency') or config.get('navigator.hardwareConcurrency'),
         'webglVendor': webgl.get('unmaskedVendor'),
         'webglRenderer': webgl.get('unmaskedRenderer'),
+        'webglParameters': _webgl_parameters_json(webgl_record),
         'screenWidth': screen.get('width'),
         'screenHeight': screen.get('height'),
         'screenColorDepth': screen.get('colorDepth'),

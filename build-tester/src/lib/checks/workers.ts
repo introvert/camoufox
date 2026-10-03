@@ -117,6 +117,29 @@ export async function runWorkerChecks(): Promise<
     };
   }
 
+  // dedicatedWorkerAppVersion -- appVersion is derived from the user agent,
+  // so a per-context UA has to bring it along in both scopes
+  try {
+    const code = `self.onmessage = () => { self.postMessage({ appVersion: navigator.appVersion }); }`;
+    const data = await createWorkerAndGetValue<{ appVersion: string }>(code);
+    const match = navigator.appVersion === data.appVersion;
+    const fromUA = navigator.userAgent.match(/^Mozilla\/5\.0 \(([^)]*)\)/);
+    const osTokens = fromUA ? fromUA[1] : "";
+    const firstToken = navigator.appVersion.replace(/^5\.0 \(/, "").split(";")[0].trim();
+    const consistent = match && osTokens.includes(firstToken.replace(/^Windows$/, "Windows NT"));
+    workerConsistency.dedicatedWorkerAppVersion = {
+      passed: consistent,
+      detail: consistent
+        ? "appVersion matches the user agent in both scopes: " + navigator.appVersion
+        : `MISMATCH: window="${navigator.appVersion}" worker="${data.appVersion}" ua="${navigator.userAgent}"`,
+    };
+  } catch (e: any) {
+    workerConsistency.dedicatedWorkerAppVersion = {
+      passed: true,
+      detail: "Dedicated worker unavailable: " + (e?.message || String(e)),
+    };
+  }
+
   // dedicatedWorkerHWC
   try {
     const code = `self.onmessage = () => { self.postMessage({ hwc: navigator.hardwareConcurrency }); }`;

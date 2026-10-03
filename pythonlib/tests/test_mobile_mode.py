@@ -269,18 +269,52 @@ class TestReviewFixes:
 
 class TestPhoneGpu:
     ADRENO = ('Qualcomm', 'Adreno (TM) 650, or similar')
+    # A real Firefox for Android bucket that webgl_data.db holds no row for.
+    OLD_ADRENO = ('Qualcomm', 'Adreno (TM) 430, or similar')
 
-    def test_config_pair_unknown_to_the_database_is_kept(self):
+    def test_android_launch_draws_a_phone_gpu(self):
+        for _ in range(10):
+            config, _ = launch(os='android')
+            assert config['webGl:vendor'] in ('Qualcomm', 'ARM', 'Imagination Technologies')
+            params = config['webGl:parameters']
+            # No desktop GPU limits on a phone (the GTX 980 row reports 32768).
+            assert params['3379'] <= 65536
+            assert 'WEBGL_compressed_texture_etc' in config['webGl:supportedExtensions']
+            # fp16 fragment mediump, as every mobile GPU family reports.
+            assert config['webGl:shaderPrecisionFormats']['35632,36337']['precision'] == 10
+
+    def test_android_user_agent_alone_draws_a_phone_gpu(self):
+        config, _ = launch(config={'navigator.userAgent': ANDROID_UA})
+        assert config['webGl:vendor'] in ('Qualcomm', 'ARM', 'Imagination Technologies')
+
+    def test_config_pair_is_kept(self):
         config, _ = launch(
             os='android',
             config={'webGl:vendor': self.ADRENO[0], 'webGl:renderer': self.ADRENO[1]},
         )
         assert (config['webGl:vendor'], config['webGl:renderer']) == self.ADRENO
+        assert config['webGl:parameters']['3379'] == 16384
 
-    def test_webgl_config_pair_unknown_to_the_database_is_kept(self):
+    def test_webgl_config_pair_is_kept(self):
         config, _ = launch(os='android', webgl_config=self.ADRENO)
         assert (config['webGl:vendor'], config['webGl:renderer']) == self.ADRENO
 
+    def test_unknown_pair_borrows_a_relative_and_keeps_its_strings(self):
+        config, _ = launch(os='android', webgl_config=self.OLD_ADRENO)
+        assert (config['webGl:vendor'], config['webGl:renderer']) == self.OLD_ADRENO
+        assert config['webGl:parameters']['37446'] == self.OLD_ADRENO[1]
+        assert config['webGl:parameters']['3379'] == 16384  # the Adreno 650 row's
+
     def test_unknown_pair_warns(self):
         with pytest.warns(Warning, match='no WebGL parameter data'):
-            launch(os='android', webgl_config=self.ADRENO, i_know_what_im_doing=False)
+            launch(os='android', webgl_config=self.OLD_ADRENO, i_know_what_im_doing=False)
+
+    def test_context_gets_the_whole_gpu(self):
+        fp = generate_context_fingerprint(os='android', ff_version='155', i_know_what_im_doing=True)
+        script = fp['init_script']
+        assert 'setWebGLParameters(' in script
+        call = script[script.index('w.setWebGLParameters(') + len('w.setWebGLParameters('):]
+        record = json.loads(json.loads(call[: call.index(');')]))
+        assert record['webGl:renderer'] == fp['config']['webGl:renderer']
+        assert 'webGl2:parameters' in record
+        assert 'webGl:contextAttributes' not in record
