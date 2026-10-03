@@ -67,8 +67,12 @@ def sample_webgl(
         return _without_context_attributes(orjson.loads(result[2]))
 
     # Get all vendor/renderer pairs and their probabilities for this OS
+    # `drawable` = 0 marks GPUs that stay pinnable but are never drawn at random:
+    # software rasterizers (the strongest VM/headless tell there is) and
+    # renderer strings Firefox 155 never reports (no ", or similar").
     cursor.execute(
-        f'SELECT vendor, renderer, data, {os} FROM webgl_fingerprints WHERE {os} > 0'  # nosec
+        f'SELECT vendor, renderer, data, {os} FROM webgl_fingerprints '  # nosec
+        f'WHERE {os} > 0 AND drawable = 1'
     )
     results = cursor.fetchall()
     conn.close()
@@ -174,7 +178,7 @@ def closest_webgl_pair(os: str, vendor: str, renderer: str) -> Optional[Tuple[st
     conn = sqlite3.connect(DB_PATH)
     try:
         rows = conn.execute(
-            f'SELECT vendor, renderer FROM webgl_fingerprints WHERE {os} > 0 '  # nosec
+            f'SELECT vendor, renderer FROM webgl_fingerprints WHERE {os} > 0 AND drawable = 1 '  # nosec
             f'ORDER BY {os} DESC'
         ).fetchall()
     finally:

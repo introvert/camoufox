@@ -25,7 +25,13 @@ def _rows():
     conn = sqlite3.connect(DB_PATH)
     try:
         cols = ', '.join(WEBGL_OS_COLUMNS)
-        return conn.execute(f'SELECT vendor, renderer, {cols}, data FROM webgl_fingerprints').fetchall()
+        rows = conn.execute(
+            f'SELECT vendor, renderer, {cols}, data, drawable FROM webgl_fingerprints'
+        ).fetchall()
+        # A row that is never drawn at random keeps its OS weights (they say
+        # which OS it can be pinned for) but counts as weightless here.
+        return [row[:-1] if row[-1] else row[:2] + (0,) * len(WEBGL_OS_COLUMNS) + row[-2:-1]
+                for row in rows]
     finally:
         conn.close()
 
@@ -50,6 +56,12 @@ def test_every_drawable_renderer_is_in_firefox_form():
         data = orjson.loads(row[-1])
         assert row[1].endswith(', or similar'), row[1]
         assert data['webGl:parameters'].get('7936') == 'Mozilla', row[1]
+
+
+def test_software_rasterizers_stay_pinnable_for_their_os():
+    # webgl_config=("Mesa", "llvmpipe, or similar") is documented and tested
+    # (tests/patches/webgl-config-knob.py); it must keep resolving on Linux.
+    assert sample_webgl('lin', 'Mesa', 'llvmpipe, or similar')['webGl:renderer'] == 'llvmpipe, or similar'
 
 
 def test_software_rasterizers_are_never_drawn():

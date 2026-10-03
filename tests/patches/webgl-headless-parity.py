@@ -98,9 +98,11 @@ EXPECTED_PIXEL = [51, 178, 102, 255]
 
 # Reported side by side but never asserted; see the module docstring.
 UNASSERTED = ("fbHash",)
-# webgl-spoofing.patch reads this one under a key that cannot match, so it
-# always falls through to the host's value. Pre-existing, unrelated to EGL.
-UNSPOOFED_ATTRS = ("premultipliedAlpha",)
+# getContextAttributes() is not spoofed: it echoes what getContext() asked for,
+# which for the probe (preserveDrawingBuffer: true, nothing else) is that plus
+# Firefox's desktop defaults.
+DEFAULT_ATTRS = {"alpha": True, "depth": True, "stencil": False, "antialias": True,
+                 "premultipliedAlpha": True, "preserveDrawingBuffer": True}
 
 PROBE = r"""
 (function () {
@@ -246,9 +248,7 @@ def _assert_identity(results: Dict[str, Any], kind: str, got: Dict[str, Any],
     if spf:
         _check(results, f"{kind}.FRAG_HIGH_FLOAT", got["FRAG_HIGH_FLOAT"],
                [spf["rangeMin"], spf["rangeMax"], spf["precision"]])
-    for attr, want in fp[f"{domain}:contextAttributes"].items():
-        if attr in UNSPOOFED_ATTRS:
-            continue
+    for attr, want in DEFAULT_ATTRS.items():
         _check(results, f"{kind}.attrs.{attr}", got["attrs"].get(attr), want)
 
 

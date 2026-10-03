@@ -125,7 +125,7 @@ export async function runWorkerChecks(): Promise<
     const match = navigator.appVersion === data.appVersion;
     const fromUA = navigator.userAgent.match(/^Mozilla\/5\.0 \(([^)]*)\)/);
     const osTokens = fromUA ? fromUA[1] : "";
-    const firstToken = navigator.appVersion.replace(/^5\.0 \(/, "").split(";")[0].trim();
+    const firstToken = navigator.appVersion.replace(/^5\.0 \(/, "").replace(/\)$/, "").split(";")[0].trim();
     const consistent = match && osTokens.includes(firstToken.replace(/^Windows$/, "Windows NT"));
     workerConsistency.dedicatedWorkerAppVersion = {
       passed: consistent,
