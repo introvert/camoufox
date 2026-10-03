@@ -21,7 +21,7 @@ from .exceptions import (
     InvalidPropertyType,
     NonFirefoxFingerprint,
 )
-from .fingerprints import apply_mobile_mode, is_mobile_config, from_browserforge, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults, gpu_screen_is_plausible, is_software_renderer
+from .fingerprints import apply_mobile_mode, is_mobile_config, os_from_user_agent, _app_version_from_user_agent, from_browserforge, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_screen_no_taskbar, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, sample_webgl_for_screen, set_media_devices_defaults, gpu_screen_is_plausible, is_software_renderer
 from .geolocation import geoip_allowed, get_geolocation
 from .ip import Proxy, public_ip, valid_ipv4, valid_ipv6
 from .locales import handle_locales
@@ -823,6 +823,19 @@ def launch_options(
     ):
         webgl_config = webgl_config_from_env()
 
+    # A user agent the caller chose decides which device the rest of the
+    # fingerprint describes. Generated from any other OS, BrowserForge's
+    # platform/oscpu/appVersion contradict it ("Win32" behind an Android UA),
+    # and so do the GPU and fonts picked for that OS.
+    _user_ua = config.get('navigator.userAgent')
+    _user_set_app_version = 'navigator.appVersion' in config
+    _ua_os = os_from_user_agent(_user_ua)
+    if _ua_os:
+        _requested = [os] if isinstance(os, str) else list(os or [])
+        if _requested and _ua_os not in _requested:
+            LeakWarning.warn('ua_os_mismatch', i_know_what_im_doing)
+        os = _ua_os
+
     # Assert the target OS is valid
     if os:
         check_valid_os(os)
@@ -883,6 +896,14 @@ def launch_options(
             config,
             from_browserforge(fingerprint, ff_version_str),
         )
+
+    # The generated appVersion came from BrowserForge's own user agent, whose
+    # OS version need not be the caller's ("Android 14" vs "Android 16").
+    # Firefox derives it from the user agent, so do the same.
+    if _user_ua and not _user_set_app_version:
+        _derived_app_version = _app_version_from_user_agent(_user_ua)
+        if _derived_app_version:
+            config['navigator.appVersion'] = _derived_app_version
 
     target_os = get_target_os(config)
 

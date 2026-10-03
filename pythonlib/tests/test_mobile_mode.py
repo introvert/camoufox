@@ -165,6 +165,36 @@ class TestLaunchOptions:
         assert config['mobile'] is True
         assert prefs['ui.useOverlayScrollbars'] == 1
 
+    def test_android_user_agent_without_os_gets_a_phone_navigator(self):
+        # Without os=, BrowserForge used to pick a random desktop OS, so the
+        # Android UA sat next to platform "Win32" / "MacIntel".
+        for _ in range(8):
+            config, _ = launch(config={'navigator.userAgent': ANDROID_UA})
+            assert config['navigator.platform'] == 'Linux armv81'
+            assert config['navigator.oscpu'] == 'Linux armv81'
+            assert config['navigator.appVersion'] == '5.0 (Android 16)'
+
+    def test_user_agent_decides_the_os(self):
+        config, _ = launch(config={'navigator.userAgent': WINDOWS_UA})
+        assert config['navigator.platform'] == 'Win32'
+        assert config['navigator.appVersion'] == '5.0 (Windows)'
+
+    def test_user_agent_and_os_disagreeing_warns(self):
+        with pytest.warns(Warning, match='names a different OS'):
+            launch(os='windows', config={'navigator.userAgent': ANDROID_UA},
+                   i_know_what_im_doing=False)
+
+    def test_app_version_follows_the_callers_user_agent(self):
+        ua = ANDROID_UA.replace('Android 16', 'Android 14')
+        config, _ = launch(config={'navigator.userAgent': ua})
+        assert config['navigator.appVersion'] == '5.0 (Android 14)'
+
+    def test_browserforge_accept_encoding_is_not_copied(self):
+        # Firefox's own lists are right per scheme; one value over all three
+        # put br/zstd on plain-http requests.
+        config, _ = launch(os='windows')
+        assert 'headers.Accept-Encoding' not in config
+
     @pytest.mark.parametrize('os_name', ['windows', 'macos', 'linux'])
     def test_desktop_launch_is_untouched(self, os_name):
         config, prefs = launch(os=os_name)

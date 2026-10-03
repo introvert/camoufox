@@ -353,6 +353,27 @@ def is_mobile_user_agent(user_agent: Optional[str]) -> bool:
     return bool(user_agent and _ANDROID_UA_RE.search(user_agent))
 
 
+def os_from_user_agent(user_agent: Optional[str]) -> Optional[str]:
+    """The `os` value whose fingerprint pool matches `user_agent`, if any.
+
+    A caller who passes only a user agent still needs the rest of the device
+    to match it: BrowserForge draws platform, oscpu and appVersion from `os`,
+    and with `os` unset it picks one at random, which put "Win32" or
+    "MacIntel" behind an Android user agent.
+    """
+    if not user_agent:
+        return None
+    if is_mobile_user_agent(user_agent):
+        return 'android'
+    if 'Windows' in user_agent:
+        return 'windows'
+    if 'Macintosh' in user_agent or 'Mac OS X' in user_agent:
+        return 'macos'
+    if 'X11' in user_agent or 'Linux' in user_agent:
+        return 'linux'
+    return None
+
+
 def is_mobile_config(config: Dict[str, Any]) -> bool:
     """Whether `config` describes a phone.
 
