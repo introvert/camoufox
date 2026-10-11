@@ -729,10 +729,12 @@ export class PageTarget {
         width: ChromeUtils.camouGetInt('screen.width'),
         height: ChromeUtils.camouGetInt('screen.height'),
       };
+      // The context's own screen first: a phone context in a desktop launch
+      // carries the phone's screen, while the launch config is the desktop's.
       const size = [
-        configured,
         this._viewportScreenSize,
         this._browserContext.defaultScreenSize,
+        configured,
         this._viewportSize,
         this._browserContext.defaultViewportSize,
       ].find(s => s && s.width && s.height);

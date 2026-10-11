@@ -116,7 +116,7 @@
   { "property": "navigator.appCodeName", "type": "str" },
   { "property": "navigator.appName", "type": "str" },
   { "property": "navigator.cookieEnabled", "type": "bool" },
-  { "property": "navigator.languages", "type": "array", "removed": "156.0.1-beta.32" },
+  { "property": "navigator.languages", "type": "array" },
   { "property": "navigator.onLine", "type": "bool" },
   { "property": "navigator.product", "type": "str" },
   { "property": "navigator.productSub", "type": "str" },

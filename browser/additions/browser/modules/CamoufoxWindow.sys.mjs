@@ -213,8 +213,12 @@ function addCursorFollower(win) {
 }
 
 function applyAcceptLanguages() {
+  // navigator.languages reads the same pref, so the list a page sees and the
+  // Accept-Language header the server sees stay one list.
   let camouLocale =
-    ChromeUtils.camouGetString("locale:all") || ChromeUtils.camouGetString("navigator.language");
+    ChromeUtils.camouGetString("locale:all") ||
+    ChromeUtils.camouGetStringList("navigator.languages").join(", ") ||
+    ChromeUtils.camouGetString("navigator.language");
   if (!camouLocale) {
     const language = ChromeUtils.camouGetString("locale:language");
     const region = ChromeUtils.camouGetString("locale:region");
