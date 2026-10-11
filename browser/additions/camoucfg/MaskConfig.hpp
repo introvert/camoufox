@@ -258,7 +258,9 @@ inline std::optional<std::array<uint32_t, 4>> GetRect(
 
 inline std::optional<nlohmann::json> GetNested(const std::string& domain,
                                                std::string keyStr) {
-  auto data = GetJson();
+  // By reference: a copy duplicated the whole config on every call, and every
+  // WebGL getParameter() comes through GLParam -> GetNested.
+  const auto& data = GetJson();
   if (!data.contains(domain)) return std::nullopt;
 
   if (!data[domain].contains(keyStr)) return std::nullopt;
@@ -318,7 +320,7 @@ inline std::optional<std::array<int32_t, 3UL>> MShaderData(
 inline std::optional<
     std::vector<std::tuple<std::string, std::string, std::string, bool, bool>>>
 MVoices() {
-  auto data = GetJson();
+  const auto& data = GetJson();
   if (!data.contains("voices") || !data["voices"].is_array()) {
     return std::nullopt;
   }
