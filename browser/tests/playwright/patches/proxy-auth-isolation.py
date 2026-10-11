@@ -20,8 +20,8 @@ The proxy here is in-process and answers plain-HTTP requests itself, echoing the
 username it was sent, so no network access is needed.
 
 Run against a specific build:
-    CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin python tests/patches/proxy-auth-isolation.py
-(without the env var it uses the camoufox-managed browser download.)
+    python browser/tests/playwright/patches/proxy-auth-isolation.py --binary /path/to/camoufox-bin
+(or CAMOUFOX_EXECUTABLE_PATH, or the in-tree build; see helpers.resolve_binary.)
 
 What PASS means:
     * no request through the shared proxy is refused: no 407 reaches a page
@@ -37,14 +37,15 @@ What PASS means:
 
 import asyncio
 import base64
-import os
 import sys
+from pathlib import Path
 from typing import Dict, List, Tuple
 
-from camoufox.addons import DefaultAddons
-from camoufox.async_api import AsyncCamoufox, AsyncNewContext
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helpers import resolve_binary  # noqa: E402
 
-EXECUTABLE_PATH = os.environ.get("CAMOUFOX_EXECUTABLE_PATH")
+from camoufox.addons import DefaultAddons  # noqa: E402
+from camoufox.async_api import AsyncCamoufox, AsyncNewContext  # noqa: E402
 
 CONTEXTS = 6
 ROUNDS = 4
@@ -136,7 +137,7 @@ async def _run() -> bool:
         # addon's timing measured as if it were a proxy's.
         async with AsyncCamoufox(
             headless=True,
-            executable_path=EXECUTABLE_PATH,
+            executable_path=str(resolve_binary()),
             exclude_addons=[DefaultAddons.UBO],
         ) as browser:
             # Stagger starts so contexts are created while others are authenticating.

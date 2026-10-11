@@ -12,8 +12,8 @@ in properties.json -- was never read at all, and overriding only the boolean
 would have left five plugins beside pdfViewerEnabled == false.
 
 Run from any venv that has playwright:
-    python tests/patches/pdf-viewer-enabled.py
-    python tests/patches/pdf-viewer-enabled.py --binary /path/to/camoufox-bin
+    python browser/tests/playwright/patches/pdf-viewer-enabled.py
+    python browser/tests/playwright/patches/pdf-viewer-enabled.py --binary /path/to/camoufox-bin
 """
 
 import asyncio
@@ -21,9 +21,10 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helpers import resolve_binary  # noqa: E402
 
 WITH_VIEWER = {
     "navigator.pdfViewerEnabled": True,
@@ -49,15 +50,6 @@ PROBE_JS = r"""() => ({
   "mimeTypes['application/pdf'].type":
       navigator.mimeTypes["application/pdf"] ? navigator.mimeTypes["application/pdf"].type : null,
 })"""
-
-
-def resolve_binary(argv) -> Optional[Path]:
-    if "--binary" in argv:
-        return Path(argv[argv.index("--binary") + 1]).resolve()
-    if os.environ.get("CAMOUFOX_BINARY"):
-        return Path(os.environ["CAMOUFOX_BINARY"]).resolve()
-    matches = sorted(REPO_ROOT.glob("camoufox-*/obj-*/dist/bin/camoufox-bin"))
-    return matches[-1] if matches else None
 
 
 async def probe(binary: Path, config: Dict[str, Any], prefs: Dict[str, Any]) -> Dict[str, Any]:
@@ -91,8 +83,8 @@ def compare(title: str, actual: Dict[str, Any], expected: Dict[str, Any]) -> boo
 
 
 async def main() -> int:
-    binary = resolve_binary(sys.argv)
-    if binary is None or not binary.exists():
+    binary = resolve_binary()
+    if not binary.exists():
         print(f"FATAL: no camoufox binary found (looked for {binary})")
         return 1
     print(f"Binary: {binary}")

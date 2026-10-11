@@ -34,8 +34,8 @@ test also probes a virtual display and compares the two key for key; where it
 is not, that half is skipped and says so.
 
 Run against a specific build:
-    CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin python tests/patches/webgl-headless-parity.py
-(without the env var it uses the camoufox-managed browser download.)
+    python browser/tests/playwright/patches/webgl-headless-parity.py --binary /path/to/camoufox-bin
+(or CAMOUFOX_EXECUTABLE_PATH, or the in-tree build; see helpers.resolve_binary.)
 
 What PASS means:
     * headless hands the page a real context, for WebGL 1 and for WebGL 2 when
@@ -52,28 +52,29 @@ What PASS means:
       through WEBGL_debug_shaders, exposed to content by default;
     * and, where a virtual display is available, headful agrees key for key.
 
-Two things are deliberately not asserted. The framebuffer hash is reported
-only: Camoufox does not spoof rendered pixels, so a host with a real GPU draws
-differently from llvmpipe. And premultipliedAlpha is skipped because
-webgl-spoofing.patch looks it up under a key that cannot match, so it always
-falls through to the real value -- a pre-existing leak, not this patch's.
+The framebuffer hash is reported only: Camoufox does not spoof rendered
+pixels, so a host with a real GPU draws differently from llvmpipe. Context
+attributes are compared headless against headful but not against the
+fingerprint: fpgen records none, so the launcher sets none.
 """
 
 import asyncio
 import json
-import os
 import shutil
 import sys
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict
 
-from camoufox.async_api import AsyncCamoufox
-from camoufox.webgl import sample_webgl
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helpers import resolve_binary  # noqa: E402
 
-EXECUTABLE_PATH = os.environ.get("CAMOUFOX_EXECUTABLE_PATH")
+from camoufox.async_api import AsyncCamoufox  # noqa: E402
+from camoufox.webgl import recorded_devices, webgl_for_gpu  # noqa: E402
 
 # Pinned rather than sampled at random, so a failure names one GPU and is
-# reproducible. sample_webgl() is a database lookup when both halves are given,
-# so this is the same fingerprint the launcher injects.
+# reproducible. fpgen records exactly one Firefox-on-Linux device behind this
+# GPU (checked in _run), so webgl_for_gpu() returns the config the launcher
+# injects whatever seed either side draws with.
 VENDOR = "NVIDIA Corporation"
 RENDERER = "NVIDIA GeForce GTX 980, or similar"
 
@@ -98,9 +99,6 @@ EXPECTED_PIXEL = [51, 178, 102, 255]
 
 # Reported side by side but never asserted; see the module docstring.
 UNASSERTED = ("fbHash",)
-# webgl-spoofing.patch reads this one under a key that cannot match, so it
-# always falls through to the host's value. Pre-existing, unrelated to EGL.
-UNSPOOFED_ATTRS = ("premultipliedAlpha",)
 
 PROBE = r"""
 (function () {
@@ -198,12 +196,8 @@ PROBE = r"""
 
 
 def _launch_kwargs(headless: Any) -> Dict[str, Any]:
-    kwargs: Dict[str, Any] = dict(
-        headless=headless, os="linux", webgl_config=(VENDOR, RENDERER)
-    )
-    if EXECUTABLE_PATH:
-        kwargs["executable_path"] = EXECUTABLE_PATH
-    return kwargs
+    return dict(headless=headless, os="linux", webgl_config=(VENDOR, RENDERER),
+                executable_path=str(resolve_binary()))
 
 
 def _check(results: Dict[str, Any], label: str, got: Any, expected: Any) -> None:
@@ -246,10 +240,6 @@ def _assert_identity(results: Dict[str, Any], kind: str, got: Dict[str, Any],
     if spf:
         _check(results, f"{kind}.FRAG_HIGH_FLOAT", got["FRAG_HIGH_FLOAT"],
                [spf["rangeMin"], spf["rangeMax"], spf["precision"]])
-    for attr, want in fp[f"{domain}:contextAttributes"].items():
-        if attr in UNSPOOFED_ATTRS:
-            continue
-        _check(results, f"{kind}.attrs.{attr}", got["attrs"].get(attr), want)
 
 
 def _assert_renders(results: Dict[str, Any], mode: str, kind: str,
@@ -267,7 +257,11 @@ def _kinds(fp: Dict[str, Any]) -> Dict[str, bool]:
 
 async def _run() -> bool:
     results: Dict[str, Any] = {}
-    fp = sample_webgl("lin", VENDOR, RENDERER)
+    devices = len(recorded_devices("lin", VENDOR, RENDERER))
+    if devices != 1:
+        print(f"FAIL: fpgen records {devices} devices behind {RENDERER}; the guard needs exactly one")
+        return False
+    fp = webgl_for_gpu("lin", VENDOR, RENDERER)
     wanted = _kinds(fp)
     print(f"pinned GPU: {VENDOR} / {RENDERER}")
     print(f"webgl2 expected: {wanted['webgl2']}")

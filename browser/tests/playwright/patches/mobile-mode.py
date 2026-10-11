@@ -18,22 +18,35 @@ for Android. These values are Gecko's own Android defaults: the ANDROID branch
 of GetPointerCapabilities, dom.w3c_touch_events.legacy_apis.enabled (true only
 on Android), dom.meta-viewport.enabled (true only on Android).
 
-Three launches:
+The raw binary, with CAMOU_CONFIG set directly:
 
     mobile          CAMOU_CONFIG {"mobile": true}   -> every page is the phone
-    per-context     a desktop launch, one context with isMobile + hasTouch
-                    -> that context is the phone, a plain one beside it is not
+    per-context     a desktop launch, one context with isMobile + hasTouch and
+                    an Android user agent -> that context is the phone, a plain
+                    one beside it is not
     control         a desktop launch -> nothing moved
 
+Juggler puts a page in Responsive Design Mode only for an isMobile context with
+a viewport and an Android user agent (TargetRegistry.js _usesRDM), and RDM is
+what gives a per-context phone its meta viewport and window.orientation. RDM
+matches no desktop browser, so isMobile on a desktop identity must stay out of
+it (viewport-no-rdm.py): the per-context launch also opens an isMobile context
+with the desktop user agent, which must answer like the control.
+
+Then the Python package, the way callers ask for a phone:
+
+    Camoufox(os="android")                       -> every page is the phone
+    AsyncNewContext(browser, os="android")       -> that context is the phone
+
 The meta viewport needs APZ on the widget, like any MobileViewportManager, so
-the viewport checks run headful (under Xvfb on a machine without a display).
+everything runs headful on a private Xvfb display (helpers.hidden_display).
 
 Run from any venv that has playwright:
-    python tests/patches/mobile-mode.py
-    python tests/patches/mobile-mode.py --binary /path/to/camoufox-bin
+    python browser/tests/playwright/patches/mobile-mode.py
+    python browser/tests/playwright/patches/mobile-mode.py --binary /path/to/camoufox-bin
 
 Which binary is tested, in order of precedence:
-    --binary <path> | $CAMOUFOX_BINARY | the in-tree obj-*/dist/bin/camoufox-bin
+    --binary <path> | $CAMOUFOX_EXECUTABLE_PATH | $CAMOUFOX_BINARY | the in-tree build
 """
 
 import asyncio
@@ -46,9 +59,16 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helpers import hidden_display, resolve_binary  # noqa: E402
 
-ANDROID_UA = "Mozilla/5.0 (Android 16; Mobile; rv:155.0) Gecko/155.0 Firefox/155.0"
+import camoufox  # noqa: E402
+
+# The user agent the package's Android persona claims, so the raw-binary
+# checks probe the same phone os="android" asks for.
+ANDROID_UA = json.loads(
+    (Path(camoufox.__file__).parent / "android-devices.json").read_text()
+)["navigator"]["userAgent"]
 
 PHONE: Dict[str, Any] = {
     "navigator.maxTouchPoints": 5,
@@ -203,15 +223,6 @@ async def probe_wide_page(page, viewport) -> Dict[str, Any]:
     return result
 
 
-def resolve_binary(argv) -> Optional[Path]:
-    if "--binary" in argv:
-        return Path(argv[argv.index("--binary") + 1]).resolve()
-    if os.environ.get("CAMOUFOX_BINARY"):
-        return Path(os.environ["CAMOUFOX_BINARY"]).resolve()
-    matches = sorted(REPO_ROOT.glob("camoufox-*/obj-*/dist/bin/camoufox-bin"))
-    return matches[-1] if matches else None
-
-
 async def read_viewports(page, window_width: int, mobile: bool) -> Dict[str, Any]:
     """clientWidth for each META_CASES page, with what that page should get."""
     results = {}
@@ -324,6 +335,17 @@ async def run(binary: Path) -> bool:
                 "(pointer: coarse)": True,
             })
 
+            # isMobile with the desktop user agent: no Android UA, so no RDM.
+            # Gecko gates the meta viewport and window.orientation on RDM, and
+            # touch on hasTouch, so this context answers like a desktop.
+            desktop_mobile = await browser.new_context(viewport=viewport, is_mobile=True)
+            page = await desktop_mobile.new_page()
+            await page.goto(page_with_meta("width=device-width"))
+            ok &= compare("isMobile with a desktop UA: touch and pointer",
+                          await page.evaluate(PROBE_JS), DESKTOP)
+            vp = await read_viewports(page, viewport["width"], mobile=False)
+            ok &= compare("isMobile with a desktop UA: meta viewport ignored", vp, vp)
+
             plain = await browser.new_context(viewport=viewport)
             page = await plain.new_page()
             await page.goto(page_with_meta("width=device-width"))
@@ -347,13 +369,50 @@ async def run(binary: Path) -> bool:
     return ok
 
 
+async def run_package(binary: Path) -> bool:
+    """The phone the Python package draws for os="android", launch-wide and
+    per context."""
+    from camoufox.async_api import AsyncCamoufox, AsyncNewContext
+
+    ok = True
+    # i_know_what_im_doing: the phone's fonts, voices and GPU come from the
+    # Linux pools, which the launcher warns about; that is not under test.
+    async with AsyncCamoufox(os="android", headless=False, executable_path=str(binary),
+                             i_know_what_im_doing=True) as browser:
+        page = await browser.new_page()
+        await page.goto(page_with_meta("width=device-width"))
+        ok &= compare("package, os='android': touch and pointer",
+                      await page.evaluate(PROBE_JS), PHONE)
+        # The launcher writes the build's own Firefox version into the UA, so
+        # only the platform part is the persona's.
+        ua = await page.evaluate("() => navigator.userAgent")
+        ok &= compare("package, os='android': user agent",
+                      {"claims Firefox for Android": ua.startswith("Mozilla/5.0 (Android ")},
+                      {"claims Firefox for Android": True})
+
+    async with AsyncCamoufox(os="linux", headless=False, executable_path=str(binary),
+                             i_know_what_im_doing=True) as browser:
+        context = await AsyncNewContext(browser, os="android")
+        page = await context.new_page()
+        await page.goto(page_with_meta("width=device-width"))
+        ok &= compare("package, NewContext(os='android'): touch and pointer",
+                      await page.evaluate(PROBE_JS), PHONE)
+        width = await page.evaluate("() => innerWidth")
+        vp = await read_viewports(page, width, mobile=True)
+        ok &= compare("package, NewContext(os='android'): meta viewport", vp, vp)
+    return ok
+
+
 async def main() -> int:
-    binary = resolve_binary(sys.argv)
-    if binary is None or not binary.exists():
+    binary = resolve_binary()
+    if not binary.exists():
         print(f"FATAL: no camoufox binary found (looked for {binary})")
         return 1
     print(f"Binary: {binary}")
-    if await run(binary):
+    with hidden_display():
+        ok = await run(binary)
+        ok &= await run_package(binary)
+    if ok:
         print("\nPASS: mobile mode looks like Firefox for Android; desktop is untouched.")
         return 0
     print("\nFAIL: see the rows marked FAIL above.")

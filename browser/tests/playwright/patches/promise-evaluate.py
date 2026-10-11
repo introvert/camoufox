@@ -18,8 +18,8 @@ page sees neither the `then` call nor the callbacks. That part is asserted here
 too: with the default world isolation on, attaching them must stay invisible.
 
 Run against a specific build:
-    CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin python tests/patches/promise-evaluate.py
-(without the env var it uses the camoufox-managed browser download.)
+    python browser/tests/playwright/patches/promise-evaluate.py --binary /path/to/camoufox-bin
+(or CAMOUFOX_EXECUTABLE_PATH, or the in-tree build; see helpers.resolve_binary.)
 
 What PASS means:
     * already-settled, microtask-settled and timer-settled promises all resolve;
@@ -31,13 +31,14 @@ What PASS means:
 """
 
 import asyncio
-import os
 import sys
+from pathlib import Path
 from typing import Any, Dict
 
-from camoufox.async_api import AsyncCamoufox
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helpers import resolve_binary  # noqa: E402
 
-EXECUTABLE_PATH = os.environ.get("CAMOUFOX_EXECUTABLE_PATH")
+from camoufox.async_api import AsyncCamoufox  # noqa: E402
 
 # Timeout per evaluate. Every one of these settles in milliseconds when the
 # hook works; the bug makes them wait forever, so anything generous is enough.
@@ -75,10 +76,7 @@ WORKER = (
 
 
 def _launch_kwargs() -> Dict[str, Any]:
-    kwargs: Dict[str, Any] = dict(headless=True, os="linux")
-    if EXECUTABLE_PATH:
-        kwargs["executable_path"] = EXECUTABLE_PATH
-    return kwargs
+    return dict(headless=True, os="linux", executable_path=str(resolve_binary()))
 
 
 def _check(results: Dict[str, Any], label: str, got: Any, expected: Any) -> None:

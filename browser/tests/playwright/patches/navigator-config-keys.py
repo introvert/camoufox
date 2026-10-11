@@ -5,8 +5,8 @@ patch read now reach the page, on the window and in a worker alike, and an
 unset key still gives Gecko's own value.
 
 Run from any venv that has playwright:
-    python tests/patches/navigator-config-keys.py
-    python tests/patches/navigator-config-keys.py --binary /path/to/camoufox-bin
+    python browser/tests/playwright/patches/navigator-config-keys.py
+    python browser/tests/playwright/patches/navigator-config-keys.py --binary /path/to/camoufox-bin
 """
 
 import asyncio
@@ -14,9 +14,10 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helpers import resolve_binary  # noqa: E402
 
 SET: Dict[str, Any] = {
     "navigator.appCodeName": "Mozilla2",
@@ -78,15 +79,6 @@ WORKER_JS = r"""() => new Promise(resolve => {
 })"""
 
 
-def resolve_binary(argv) -> Optional[Path]:
-    if "--binary" in argv:
-        return Path(argv[argv.index("--binary") + 1]).resolve()
-    if os.environ.get("CAMOUFOX_BINARY"):
-        return Path(os.environ["CAMOUFOX_BINARY"]).resolve()
-    matches = sorted(REPO_ROOT.glob("camoufox-*/obj-*/dist/bin/camoufox-bin"))
-    return matches[-1] if matches else None
-
-
 async def probe(binary: Path, config: Dict[str, Any]):
     from playwright.async_api import async_playwright
 
@@ -129,8 +121,8 @@ def compare(title: str, actual: Dict[str, Any], expected: Dict[str, Any]) -> boo
 
 
 async def main() -> int:
-    binary = resolve_binary(sys.argv)
-    if binary is None or not binary.exists():
+    binary = resolve_binary()
+    if not binary.exists():
         print(f"FATAL: no camoufox binary found (looked for {binary})")
         return 1
     print(f"Binary: {binary}")

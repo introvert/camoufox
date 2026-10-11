@@ -12,14 +12,18 @@ environment knob is the one place a default can live.
 An explicit webgl_config argument still wins, so a caller can override the fleet.
 
 Pinning skips sample_webgl_for_screen(), which is what normally keeps the GPU
-coherent with the screen BrowserForge picked, so the two checks it would have
+coherent with the screen fpgen picked, so the two checks it would have
 made are made on the pinned value instead. They warn rather than resample: the
 caller named that GPU on purpose, and quietly substituting another would be
 worse than saying the pairing is odd.
 
-No browser is launched; this exercises launch_options() alone. It does still need
-an installed build to resolve, since launch_options() reads properties.json from
-it, so run `camoufox fetch` first.
+No browser is launched; this exercises launch_options() alone. It still reads
+properties.json and application.ini beside the binary under test
+(CAMOUFOX_EXECUTABLE_PATH). Every launch here asks for canvas noise, so the
+synthetic GPU path is taken and the host GPU is never probed; uBlock Origin is
+left out so nothing is downloaded.
+
+    python browser/tests/playwright/patches/webgl-config-knob.py
 
 What PASS means:
     * the environment default is picked up, and a passed argument beats it;
@@ -29,20 +33,32 @@ What PASS means:
       every session;
     * a preset that names its own GPU beats the fleet default, and an explicit
       argument beats the preset by replacing it rather than landing half over it,
-      so the renderer string and the parameter table never name different GPUs;
+      so the renderer string and the parameter table never name different GPUs
+      (the parameters are one of the devices fpgen recorded behind the named GPU);
     * and a sampled GPU, the default path, warns about neither.
 """
 
 import os
 import sys
 import warnings
+from pathlib import Path
 from typing import Any, Dict, List
 
-from camoufox._warnings import LeakWarning
-from camoufox.utils import launch_options, webgl_config_from_env
+import orjson
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helpers import resolve_binary  # noqa: E402
+
+from camoufox._warnings import LeakWarning  # noqa: E402
+from camoufox.addons import DefaultAddons  # noqa: E402
+from camoufox.utils import WEBGL_CONFIG_ENV, _camou_config_blob, launch_options, webgl_config_from_env  # noqa: E402
+from camoufox.webgl import recorded_devices  # noqa: E402
+
+# Every pair is one fpgen recorded from Firefox on Linux: launch_options()
+# raises for any other (webgl_for_gpu).
 SOFTWARE = ("Mesa", "llvmpipe, or similar")
 DISCRETE = ("NVIDIA Corporation", "NVIDIA GeForce GTX 980, or similar")
+PRESET = {"webGl:vendor": "NVIDIA Corporation", "webGl:renderer": "NVIDIA GeForce GTX 480, or similar"}
 
 
 def _check(results: Dict[str, Any], label: str, got: Any, expected: Any) -> None:
@@ -55,16 +71,20 @@ def _check(results: Dict[str, Any], label: str, got: Any, expected: Any) -> None
 
 def _launch(**kwargs: Any) -> Dict[str, Any]:
     """launch_options() with the network-touching parts left alone."""
-    return launch_options(os="linux", headless=True, **kwargs)
+    return launch_options(os="linux", headless=True, canvas_noise=True,
+                          executable_path=str(resolve_binary()),
+                          exclude_addons=[DefaultAddons.UBO], **kwargs)
 
 
 def _full(opts: Dict[str, Any]) -> Dict[str, Any]:
     """The config the browser will actually be handed."""
-    import orjson
+    return orjson.loads(_camou_config_blob(opts))
 
-    env = opts.get("env", {})
-    blob = "".join(v for k, v in sorted(env.items()) if k.startswith("CAMOU_CONFIG"))
-    return orjson.loads(blob)
+
+def _parameters_recorded(config: Dict[str, Any]) -> bool:
+    """Whether the parameter table is one fpgen recorded behind the named GPU."""
+    devices = recorded_devices("lin", config["webGl:vendor"], config["webGl:renderer"])
+    return any(d["webGl:parameters"] == config["webGl:parameters"] for d in devices)
 
 
 def _renderer(opts: Dict[str, Any]) -> Any:
@@ -86,7 +106,7 @@ def _run() -> bool:
     results: Dict[str, Any] = {}
 
     print("-- the environment default --")
-    os.environ["CAMOUFOX_WEBGL_CONFIG"] = "Mesa|llvmpipe, or similar"
+    os.environ[WEBGL_CONFIG_ENV] = "Mesa|llvmpipe, or similar"
     _check(results, "parsed from the environment", webgl_config_from_env(), SOFTWARE)
     _check(results, "reaches the browser config",
            _renderer(_launch(i_know_what_im_doing=True)), SOFTWARE[1])
@@ -99,14 +119,11 @@ def _run() -> bool:
 
     print()
     print("-- the config stays internally coherent --")
-    PRESET = {"webGl:vendor": "Intel", "webGl:renderer": "Intel(R) HD Graphics 400, or similar"}
-    os.environ["CAMOUFOX_WEBGL_CONFIG"] = "Mesa|llvmpipe, or similar"
     # A preset naming its own GPU is a deliberate choice; the fleet default is not.
     preset = _full(_launch(config=dict(PRESET), i_know_what_im_doing=True))
     _check(results, "a preset's GPU beats the fleet default",
            preset["webGl:renderer"], PRESET["webGl:renderer"])
-    _check(results, "and its unmasked name agrees",
-           preset["webGl:parameters"]["37446"], PRESET["webGl:renderer"])
+    _check(results, "and its parameters are that GPU's", _parameters_recorded(preset), True)
 
     # An explicit argument does beat the preset, and must replace it rather than
     # land half over it: merge_into() keeps keys the config already holds, so the
@@ -115,20 +132,19 @@ def _run() -> bool:
                            i_know_what_im_doing=True))
     _check(results, "an argument replaces the preset's GPU",
            forced["webGl:renderer"], SOFTWARE[1])
-    _check(results, "and leaves no mismatched unmasked name",
-           forced["webGl:parameters"]["37446"], SOFTWARE[1])
-    del os.environ["CAMOUFOX_WEBGL_CONFIG"]
+    _check(results, "and its parameters are the argument's GPU's", _parameters_recorded(forced), True)
+    del os.environ[WEBGL_CONFIG_ENV]
 
     print()
     print("-- a malformed value is not silently ignored --")
-    os.environ["CAMOUFOX_WEBGL_CONFIG"] = "llvmpipe"
+    os.environ[WEBGL_CONFIG_ENV] = "llvmpipe"
     raised = "<none>"
     try:
         webgl_config_from_env()
     except ValueError as exc:
         raised = "ValueError" if "Vendor|Renderer" in str(exc) else str(exc)[:40]
     _check(results, "missing separator raises", raised, "ValueError")
-    del os.environ["CAMOUFOX_WEBGL_CONFIG"]
+    del os.environ[WEBGL_CONFIG_ENV]
 
     print()
     print("-- the warnings pinning earns --")

@@ -20,8 +20,8 @@ The extension here is built on the fly and answers nothing for one URL, so the
 hang is deterministic rather than a race that needs load to appear.
 
 Run against a specific build:
-    CAMOUFOX_EXECUTABLE_PATH=/path/to/camoufox-bin python tests/patches/webrequest-blocking-timeout.py
-(without the env var it uses the camoufox-managed browser download.)
+    python browser/tests/playwright/patches/webrequest-blocking-timeout.py --binary /path/to/camoufox-bin
+(or CAMOUFOX_EXECUTABLE_PATH, or the in-tree build; see helpers.resolve_binary.)
 
 What PASS means:
     * a request no listener holds is unaffected;
@@ -34,17 +34,17 @@ What PASS means:
 
 import asyncio
 import json
-import os
 import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from camoufox.addons import DefaultAddons
-from camoufox.async_api import AsyncCamoufox
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helpers import resolve_binary  # noqa: E402
 
-EXECUTABLE_PATH = os.environ.get("CAMOUFOX_EXECUTABLE_PATH")
+from camoufox.addons import DefaultAddons  # noqa: E402
+from camoufox.async_api import AsyncCamoufox  # noqa: E402
 
 # Short enough to keep the test quick, long enough to sit well clear of the
 # sub-second time a healthy request takes.
@@ -150,7 +150,7 @@ async def _visit(extension: str, deadline_ms: Optional[int]) -> Tuple[Dict[str, 
     try:
         async with AsyncCamoufox(
             headless=True,
-            executable_path=EXECUTABLE_PATH,
+            executable_path=str(resolve_binary()),
             addons=[extension],
             # uBlock Origin is a blocking listener of its own; leave it out so
             # only the listener under test can hold a request.
