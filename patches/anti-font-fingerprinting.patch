@@ -179,7 +179,7 @@ new file mode 100644
 index 0000000000..1f8b3a08f6
 --- /dev/null
 +++ b/dom/base/RoverfoxStorageManager.cpp
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,172 @@
 +#include "RoverfoxStorageManager.h"
 +#include "mozilla/Preferences.h"
 +#include "nsXULAppAPI.h"
@@ -193,6 +193,12 @@ index 0000000000..1f8b3a08f6
 +RoverfoxStorageManager::GetLocalCache() {
 +  static nsTHashMap<nsCStringHashKey, nsCString> sCache;
 +  return sCache;
++}
++
++/* static */ nsTHashSet<nsCString>&
++RoverfoxStorageManager::GetParentMisses() {
++  static nsTHashSet<nsCString> sMisses;
++  return sMisses;
 +}
 +
 +/* static */ mozilla::Mutex&
@@ -215,6 +221,7 @@ index 0000000000..1f8b3a08f6
 +  {
 +    MutexAutoLock lock(GetLocalCacheMutex());
 +    GetLocalCache().InsertOrUpdate(prefName, nsCString(value));
++    GetParentMisses().Remove(prefName);
 +  }
 +  // Sync to parent for cross-process availability
 +  if (XRE_IsParentProcess()) {
@@ -227,6 +234,52 @@ index 0000000000..1f8b3a08f6
 +  }
 +}
 +
++/* static */ bool
++RoverfoxStorageManager::LookupPrefValue(const nsCString& prefName,
++                                         nsACString& outValue) {
++  // Check local cache first (immediate reads for values set in this process)
++  {
++    MutexAutoLock lock(GetLocalCacheMutex());
++    if (auto entry = GetLocalCache().Lookup(prefName)) {
++      outValue = entry.Data();
++    }
++  }
++  // Fall back to Preferences (values synced from other processes)
++  if (outValue.IsEmpty()) {
++    Preferences::GetCString(prefName.get(), outValue);
++  }
++  // Sync IPC read from parent (cross-process fallback for workers), at most
++  // once per key. Most keys are never set: a context without a per-context
++  // override, or a seed nobody configured. Asking the parent again on every
++  // read turned each navigator getter and every text shaping call into a sync
++  // IPC round trip, 100x+ slower than stock. A value set later in any process
++  // still reaches us: the parent broadcasts roverfox.s.* pref changes to
++  // every content process, and the Preferences lookup above runs on every
++  // read. The parent round trip only covers a value set before that
++  // broadcast has arrived, which matters for the first read alone.
++  if (outValue.IsEmpty() && !XRE_IsParentProcess() && NS_IsMainThread()) {
++    {
++      MutexAutoLock lock(GetLocalCacheMutex());
++      if (GetParentMisses().Contains(prefName)) {
++        return false;
++      }
++    }
++    ContentChild* cc = ContentChild::GetSingleton();
++    if (cc) {
++      nsCString parentValue;
++      cc->SendRoverfoxStorageGet(prefName, &parentValue);
++      outValue = parentValue;
++      MutexAutoLock lock(GetLocalCacheMutex());
++      if (!parentValue.IsEmpty()) {
++        GetLocalCache().InsertOrUpdate(prefName, parentValue);
++      } else {
++        GetParentMisses().Insert(prefName);
++      }
++    }
++  }
++  return !outValue.IsEmpty();
++}
++
 +/* static */ void
 +RoverfoxStorageManager::PutUint(const nsAString& key, uint32_t value) {
 +  nsCString prefName = MakePrefName(key);
@@ -237,31 +290,8 @@ index 0000000000..1f8b3a08f6
 +
 +/* static */ bool
 +RoverfoxStorageManager::GetUint(const nsAString& key, uint32_t& outValue) {
-+  nsCString prefName = MakePrefName(key);
 +  nsAutoCString strValue;
-+  // Check local cache first (immediate reads for values set in this process)
-+  {
-+    MutexAutoLock lock(GetLocalCacheMutex());
-+    if (auto entry = GetLocalCache().Lookup(prefName)) {
-+      strValue = entry.Data();
-+    }
-+  }
-+  // Fall back to Preferences (values synced from other processes)
-+  if (strValue.IsEmpty()) {
-+    Preferences::GetCString(prefName.get(), strValue);
-+  }
-+  // Sync IPC read from parent (cross-process fallback for workers)
-+  if (strValue.IsEmpty() && !XRE_IsParentProcess() && NS_IsMainThread()) {
-+    ContentChild* cc = ContentChild::GetSingleton();
-+    if (cc) {
-+      cc->SendRoverfoxStorageGet(prefName, &strValue);
-+      if (!strValue.IsEmpty()) {
-+        MutexAutoLock lock(GetLocalCacheMutex());
-+        GetLocalCache().InsertOrUpdate(prefName, nsCString(strValue));
-+      }
-+    }
-+  }
-+  if (!strValue.IsEmpty()) {
++  if (LookupPrefValue(MakePrefName(key), strValue)) {
 +    nsresult parseRv;
 +    int64_t parsed = strValue.ToInteger64(&parseRv);
 +    if (NS_SUCCEEDED(parseRv) && parsed >= 0) {
@@ -281,29 +311,8 @@ index 0000000000..1f8b3a08f6
 +
 +/* static */ bool
 +RoverfoxStorageManager::GetBool(const nsAString& key, bool& outValue) {
-+  nsCString prefName = MakePrefName(key);
 +  nsAutoCString strValue;
-+  {
-+    MutexAutoLock lock(GetLocalCacheMutex());
-+    if (auto entry = GetLocalCache().Lookup(prefName)) {
-+      strValue = entry.Data();
-+    }
-+  }
-+  if (strValue.IsEmpty()) {
-+    Preferences::GetCString(prefName.get(), strValue);
-+  }
-+  // Sync IPC read from parent (cross-process fallback for workers)
-+  if (strValue.IsEmpty() && !XRE_IsParentProcess() && NS_IsMainThread()) {
-+    ContentChild* cc = ContentChild::GetSingleton();
-+    if (cc) {
-+      cc->SendRoverfoxStorageGet(prefName, &strValue);
-+      if (!strValue.IsEmpty()) {
-+        MutexAutoLock lock(GetLocalCacheMutex());
-+        GetLocalCache().InsertOrUpdate(prefName, nsCString(strValue));
-+      }
-+    }
-+  }
-+  if (!strValue.IsEmpty()) {
++  if (LookupPrefValue(MakePrefName(key), strValue)) {
 +    outValue = strValue.EqualsLiteral("1");
 +    return true;
 +  }
@@ -321,29 +330,8 @@ index 0000000000..1f8b3a08f6
 +
 +/* static */ bool
 +RoverfoxStorageManager::GetString(const nsAString& key, nsAString& outValue) {
-+  nsCString prefName = MakePrefName(key);
 +  nsAutoCString utf8Value;
-+  {
-+    MutexAutoLock lock(GetLocalCacheMutex());
-+    if (auto entry = GetLocalCache().Lookup(prefName)) {
-+      utf8Value = entry.Data();
-+    }
-+  }
-+  if (utf8Value.IsEmpty()) {
-+    Preferences::GetCString(prefName.get(), utf8Value);
-+  }
-+  // Sync IPC read from parent (cross-process fallback for workers)
-+  if (utf8Value.IsEmpty() && !XRE_IsParentProcess() && NS_IsMainThread()) {
-+    ContentChild* cc = ContentChild::GetSingleton();
-+    if (cc) {
-+      cc->SendRoverfoxStorageGet(prefName, &utf8Value);
-+      if (!utf8Value.IsEmpty()) {
-+        MutexAutoLock lock(GetLocalCacheMutex());
-+        GetLocalCache().InsertOrUpdate(prefName, nsCString(utf8Value));
-+      }
-+    }
-+  }
-+  if (!utf8Value.IsEmpty()) {
++  if (LookupPrefValue(MakePrefName(key), utf8Value)) {
 +    CopyUTF8toUTF16(utf8Value, outValue);
 +    return true;
 +  }
@@ -369,12 +357,13 @@ new file mode 100644
 index 0000000000..4a2dac8e8f
 --- /dev/null
 +++ b/dom/base/RoverfoxStorageManager.h
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,40 @@
 +#ifndef mozilla_dom_RoverfoxStorageManager_h
 +#define mozilla_dom_RoverfoxStorageManager_h
 +
 +#include "nsString.h"
 +#include "nsTHashMap.h"
++#include "nsTHashSet.h"
 +#include "nsHashKeys.h"
 +#include "mozilla/Mutex.h"
 +
@@ -398,7 +387,10 @@ index 0000000000..4a2dac8e8f
 + private:
 +  static nsCString MakePrefName(const nsAString& key);
 +  static void SetPrefValue(const nsCString& prefName, const nsCString& value);
++  static bool LookupPrefValue(const nsCString& prefName, nsACString& outValue);
 +  static nsTHashMap<nsCStringHashKey, nsCString>& GetLocalCache();
++  // Keys the parent had no value for when this process asked it.
++  static nsTHashSet<nsCString>& GetParentMisses();
 +  static mozilla::Mutex& GetLocalCacheMutex();
 +};
 +
