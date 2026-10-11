@@ -28,6 +28,7 @@ dpr 2, "Apple M1, or similar" -- the machine is an M4, and Firefox generalises
 the renderer string itself).
 """
 
+import re
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 from .pkgman import LAUNCHER_CONSTANTS
@@ -106,6 +107,25 @@ APPLE_SILICON_PANELS = frozenset(
     for panels in LAUNCHER_CONSTANTS['appleSiliconPanels'].values()
     for width, height in panels
 )
+
+
+# Firefox for Android is the one Gecko that ships with "Android" in its UA
+# ("Mozilla/5.0 (Android 16; Mobile; rv:155.0) Gecko/155.0 Firefox/155.0").
+_ANDROID_UA_RE = re.compile(r'\bAndroid\b')
+
+
+def is_mobile_user_agent(user_agent: Optional[str]) -> bool:
+    """Whether `user_agent` claims Firefox for Android."""
+    return bool(user_agent and _ANDROID_UA_RE.search(user_agent))
+
+
+def is_mobile_config(config: Dict[str, Any]) -> bool:
+    """Whether `config` describes a phone. An explicit `mobile` key wins;
+    otherwise the user agent decides, so a caller who only swaps in an Android
+    UA still gets the rest of the phone."""
+    if 'mobile' in config:
+        return bool(config['mobile'])
+    return is_mobile_user_agent(config.get('navigator.userAgent'))
 
 
 class Violation(NamedTuple):
@@ -303,7 +323,8 @@ def _repair_window_chrome(config: Dict[str, Any], target_os: str) -> None:
 
 def _check_screen_shape(config: Dict[str, Any], target_os: str) -> Optional[str]:
     width, height = config.get('screen.width'), config.get('screen.height')
-    if not width or not height:
+    # A phone's screen is portrait and small by design.
+    if not width or not height or is_mobile_config(config):
         return None
     if height > width:
         return f'portrait screen {width}x{height}; desktop panels are landscape'

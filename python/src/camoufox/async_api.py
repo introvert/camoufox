@@ -206,9 +206,10 @@ async def AsyncNewContext(
     Parameters:
         browser: A Browser instance from AsyncNewBrowser or AsyncCamoufox.
         preset: A fingerprint preset dict to use. If None, fpgen draws a new identity.
-        os: Target OS for the drawn identity ("windows", "macos", "linux"). On a browser launched
-            without canvas noise, contexts claim the host's OS and GPU, and another os or preset
-            raises ValueError.
+        os: Target OS for the drawn identity ("windows", "macos", "linux", "android"). On a browser
+            launched without canvas noise, contexts claim the host's OS and GPU, and another os or
+            preset raises ValueError; "android" draws from the Linux pools, so a Linux host can
+            render it. "android" also opens the context with is_mobile and has_touch.
         ff_version: Firefox major version to claim in the UA. Defaults to the browser's own.
         webrtc_ip: IPv4 or IPv6 address to spoof for WebRTC ICE candidates.
         proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).

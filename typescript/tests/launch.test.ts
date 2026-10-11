@@ -467,6 +467,29 @@ describe("test_launch_environment: stock media defaults", () => {
 		);
 		expect(none).toEqual([]);
 	});
+
+	it("isMobile beside a Firefox for Android UA is a phone, not a leak", async () => {
+		const browser = utils.attachDesktopOnlyWarning(new FakeBrowser());
+		const { warnings: none } = await warnings.recordWarnings(async () =>
+			browser.newContext({
+				isMobile: true,
+				userAgent:
+					"Mozilla/5.0 (Android 16; Mobile; rv:155.0) Gecko/155.0 Firefox/155.0",
+			}),
+		);
+		expect(none).toEqual([]);
+	});
+
+	it("an Android context on a Linux host keeps its OS", () => {
+		const browser = { _camoufoxHostIdentity: ["lin", null] };
+		expect(utils.contextIdentity(browser, "android", undefined)).toEqual([
+			"android",
+			null,
+		]);
+		expect(() => utils.contextIdentity(browser, "windows", undefined)).toThrow(
+			/canvas_noise/,
+		);
+	});
 });
 
 describe("test_viewport_default", () => {

@@ -116,7 +116,7 @@ with Camoufox(headless=True, canvas_noise=True) as browser:
 | `NewContext` argument | Effect |
 |---|---|
 | `preset` | Use this fingerprint preset dict instead of an fpgen draw. |
-| `os` | `"windows"`, `"macos"` or `"linux"` for the drawn identity. On a browser without canvas noise, the host's OS, and anything else raises `ValueError`. |
+| `os` | `"windows"`, `"macos"`, `"linux"` or `"android"` for the drawn identity. On a browser without canvas noise, the host's OS, and anything else raises `ValueError`; `"android"` draws from the Linux pools, so a Linux host can render it. `"android"` also opens the context with `is_mobile` and `has_touch` ([Firefox for Android](#firefox-for-android)). |
 | `ff_version` | Firefox major version claimed in the User-Agent. Defaults to the browser's own. |
 | `webrtc_ip` | IPv4 or IPv6 address WebRTC reports. |
 | `proxy` | Per-context proxy, in Playwright's format. Unless `webrtc_ip` and `timezone_id` are both given, they are looked up from the proxy's exit IP, and `InvalidIP` is raised if the lookup fails. |
@@ -208,7 +208,7 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 
 | Option | Type | Default | Effect |
 |---|---|---|---|
-| `os` | `str` or `list[str]` | fpgen's real-world mix | `"windows"`, `"macos"`, `"linux"`, or a list to pick from. |
+| `os` | `str` or `list[str]` | fpgen's real-world mix | `"windows"`, `"macos"`, `"linux"`, `"android"`, or a list to pick from. See [Firefox for Android](#firefox-for-android). |
 | `headless` | `bool` or `"virtual"` | `False` | See [Headless modes](#headless-modes). |
 | `proxy` | `dict` | none | Playwright proxy: `server`, `username`, `password`, `bypass`. |
 | `geoip` | `bool` or `str` | none | `True` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Needs the `geoip` extra. |
@@ -224,7 +224,7 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 | `block_images` | `bool` | `False` | Block image loading. Warns: some WAFs detect it. |
 | `block_webrtc` | `bool` | `False` | Disable WebRTC entirely. |
 | `block_webgl` | `bool` | `False` | Disable WebGL. Warns: many WAFs check for it. |
-| `webgl_config` | `(vendor, renderer)` | drawn | Use one GPU fpgen has recorded for Firefox on `os` (see `camoufox.webgl.firefox_gpus`); any other pair raises `ValueError`. Needs `os`. |
+| `webgl_config` | `(vendor, renderer)` | `CAMOUFOX_WEBGL_CONFIG`, else drawn | Use one GPU fpgen has recorded for Firefox on `os` (see `camoufox.webgl.firefox_gpus`); any other pair raises `ValueError`, except on a phone ([Firefox for Android](#firefox-for-android)). Warns for a discrete GPU behind a screen too small for one, and for a software renderer. Needs `os`. The `CAMOUFOX_WEBGL_CONFIG` environment variable (`"Vendor\|Renderer"`) sets a default for every launch; a preset's or the config's own GPU wins over it. |
 | `canvas_noise` | `bool` | on for another OS or GPU | Random canvas and WebGL readback, as in LibreWolf. Warns. See [The canvas on another OS](#the-canvas-on-another-os). |
 | `disable_coop` | `bool` | `False` | Turn off Cross-Origin-Opener-Policy so elements in cross-origin iframes (such as the Turnstile checkbox) can be clicked. Warns. |
 | `main_world_eval` | `bool` | `False` | Allow `page.evaluate("mw:...")` and `mw:` init scripts to run in the page's own world. |
@@ -246,6 +246,55 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 
 `NewBrowser` and `AsyncNewBrowser` also take `persistent_context` and
 `from_options` (a dict from `launch_options()` to use as is).
+
+### The PDF viewer
+
+`config={"pdfViewerEnabled": False}` claims a Firefox without a PDF viewer:
+`navigator.pdfViewerEnabled`, `navigator.plugins` and `navigator.mimeTypes`
+move together, and the launcher sets `pdfjs.disabled` so PDFs download instead
+of rendering inline. `navigator.plugins` (a bool) moves the plugin and MIME
+lists alone, with a warning, since no real Firefox splits them.
+
+### Firefox for Android
+
+`os="android"` draws a Firefox for Android phone instead of a desktop:
+
+```python
+from camoufox.sync_api import Camoufox
+
+with Camoufox(os="android", headless=True) as browser:
+    page = browser.new_page()
+    page.goto("https://example.com")
+```
+
+A mobile user agent on its own only changes what the server sends; the page's
+scripts then ask the browser, which answers like a desktop. Mobile mode (the
+`mobile` config key, set for `os="android"` or any Android user agent) makes
+the browser answer like the phone:
+
+- `(pointer: coarse)` and `(hover: none)`, touch events with Android's legacy
+  touch APIs, and `navigator.maxTouchPoints` of 5
+- `<meta name="viewport">` is obeyed, and a page without one, or wider than the
+  screen, is zoomed out to fit. Playwright's clicks and viewport screenshots
+  follow the zoom; `config={"mobile:zoom": False}` turns zooming off
+- `window.orientation`, `onorientationchange` and a portrait `screen.orientation`
+- overlay scrollbars, Android's API surface (`navigator.share` present,
+  WebCodecs absent, ...), and the phone's device pixel ratio when headless or
+  on a virtual display
+
+fpgen records no Firefox for Android, so the phone (screen, window, device
+pixel ratio, user agent, platform) is drawn from `android-devices.json`, a
+handful of real devices recorded by BrowserForge. Fonts, speech voices and the
+WebGL GPU come from the Linux pools, with a `LeakWarning`: Camoufox bundles no
+Android fonts and fpgen records no phone GPUs. A phone GPU can still be named
+(`webgl_config=("Qualcomm", "Adreno (TM) 650, or similar")`); its strings are
+kept and the rest of WebGL is the host's, with a warning.
+
+`NewContext(browser, os="android")` gives one phone context in a desktop
+browser, through Playwright's `is_mobile` and `has_touch`. `is_mobile` on any
+other context is ignored, with a warning. Every field a Firefox for Android
+check can read, and how to set each one:
+[docs/android-persona-fields.md](https://github.com/daijro/camoufox/blob/main/docs/android-persona-fields.md).
 
 ## CLI
 

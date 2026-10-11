@@ -212,9 +212,11 @@ async function launchWith(
 export interface NewContextOptions extends Record<string, any> {
 	/** A fingerprint preset to use. If omitted, fpgen draws a new identity. */
 	preset?: Record<string, any>;
-	/** Target OS for the drawn identity ("windows", "macos", "linux"). On a
-	 * browser launched without canvas noise, contexts claim the host's OS and
-	 * GPU, and another os or preset throws ValueError. */
+	/** Target OS for the drawn identity ("windows", "macos", "linux",
+	 * "android"). On a browser launched without canvas noise, contexts claim the
+	 * host's OS and GPU, and another os or preset throws ValueError; "android"
+	 * draws from the Linux pools, so a Linux host can render it. "android" also
+	 * opens the context with isMobile and hasTouch. */
 	os?: string;
 	/** Firefox major version to claim in the UA. Defaults to the browser's own. */
 	ff_version?: string;

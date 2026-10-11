@@ -20,6 +20,7 @@ import {
 	NonFirefoxFingerprint,
 } from "./exceptions.js";
 import {
+	applyMobileMode,
 	audioSeedFromIdentity,
 	clampScreenToDisplay,
 	clampWindowDimensions,
@@ -33,9 +34,12 @@ import {
 	generateRandomFontSubset,
 	generateRandomVoiceSubset,
 	getRandomPreset,
+	gpuScreenIsPlausible,
 	identitySalt,
 	identitySeed,
+	isSoftwareRenderer,
 	loadOsFonts,
+	POOL_KEYS,
 	raiseScreenToModernFloor,
 	Screen,
 	setMediaDevicesDefaults,
@@ -715,7 +719,7 @@ function updateFonts(config: Record<string, any>, targetOs: string): void {
 function checkCustomFingerprint(fingerprint: Record<string, any>): void {
 	const userAgent = fingerprint?.navigator?.userAgent || "";
 	const browserName = parseUaFamily(userAgent);
-	if (browserName !== "Firefox") {
+	if (browserName !== "Firefox" && browserName !== "Firefox Mobile") {
 		throw new NonFirefoxFingerprint(
 			`"${browserName}" fingerprints are not supported in Camoufox. ` +
 				"Using fingerprints from a browser other than Firefox WILL lead to detection. " +
@@ -754,7 +758,7 @@ export function checkValidOs(osValue: ListOrString): void {
 		throw new InvalidOS(`OS values must be lowercase: '${osValue}'`);
 	}
 	// Assert that the OS is supported by Camoufox
-	if (!["windows", "macos", "linux"].includes(osValue)) {
+	if (!["windows", "macos", "linux", "android"].includes(osValue)) {
 		throw new InvalidOS(`Camoufox does not support the OS: '${osValue}'`);
 	}
 }
@@ -803,6 +807,23 @@ export function isDomainSet(
 }
 
 /**
+ * Keys under navigator. / screen. that are switches rather than device
+ * properties: setting one says nothing about the generated navigator or
+ * screen, so it must not trip the manual-config warnings or turn off the
+ * fix-ups that stand down only when the caller drives the device values.
+ */
+const SWITCH_KEYS: ReadonlySet<string> = new Set([
+	"navigator.plugins",
+	"screen.orientation",
+]);
+
+function deviceKeys(config: Record<string, any>): Record<string, any> {
+	return Object.fromEntries(
+		Object.entries(config).filter(([key]) => !SWITCH_KEYS.has(key)),
+	);
+}
+
+/**
  * Warns the user if they are manually setting properties that Camoufox already
  * sets internally.
  */
@@ -827,7 +848,7 @@ function warnManualConfig(config: Record<string, any>): void {
 		LeakWarning.warn("header-ua", false);
 	}
 	// Manual navigator setting
-	if (isDomainSet(config, "navigator.")) {
+	if (isDomainSet(deviceKeys(config), "navigator.")) {
 		LeakWarning.warn("navigator", false);
 	}
 	// Touchscreen digitizer spoofing. Called out separately from the blanket
@@ -840,7 +861,7 @@ function warnManualConfig(config: Record<string, any>): void {
 		LeakWarning.warn("instant_animations", false);
 	}
 	// Manual screen/window setting
-	if (isDomainSet(config, "screen.", "window.", "document.body.")) {
+	if (isDomainSet(deviceKeys(config), "screen.", "window.", "document.body.")) {
 		LeakWarning.warn("viewport", false);
 	}
 }
@@ -969,15 +990,19 @@ export function attachStockMediaDefaults<T>(target: T): T {
 }
 
 /**
- * Warn when newPage()/newContext() asks for isMobile: Camoufox only has desktop
- * identities, and Juggler ignores the option (TargetRegistry.js).
+ * Warn when newPage()/newContext() asks for isMobile without a Firefox for
+ * Android user agent: Juggler ignores the option for any other
+ * (TargetRegistry.js), and the identity stays a desktop's.
  */
 export function attachDesktopOnlyWarning<T>(target: T): T {
 	for (const name of ["newPage", "newContext"] as const) {
 		const original = (target as any)[name];
 		if (typeof original !== "function") continue;
 		(target as any)[name] = (options?: Record<string, any>, ...rest: any[]) => {
-			if (options?.isMobile || options?.is_mobile)
+			if (
+				(options?.isMobile || options?.is_mobile) &&
+				!coherence.isMobileUserAgent(options?.userAgent ?? options?.user_agent)
+			)
 				LeakWarning.warn("is_mobile");
 			return original.call(target, options, ...rest);
 		};
@@ -1069,7 +1094,7 @@ export function contextIdentity(
 	const hasPreset = pyTruthy(preset);
 	const presetGpu = preset?.webgl ?? {};
 	if (
-		(os || hostName) !== hostName ||
+		POOL_KEYS[os || hostName] !== hostOs ||
 		(hasPreset &&
 			targetOsFromPlatform(preset?.navigator?.platform ?? "") !== hostName) ||
 		(gpu &&
@@ -1083,7 +1108,7 @@ export function contextIdentity(
 				"to give a context another OS or GPU.",
 		);
 	}
-	return [hostName, gpu];
+	return [os || hostName, gpu];
 }
 
 /**
@@ -1202,7 +1227,9 @@ export interface LaunchOptions {
 	 * (read https://github.com/daijro/camoufox/blob/main/README.md) */
 	config?: Record<string, any>;
 	/** Operating system to use for the fingerprint generation. Can be
-	 * "windows", "macos", "linux", or a list to randomly choose from. */
+	 * "windows", "macos", "linux", "android", or a list to randomly choose
+	 * from. "android" draws a Firefox for Android phone and runs the browser in
+	 * mobile mode (touch-only pointer, touch events, meta viewport). */
 	os?: ListOrString;
 	/** Whether to block all images. */
 	block_images?: boolean;
@@ -1213,7 +1240,12 @@ export interface LaunchOptions {
 	/** Disables the Cross-Origin-Opener-Policy, allowing elements in cross-origin
 	 * iframes, such as the Turnstile checkbox, to be clicked. */
 	disable_coop?: boolean;
-	/** Use a specific WebGL vendor/renderer pair, as [vendor, renderer]. */
+	/** Use a specific WebGL vendor/renderer pair, as [vendor, renderer]. The
+	 * pair must be one fpgen has recorded from Firefox on `os`; any other
+	 * throws ValueError, except on a phone, whose GPUs fpgen never records:
+	 * there the two strings are kept and the rest of WebGL is the host's, with
+	 * a warning. Defaults to the CAMOUFOX_WEBGL_CONFIG environment variable
+	 * ("Vendor|Renderer"), below a preset's own GPU. */
 	webgl_config?: [string, string];
 	/** Calculate longitude, latitude, timezone, country, & locale based on the IP
 	 * address. Pass the target IP address to use, or `true` to find it. */
@@ -1283,6 +1315,61 @@ export interface LaunchOptions {
 	canvas_noise?: boolean | null;
 	/** Additional Firefox launch options, passed straight through to Playwright. */
 	[key: string]: any;
+}
+
+export const WEBGL_CONFIG_ENV = "CAMOUFOX_WEBGL_CONFIG";
+
+/**
+ * A fleet-wide default GPU, as "Vendor|Renderer" in CAMOUFOX_WEBGL_CONFIG.
+ *
+ * A deployment often wants one GPU policy for every process without editing
+ * each call site, and the config cannot hold it: the launcher writes
+ * CAMOU_CONFIG fresh on every launch, so exporting it does nothing.
+ */
+export function webglConfigFromEnv(): [string, string] | null {
+	const raw = process.env[WEBGL_CONFIG_ENV];
+	if (!raw) return null;
+	const sep = raw.indexOf("|");
+	const vendor = sep < 0 ? "" : raw.slice(0, sep).trim();
+	const renderer = sep < 0 ? "" : raw.slice(sep + 1).trim();
+	if (!vendor || !renderer) {
+		throw new ValueError(
+			`${WEBGL_CONFIG_ENV} must be "Vendor|Renderer", for example ` +
+				`"Intel|Intel(R) HD Graphics, or similar". Got: ${pyRepr(raw)}`,
+		);
+	}
+	return [vendor, renderer];
+}
+
+/**
+ * The WebGL config of a named GPU (webglForGpu).
+ *
+ * fpgen records no phone GPUs, so a phone's (Qualcomm, "Adreno (TM) 650, or
+ * similar") could never be named. On a phone an unrecorded pair keeps its two
+ * strings, with a warning: every other WebGL parameter is the host's.
+ */
+async function webglForPair(
+	targetOs: TargetOS,
+	vendor: string,
+	renderer: string,
+	seed: number | bigint,
+	mobile: boolean,
+	iKnowWhatImDoing: boolean,
+): Promise<Record<string, any>> {
+	if (
+		mobile &&
+		!(await utilsDeps.firefoxGpus(targetOs)).some(
+			([v, r]) => v === vendor && r === renderer,
+		)
+	) {
+		LeakWarning.warn("webgl_unknown_pair", iKnowWhatImDoing);
+		return {
+			"webGl:vendor": vendor,
+			"webGl:renderer": renderer,
+			webGl2Enabled: true,
+		};
+	}
+	return utilsDeps.webglForGpu(targetOs, vendor, renderer, seed);
 }
 
 /**
@@ -1386,8 +1473,13 @@ export async function launchOptions({
 	// Snapshot which domains the USER set before fingerprint generation fills in
 	// the rest. The post-generation corrections below must only touch generated
 	// values, never override what the user passed.
-	const userSetNavigator = isDomainSet(config, "navigator.");
-	const userSetScreenWindow = isDomainSet(config, "screen.", "window.");
+	const userSetNavigator = isDomainSet(deviceKeys(config), "navigator.");
+	const userSetScreenWindow = isDomainSet(
+		deviceKeys(config),
+		"screen.",
+		"window.",
+	);
+	const userSetTouchPoints = "navigator.maxTouchPoints" in config;
 	const userSetMediaDevices = isDomainSet(config, "mediaDevices:");
 	const userSetFonts = Boolean(fonts?.length) || isDomainSet(config, "fonts");
 	const userSetVoices = isDomainSet(config, "voices");
@@ -1411,12 +1503,19 @@ export async function launchOptions({
 		salt = utilsDeps.identitySalt();
 	}
 
+	// The fleet-wide default GPU meets the same OS requirement an explicit
+	// argument does, but is applied only once the identity is drawn: it loses
+	// to anything chosen deliberately, a preset's or the config's own GPU too.
+	const defaultWebglConfig = webgl_config == null ? webglConfigFromEnv() : null;
+
 	// Assert the target OS is valid
 	if (pyTruthy(targetOsOption)) {
 		checkValidOs(targetOsOption as ListOrString);
-	} else if (pyTruthy(webgl_config)) {
+	} else if (pyTruthy(webgl_config) || defaultWebglConfig) {
 		// webgl_config requires OS to be set
-		throw new ValueError("OS must be set when using webgl_config");
+		throw new ValueError(
+			`OS must be set when using webgl_config or ${WEBGL_CONFIG_ENV}`,
+		);
 	}
 
 	// Add the default addons
@@ -1489,6 +1588,22 @@ export async function launchOptions({
 	}
 
 	const targetOs = getTargetOs(config);
+
+	// A phone -- os="android", or an Android user agent the caller passed -- has
+	// to behave like one. The device pixel ratio moves only where there is no
+	// real monitor to overflow: at a phone's 2.5-4 dppx a headful window grows
+	// past any desktop screen.
+	let mobileDpr: number | null = null;
+	if (
+		coherence.isMobileConfig(config) &&
+		fingerprint != null &&
+		(headless || virtual_display)
+	)
+		mobileDpr = fingerprint.window?.devicePixelRatio ?? null;
+	if (
+		applyMobileMode(config, firefox_user_prefs, mobileDpr, userSetTouchPoints)
+	)
+		LeakWarning.warn("mobile_resources", i_know_what_im_doing);
 
 	// A preset whose screen is a phone viewport is not a real desktop device.
 	if (!userSetScreenWindow && coherence.screenIsImplausible(config)) {
@@ -1770,6 +1885,20 @@ export async function launchOptions({
 		setInto(config, "allowAddonNewtab", true);
 	}
 
+	// pdfViewerEnabled is answered from the config (pdf-viewer-spoofing.patch),
+	// with navigator.plugins and mimeTypes. The viewer itself follows, so a
+	// claimed "no viewer" also downloads PDFs instead of rendering them inline.
+	if (typeof config.pdfViewerEnabled === "boolean")
+		firefox_user_prefs["pdfjs.disabled"] ??= !config.pdfViewerEnabled;
+	// navigator.plugins moves the plugin and MIME lists alone, to test one half
+	// on its own. Every real Firefox exposes the PDF plugins exactly when it has
+	// a viewer, so any other pairing is a contradiction a page can read.
+	if (
+		typeof config["navigator.plugins"] === "boolean" &&
+		config["navigator.plugins"] !== (config.pdfViewerEnabled !== false)
+	)
+		LeakWarning.warn("plugins_pdf_mismatch", i_know_what_im_doing);
+
 	// Set Firefox user preferences. Each toggle writes its pref on or off: a
 	// persistent profile keeps a user.js pref in prefs.js after the launch that
 	// set it, so a flag that only wrote when on stayed on for good.
@@ -1784,7 +1913,10 @@ export async function launchOptions({
 	firefox_user_prefs["browser.tabs.remote.useCrossOriginOpenerPolicy"] ??=
 		!disable_coop;
 	// A persistent context takes its context options here.
-	if (passthrough.is_mobile || passthrough.isMobile) {
+	if (
+		(passthrough.is_mobile || passthrough.isMobile) &&
+		!coherence.isMobileConfig(config)
+	) {
 		LeakWarning.warn("is_mobile", i_know_what_im_doing);
 	}
 
@@ -1792,6 +1924,11 @@ export async function launchOptions({
 	// WebGL pool below defers to them. Here, not earlier, because the check
 	// reads the core count and the screen, which the launch replaces above.
 	coherence.dropIncoherentSourceValues(config, targetOs);
+	if (
+		defaultWebglConfig &&
+		!(pyTruthy(config["webGl:vendor"]) && pyTruthy(config["webGl:renderer"]))
+	)
+		webgl_config = defaultWebglConfig;
 
 	const resolvedExecutable = executable_path
 		? String(executable_path)
@@ -1819,19 +1956,47 @@ export async function launchOptions({
 			utilsDeps.identitySeed(config as Record<string, any>, salt);
 		// A pair the caller named, or the preset's own GPU, keeps its name and
 		// gets that device's recorded parameters. webglForGpu raises for a GPU
-		// fpgen has never seen: the caller asked for something that does not exist.
+		// fpgen has never seen: the caller asked for something that does not
+		// exist, unless the identity is a phone (webglForPair).
+		const mobile = coherence.isMobileConfig(config);
 		if (pyTruthy(webgl_config)) {
 			const [vendor, renderer] = webgl_config as [string, string];
-			webglFp = await utilsDeps.webglForGpu(targetOs, vendor, renderer, seed());
+			webglFp = await webglForPair(
+				targetOs,
+				vendor,
+				renderer,
+				seed(),
+				mobile,
+				i_know_what_im_doing,
+			);
+			// mergeInto() keeps keys the config holds, so a preset's own pair
+			// would stay over the pinned GPU's parameters, naming two GPUs.
+			delete config["webGl:vendor"];
+			delete config["webGl:renderer"];
+			// Pinning skips sampleWebglForScreen, so its two checks are made
+			// here. A warning, not a resample: the caller named this GPU.
+			const pinned = webglFp["webGl:renderer"];
+			if (
+				!gpuScreenIsPlausible(
+					pinned,
+					config["screen.width"],
+					config["screen.height"],
+				)
+			)
+				LeakWarning.warn("webgl_pinned_screen", i_know_what_im_doing);
+			if (isSoftwareRenderer(pinned))
+				LeakWarning.warn("webgl_pinned_software", i_know_what_im_doing);
 		} else if (
 			pyTruthy(config["webGl:vendor"]) &&
 			pyTruthy(config["webGl:renderer"])
 		) {
-			webglFp = await utilsDeps.webglForGpu(
+			webglFp = await webglForPair(
 				targetOs,
 				config["webGl:vendor"],
 				config["webGl:renderer"],
 				seed(),
+				mobile,
+				i_know_what_im_doing,
 			);
 		} else if (host) {
 			// Claim the GPU the canvas really renders on.

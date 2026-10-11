@@ -60,6 +60,25 @@ export const APPLE_SILICON_PANELS: ReadonlySet<string> = new Set(
 	),
 );
 
+// Firefox for Android is the one Gecko that ships with "Android" in its UA
+// ("Mozilla/5.0 (Android 16; Mobile; rv:155.0) Gecko/155.0 Firefox/155.0").
+const ANDROID_UA_RE = /\bAndroid\b/;
+
+/** Whether `userAgent` claims Firefox for Android. */
+export function isMobileUserAgent(userAgent: unknown): boolean {
+	return typeof userAgent === "string" && ANDROID_UA_RE.test(userAgent);
+}
+
+/**
+ * Whether `config` describes a phone. An explicit `mobile` key wins; otherwise
+ * the user agent decides, so a caller who only swaps in an Android UA still
+ * gets the rest of the phone.
+ */
+export function isMobileConfig(config: Config): boolean {
+	if ("mobile" in config) return pyTruthy(config.mobile);
+	return isMobileUserAgent(config["navigator.userAgent"]);
+}
+
 export interface Violation {
 	rule: string;
 	detail: string;
@@ -309,7 +328,9 @@ function repairWindowChrome(config: Config, _targetOs: string): void {
 function checkScreenShape(config: Config, _targetOs: string): string | null {
 	const width = config["screen.width"];
 	const height = config["screen.height"];
-	if (!pyTruthy(width) || !pyTruthy(height)) return null;
+	// A phone's screen is portrait and small by design.
+	if (!pyTruthy(width) || !pyTruthy(height) || isMobileConfig(config))
+		return null;
 	if (num(height) > num(width)) {
 		return `portrait screen ${pyStr(width)}x${pyStr(height)}; desktop panels are landscape`;
 	}

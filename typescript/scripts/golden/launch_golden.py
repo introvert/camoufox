@@ -424,6 +424,36 @@ scenario('host_os_claims_host_gpu', {'host_gpu': LIN_GPU}, fingerprint=FP['linux
 scenario('host_os_pinned_gpu', {'host_gpu': LIN_GPU}, fingerprint=FP['linux'], os='linux',
          webgl_config=OTHER_LIN_GPU)
 
+# Firefox for Android: the first recorded device, so the input is fixed
+_choices = fingerprints.choices
+fingerprints.choices = lambda population, weights: [population[0]]
+ANDROID_FP = js_equivalent(fingerprints._generate_android_fingerprint())
+fingerprints.choices = _choices
+ANDROID_UA = ANDROID_FP['navigator']['userAgent']
+scenario('android', fingerprint=ANDROID_FP, os='android')
+scenario('android_headless', fingerprint=ANDROID_FP, os='android', headless=True, i_know_what_im_doing=True)
+scenario('android_ua_config', fingerprint=FP['linux'], os='linux', config={'navigator.userAgent': ANDROID_UA})
+scenario('android_touch_points_kept', fingerprint=ANDROID_FP, os='android', config={'navigator.maxTouchPoints': 1})
+scenario('android_phone_gpu', fingerprint=ANDROID_FP, os='android',
+         webgl_config=['Qualcomm', 'Adreno (TM) 650, or similar'])
+scenario('android_is_mobile', fingerprint=ANDROID_FP, os='android', user_data_dir='<HOME>/profile', is_mobile=True)
+scenario('desktop_is_mobile', fingerprint=FP['linux'], os='linux', user_data_dir='<HOME>/profile', is_mobile=True)
+
+# the PDF viewer and the plugin lists
+scenario('pdf_viewer_off', fingerprint=FP['windows'], os='windows', config={'pdfViewerEnabled': False})
+scenario('plugins_mismatch', fingerprint=FP['windows'], os='windows', config={'navigator.plugins': False})
+scenario('switch_keys', fingerprint=FP['linux'], os='linux',
+         config={'navigator.plugins': True, 'screen.orientation': 'landscape-primary'})
+
+# the fleet-wide GPU (CAMOUFOX_WEBGL_CONFIG)
+_FLEET = {'process_env': {'CAMOUFOX_WEBGL_CONFIG': '|'.join(OTHER_LIN_GPU)}}
+scenario('webgl_env_default', _FLEET, fingerprint=FP['linux'], os='linux')
+scenario('webgl_env_no_os', _FLEET, fingerprint=FP['linux'])
+scenario('webgl_env_config_gpu_wins', _FLEET, fingerprint=FP['linux'], os='linux',
+         config={'webGl:vendor': LIN_GPU[0], 'webGl:renderer': LIN_GPU[1]})
+scenario('webgl_env_malformed', {'process_env': {'CAMOUFOX_WEBGL_CONFIG': 'Intel'}}, fingerprint=FP['linux'], os='linux')
+scenario('webgl_config_over_preset', fingerprint_preset=PR['linux'], webgl_config=OTHER_LIN_GPU, os='linux')
+
 # chunking: a config bigger than one env var chunk
 scenario('config_large', fingerprint=FP['linux'], os='linux', i_know_what_im_doing=True,
          config={'fonts': [f'Font Family {i:05d}' for i in range(2600)]})

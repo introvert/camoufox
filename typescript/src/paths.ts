@@ -65,6 +65,7 @@ export const INSTALL_DIR: string = userCacheDir("camoufox");
  * tarball, so one seed draws one identity in either launcher.
  */
 export const DATA_FILES: readonly string[] = [
+	"android-devices.json",
 	"browser-pin.json",
 	"essential-fonts.json",
 	"fingerprint-presets.json",
@@ -112,6 +113,7 @@ export interface LauncherConstants {
 	macEloquenceVoices: string[];
 	baselineTaskbarHeight: Record<"win" | "mac" | "lin", number>;
 	baselineMultiTouchPoints: number;
+	mobilePrefs: Record<string, any>;
 	cachePrefs: Record<string, any>;
 }
 export const LAUNCHER_CONSTANTS: Readonly<LauncherConstants> = loadDataFile(

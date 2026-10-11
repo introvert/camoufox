@@ -105,7 +105,7 @@ await browser.close();
 | `NewContext` option | Effect |
 |---|---|
 | `preset` | Use this fingerprint preset object instead of an fpgen draw. |
-| `os` | `"windows"`, `"macos"` or `"linux"` for the drawn identity. On a browser without canvas noise, the host's OS, and anything else throws `ValueError`. |
+| `os` | `"windows"`, `"macos"`, `"linux"` or `"android"` for the drawn identity. On a browser without canvas noise, the host's OS, and anything else throws `ValueError`; `"android"` draws from the Linux pools, so a Linux host can render it. `"android"` also opens the context with `isMobile` and `hasTouch` ([Firefox for Android](#firefox-for-android)). |
 | `ff_version` | Firefox major version claimed in the User-Agent. Defaults to the browser's own. |
 | `webrtc_ip` | IPv4 or IPv6 address WebRTC reports. |
 | `proxy` | Per-context proxy, in Playwright's format. Unless `webrtc_ip` and `timezoneId` are both given, they are looked up from the proxy's exit IP, and `InvalidIP` is thrown if the lookup fails. |
@@ -194,7 +194,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 
 | Option | Type | Default | Effect |
 |---|---|---|---|
-| `os` | `string \| string[]` | fpgen's real-world mix | `"windows"`, `"macos"`, `"linux"`, or a list to pick from. |
+| `os` | `string \| string[]` | fpgen's real-world mix | `"windows"`, `"macos"`, `"linux"`, `"android"`, or a list to pick from. See [Firefox for Android](#firefox-for-android). |
 | `headless` | `boolean \| "virtual"` | `false` | See [Headless modes](#headless-modes). |
 | `proxy` | `{ server, username?, password?, bypass? }` | none | Playwright proxy. |
 | `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. |
@@ -210,7 +210,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `block_images` | `boolean` | `false` | Block image loading. Warns: some WAFs detect it. |
 | `block_webrtc` | `boolean` | `false` | Disable WebRTC entirely. |
 | `block_webgl` | `boolean` | `false` | Disable WebGL. Warns: many WAFs check for it. |
-| `webgl_config` | `[vendor, renderer]` | drawn | Use one GPU fpgen has recorded for Firefox on `os`; any other pair throws. Needs `os`. |
+| `webgl_config` | `[vendor, renderer]` | `CAMOUFOX_WEBGL_CONFIG`, else drawn | Use one GPU fpgen has recorded for Firefox on `os`; any other pair throws, except on a phone ([Firefox for Android](#firefox-for-android)). Warns for a discrete GPU behind a screen too small for one, and for a software renderer. Needs `os`. The `CAMOUFOX_WEBGL_CONFIG` environment variable (`"Vendor\|Renderer"`) sets a default for every launch; a preset's or the config's own GPU wins over it. |
 | `canvas_noise` | `boolean` | on for another OS or GPU | Random canvas and WebGL readback, as in LibreWolf. Warns. See [The canvas on another OS](#the-canvas-on-another-os). |
 | `disable_coop` | `boolean` | `false` | Turn off Cross-Origin-Opener-Policy so elements in cross-origin iframes (such as the Turnstile checkbox) can be clicked. Warns. |
 | `main_world_eval` | `boolean` | `false` | Allow `page.evaluate("mw:...")` and `mw:` init scripts to run in the page's own world. |
@@ -233,6 +233,34 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 `Camoufox()` and `NewBrowser()` also take `persistent_context`, `user_data_dir`
 and `from_options` (an object from `launchOptions()` to use as is).
 `launchServer()` also takes `port` and `ws_path`.
+
+### The PDF viewer
+
+`config: { pdfViewerEnabled: false }` claims a Firefox without a PDF viewer:
+`navigator.pdfViewerEnabled`, `navigator.plugins` and `navigator.mimeTypes`
+move together, and the launcher sets `pdfjs.disabled` so PDFs download instead
+of rendering inline. `navigator.plugins` (a boolean) moves the plugin and MIME
+lists alone, with a warning, since no real Firefox splits them.
+
+### Firefox for Android
+
+`os: "android"` draws a Firefox for Android phone and runs the browser in
+mobile mode (the `mobile` config key, also set by any Android user agent): a
+coarse, non-hovering pointer, touch events, an obeyed `<meta name="viewport">`
+with Android's zoom-to-fit (`config: { "mobile:zoom": false }` turns it off),
+`window.orientation`, overlay scrollbars, Android's API surface, and the
+phone's device pixel ratio when headless or on a virtual display.
+
+fpgen records no Firefox for Android, so the phone is drawn from
+`android-devices.json`, a handful of real devices recorded by BrowserForge.
+Fonts, speech voices and the WebGL GPU come from the Linux pools, with a
+`LeakWarning`. A phone GPU can still be named
+(`webgl_config: ["Qualcomm", "Adreno (TM) 650, or similar"]`); its strings are
+kept and the rest of WebGL is the host's, with a warning.
+`NewContext(browser, { os: "android" })` gives one phone context in a desktop
+browser; `isMobile` on any other context is ignored, with a warning. Every
+field and how to set it:
+[docs/android-persona-fields.md](https://github.com/daijro/camoufox/blob/main/docs/android-persona-fields.md).
 
 ## CLI
 

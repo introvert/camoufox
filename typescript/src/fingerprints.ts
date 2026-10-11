@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { generate, InvalidConstraints } from "fpgen-js";
 import * as random from "python-random";
+import { isMobileConfig } from "./coherence.js";
 import {
 	supported as cpuAffinitySupported,
 	hostCoreCount,
@@ -22,6 +23,7 @@ import {
 import { validateIP, validIPv4 } from "./ip.js";
 import { normalizeLocale } from "./locales.js";
 import { LAUNCHER_CONSTANTS, LOCAL_DATA, loadDataFile } from "./paths.js";
+import { pkgmanDeps } from "./pkgman.js";
 import {
 	comparePyStr,
 	crc32,
@@ -36,7 +38,7 @@ import {
 	pyTruthy,
 	ValueError,
 } from "./pycompat.js";
-import { FallbackWarning } from "./warnings.js";
+import { FallbackWarning, LeakWarning } from "./warnings.js";
 import { sampleWebglForScreen, type TargetOS, webglForGpu } from "./webgl.js";
 
 export type { TargetOS } from "./webgl.js";
@@ -45,6 +47,18 @@ type Config = Record<string, any>;
 
 export const SUPPORTED_OS = ["linux", "macos", "windows"] as const;
 export type SupportedOS = (typeof SUPPORTED_OS)[number];
+
+/**
+ * The pools each OS draws its fonts, voices and GPU from. Firefox for Android
+ * takes the Linux ones: Camoufox bundles no Android fonts, and fpgen records
+ * no phone GPUs.
+ */
+export const POOL_KEYS: Readonly<Record<string, TargetOS>> = {
+	macos: "mac",
+	windows: "win",
+	linux: "lin",
+	android: "lin",
+};
 
 /** The fpgen -> Camoufox config mapping. */
 export const FPGEN_DATA: Readonly<Record<string, Record<string, string>>> =
@@ -873,6 +887,65 @@ export function fixNavigatorArch(config: Config, targetOs: string): void {
 	if (config["navigator.oscpu"] !== target) config["navigator.oscpu"] = target;
 }
 
+/**
+ * Web-visible defaults where Firefox for Android differs from desktop Firefox;
+ * docs/android-persona-fields.md gives each one's source.
+ */
+export const MOBILE_FIREFOX_PREFS: Readonly<Record<string, any>> =
+	LAUNCHER_CONSTANTS.mobilePrefs;
+
+/**
+ * Make a config that claims Firefox for Android behave like it, and return
+ * whether it is mobile.
+ *
+ * The user agent alone only changes what the server sends; the page then asks
+ * the browser, which answers like a desktop. `mobile` is the switch the
+ * browser reads for the pointer, touch events, the meta viewport and
+ * screen.orientation; the rest are MOBILE_FIREFOX_PREFS and the device pixel
+ * ratio. Caller values stay, except a maxTouchPoints below 2: next to touch
+ * events and a coarse pointer it is a contradiction, so it becomes a phone's 5
+ * unless `keepTouchPoints` says the caller chose it.
+ */
+export function applyMobileMode(
+	config: Config,
+	firefoxUserPrefs: Record<string, any>,
+	devicePixelRatio?: number | null,
+	keepTouchPoints = false,
+): boolean {
+	if (!isMobileConfig(config)) return false;
+	if (!("mobile" in config)) config.mobile = true;
+	if (!keepTouchPoints && num(config["navigator.maxTouchPoints"] || 0) < 2)
+		config["navigator.maxTouchPoints"] = BASELINE_MULTI_TOUCH_POINTS;
+	for (const [pref, value] of Object.entries(MOBILE_FIREFOX_PREFS)) {
+		if (!(pref in firefoxUserPrefs)) firefoxUserPrefs[pref] = value;
+	}
+	// A real device pixel ratio, so `(resolution)` media queries, srcset and
+	// canvas backing stores agree with window.devicePixelRatio.
+	if (
+		pyTruthy(devicePixelRatio) &&
+		!("layout.css.devPixelsPerPx" in firefoxUserPrefs)
+	)
+		firefoxUserPrefs["layout.css.devPixelsPerPx"] = pyStr(devicePixelRatio);
+	return true;
+}
+
+/**
+ * Whether the installed Playwright lets a Firefox context set isMobile.
+ *
+ * Before 1.61 Playwright's Firefox driver threw "options.isMobile is not
+ * supported in Firefox". Without it an Android context still gets touch and
+ * the coarse pointer from hasTouch; only the meta viewport is lost. An
+ * unreadable version is assumed current.
+ */
+export function firefoxAcceptsIsMobile(): boolean {
+	const installed = pkgmanDeps.resolvedPlaywrightVersion();
+	return (
+		installed === null ||
+		installed[0] > 1 ||
+		(installed[0] === 1 && installed[1] >= 61)
+	);
+}
+
 // ---------------------------------------------------------------------------
 // Screen / window geometry
 // ---------------------------------------------------------------------------
@@ -991,9 +1064,11 @@ export const MODERN_SCREEN_FLOOR: readonly [number, number] = [1366, 768];
 
 /**
  * Lift netbook-era screen geometry to the modern floor, keeping the
- * screen-to-avail gaps. Call BEFORE clampScreenToDisplay.
+ * screen-to-avail gaps. Call BEFORE clampScreenToDisplay. Phone screens are
+ * small by design and are left alone.
  */
 export function raiseScreenToModernFloor(config: Config): void {
+	if (isMobileConfig(config)) return;
 	const [minW, minH] = MODERN_SCREEN_FLOOR;
 	const sw = config["screen.width"];
 	const sh = config["screen.height"];
@@ -1594,6 +1669,8 @@ export function targetOsFromPlatform(plat: string): SupportedOS {
  *   and before the init script is rendered.
  * @param webgl_config The [vendor, renderer] a drawn identity claims, instead
  *   of drawing one.
+ * @param i_know_what_im_doing Silences the warning that a phone takes its
+ *   fonts, voices and GPU from the Linux pools.
  */
 export function generateContextFingerprint({
 	preset,
@@ -1604,6 +1681,7 @@ export function generateContextFingerprint({
 	locale,
 	config_overrides,
 	webgl_config,
+	i_know_what_im_doing = false,
 }: {
 	preset?: Preset | null;
 	os?: string | null;
@@ -1613,6 +1691,7 @@ export function generateContextFingerprint({
 	locale?: string | null;
 	config_overrides?: Config | null;
 	webgl_config?: [string, string] | null;
+	i_know_what_im_doing?: boolean;
 } = {}): ContextFingerprint {
 	let config: Config;
 	let nav: Record<string, any>;
@@ -1691,12 +1770,7 @@ export function generateContextFingerprint({
 			!pyTruthy(config["webGl:vendor"]) ||
 			!pyTruthy(config["webGl:renderer"])
 		) {
-			const osMap: Record<string, TargetOS> = {
-				macos: "mac",
-				linux: "lin",
-				windows: "win",
-			};
-			let targetOs: TargetOS | undefined = osMap[os ?? ""];
+			let targetOs: TargetOS | undefined = POOL_KEYS[os ?? ""];
 			if (!targetOs) {
 				const plat = pyStr(get(config, "navigator.platform", ""));
 				targetOs =
@@ -1730,7 +1804,11 @@ export function generateContextFingerprint({
 			width: config["screen.width"],
 			height: config["screen.height"],
 			colorDepth: config["screen.colorDepth"],
-			devicePixelRatio: null,
+			// A desktop stays at 1 (see fpgen.yml); a phone at 1 dppx is the
+			// stranger claim.
+			devicePixelRatio: isMobileConfig(config)
+				? (fp.window?.devicePixelRatio ?? null)
+				: null,
 		};
 		webgl = {
 			unmaskedVendor: config["webGl:vendor"],
@@ -1778,8 +1856,28 @@ export function generateContextFingerprint({
 	if (pyTruthy(ua)) contextOptions.userAgent = ua;
 	const sw = screen.width;
 	const sh = screen.height;
+	const mobile = isMobileConfig(config);
+	if (mobile) {
+		// The launch-wide `mobile` switch cannot differ per context, but
+		// Playwright's own options reach the same places through Juggler:
+		// hasTouch gives the touch-only pointer and touch events, isMobile the
+		// meta viewport (Responsive Design Mode, for an Android UA only).
+		contextOptions.hasTouch = true;
+		if (firefoxAcceptsIsMobile()) contextOptions.isMobile = true;
+		LeakWarning.warn("mobile_resources", i_know_what_im_doing);
+		// Juggler reads the screen size to report screen.orientation.
+		if (pyTruthy(sw) && pyTruthy(sh))
+			contextOptions.screen = { width: sw, height: sh };
+	}
 	if (pyTruthy(sw) && pyTruthy(sh))
-		contextOptions.viewport = { width: sw, height: Math.max(sh - 28, 600) };
+		contextOptions.viewport = {
+			width: sw,
+			// A phone's browser chrome is its own; the 600px floor is for
+			// desktop windows.
+			height: mobile
+				? config["window.outerHeight"] || sh
+				: Math.max(sh - 28, 600),
+		};
 	const dpr = screen.devicePixelRatio;
 	if (pyTruthy(dpr)) contextOptions.deviceScaleFactor = dpr;
 	let tz = config.timezone;
@@ -1918,10 +2016,38 @@ export interface GenerateFingerprintOptions {
 	window?: readonly [number, number] | null;
 	/** A bound on the generated screen (best-effort, see below). */
 	screen?: Screen | null;
-	/** Camoufox OS name(s): 'linux', 'macos', 'windows' (or lin/mac/win). */
+	/** Camoufox OS name(s): 'linux', 'macos', 'windows', 'android' (or lin/mac/win). */
 	os?: string | readonly string[] | null;
 	/** Any other fpgen conditions. */
 	[condition: string]: any;
+}
+
+let androidDevices: Record<string, any> | null = null;
+
+/**
+ * A Firefox for Android phone, in fpgen's fingerprint shape. The screen and
+ * window are one recorded device's, drawn by its weight. The whole screen is
+ * available, as Firefox for Android reports it.
+ */
+function generateAndroidFingerprint(): Record<string, any> {
+	androidDevices ??= loadDataFile<Record<string, any>>("android-devices.json");
+	const devices: Record<string, any>[] = androidDevices.devices;
+	const device = random.choices(devices, {
+		weights: devices.map((d) => d.weight),
+	})[0];
+	const screen = device.screen;
+	return {
+		navigator: { ...androidDevices.navigator },
+		screen: {
+			...screen,
+			pixelDepth: screen.colorDepth,
+			availWidth: screen.width,
+			availHeight: screen.height,
+			availLeft: 0,
+			availTop: 0,
+		},
+		window: { ...device.window, screenX: 0, screenY: 0 },
+	};
 }
 
 /**
@@ -1930,7 +2056,9 @@ export interface GenerateFingerprintOptions {
  *
  * `screen` bounds the generated screen; `window` overrides the outer window
  * size afterwards; `os` is Camoufox's name for the platform; anything else is
- * passed to fpgen as a condition.
+ * passed to fpgen as a condition. fpgen has no Firefox for Android, so
+ * 'android' draws a phone from android-devices.json, and a list naming it
+ * picks one OS uniformly first.
  */
 export function generateFingerprint({
 	window,
@@ -1938,8 +2066,24 @@ export function generateFingerprint({
 	os,
 	...conditions
 }: GenerateFingerprintOptions = {}): Record<string, any> {
-	if (os?.length) {
-		const names = typeof os === "string" ? [os] : [...os];
+	let names = os?.length ? (typeof os === "string" ? [os] : [...os]) : [];
+	if (names.includes("android")) names = [random.choice(names)];
+	let fingerprint: Record<string, any>;
+	if (names.length === 1 && names[0] === "android") {
+		fingerprint = generateAndroidFingerprint();
+	} else {
+		fingerprint = generateFpgenFingerprint(names, screen, conditions);
+	}
+	if (window) handleWindowSize(fingerprint, window[0], window[1]);
+	return fingerprint;
+}
+
+function generateFpgenFingerprint(
+	names: string[],
+	screen: Screen | null | undefined,
+	conditions: Record<string, any>,
+): Record<string, any> {
+	if (names.length) {
 		const resolved = names.map((n) => {
 			const v = FPGEN_OS[String(n).toLowerCase()];
 			if (!v) throw new Error(`Unknown OS for fingerprint generation: '${n}'`);
@@ -1976,6 +2120,5 @@ export function generateFingerprint({
 		// still bounds the result afterwards.
 		fingerprint = generate({ browser: "Firefox", ...conditions });
 	}
-	if (window) handleWindowSize(fingerprint, window[0], window[1]);
 	return fingerprint;
 }

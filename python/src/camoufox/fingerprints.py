@@ -6,10 +6,11 @@ import secrets
 import unicodedata
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-from random import Random, choice, randint, randrange
+from random import Random, choice, choices, randint, randrange
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
-from camoufox._warnings import FallbackWarning
+from camoufox._warnings import FallbackWarning, LeakWarning
+from camoufox.coherence import is_mobile_config
 from camoufox.ip import valid_ipv4, validate_ip
 from camoufox.pkgman import LAUNCHER_CONSTANTS, load_yaml
 
@@ -19,6 +20,10 @@ FPGEN_DATA = load_yaml('fpgen.yml')
 # Camoufox's OS names, and the short keys the bundled data files use.
 OS_KEYS = {'macos': 'mac', 'windows': 'win', 'linux': 'lin'}
 OS_NAMES = {key: name for name, key in OS_KEYS.items()}
+# The pools each OS draws its fonts, voices and GPU from. Firefox for Android
+# takes the Linux ones: Camoufox bundles no Android fonts, and fpgen records no
+# phone GPUs.
+POOL_KEYS = {**OS_KEYS, 'android': 'lin'}
 
 
 def platform_to_os(platform: str) -> str:
@@ -767,6 +772,56 @@ def fix_navigator_arch(config: Dict[str, Any], target_os: str) -> None:
         config['navigator.oscpu'] = target
 
 
+# Web-visible defaults where Firefox for Android differs from desktop Firefox;
+# docs/android-persona-fields.md gives each one's source.
+MOBILE_FIREFOX_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['mobilePrefs']
+
+
+def apply_mobile_mode(
+    config: Dict[str, Any],
+    firefox_user_prefs: Dict[str, Any],
+    device_pixel_ratio: Optional[float] = None,
+    keep_touch_points: bool = False,
+) -> bool:
+    """Make a config that claims Firefox for Android behave like it, and
+    return whether it is mobile.
+
+    The user agent alone only changes what the server sends; the page then
+    asks the browser, which answers like a desktop. `mobile` is the switch the
+    browser reads for the pointer, touch events, the meta viewport and
+    screen.orientation; the rest are MOBILE_FIREFOX_PREFS and the device pixel
+    ratio. Caller values stay, except a maxTouchPoints below 2: next to touch
+    events and a coarse pointer it is a contradiction, so it becomes a phone's
+    5 unless `keep_touch_points` says the caller chose it.
+    """
+    if not is_mobile_config(config):
+        return False
+    config.setdefault('mobile', True)
+    if not keep_touch_points and (config.get('navigator.maxTouchPoints') or 0) < 2:
+        config['navigator.maxTouchPoints'] = BASELINE_MULTI_TOUCH_POINTS
+    for pref, value in MOBILE_FIREFOX_PREFS.items():
+        firefox_user_prefs.setdefault(pref, value)
+    if device_pixel_ratio:
+        # A real device pixel ratio, so `(resolution)` media queries, srcset
+        # and canvas backing stores agree with window.devicePixelRatio.
+        firefox_user_prefs.setdefault('layout.css.devPixelsPerPx', str(device_pixel_ratio))
+    return True
+
+
+def firefox_accepts_is_mobile() -> bool:
+    """Whether the installed Playwright lets a Firefox context set isMobile.
+
+    Before 1.61 Playwright's Firefox driver threw "options.isMobile is not
+    supported in Firefox". Without it an Android context still gets touch and
+    the coarse pointer from has_touch; only the meta viewport is lost. An
+    unreadable version is assumed current.
+    """
+    from .pkgman import _resolved_playwright_version
+
+    installed = _resolved_playwright_version()
+    return installed is None or tuple(installed[:2]) >= (1, 61)
+
+
 # What Firefox's baseline fingerprinting protection, on by default, reports in
 # place of the device's values (RFPTargetsDefaultBaseline.inc), and the browser
 # applies it to the spoofed ones for the claimed OS: the available screen is
@@ -1084,8 +1139,10 @@ def raise_screen_to_modern_floor(config: Dict[str, Any]) -> None:
     Keeps the screen-to-avail gap intact; the window box is reconciled by
     clamp_window_dimensions and clamp_window_position, which run after this.
     Call BEFORE clamp_screen_to_display so a genuinely small real monitor
-    still wins.
+    still wins. Phone screens are small by design and are left alone.
     """
+    if is_mobile_config(config):
+        return
     min_w, min_h = MODERN_SCREEN_FLOOR
     sw = config.get('screen.width')
     sh = config.get('screen.height')
@@ -1433,6 +1490,7 @@ def generate_context_fingerprint(
     locale: Optional[str] = None,
     config_overrides: Optional[Dict[str, Any]] = None,
     webgl_config: Optional[Tuple[str, str]] = None,
+    i_know_what_im_doing: bool = False,
 ) -> Dict[str, Any]:
     """
     Generate fingerprint values for a single per-context identity.
@@ -1452,6 +1510,8 @@ def generate_context_fingerprint(
             is built but before init_script is rendered (e.g. {'audio:seed': 7}).
         webgl_config: The (vendor, renderer) a drawn identity claims, instead of
             drawing one.
+        i_know_what_im_doing: Silences the warning that a phone takes its
+            fonts, voices and GPU from the Linux pools.
     """
     if preset is not None:
         # Use real fingerprint preset
@@ -1504,7 +1564,7 @@ def generate_context_fingerprint(
             # Not at the top: camoufox.webgl imports this module.
             from .webgl import sample_webgl_for_screen, webgl_for_gpu
 
-            _target_os = OS_KEYS.get(os or '') or OS_KEYS[platform_to_os(config.get('navigator.platform', ''))]
+            _target_os = POOL_KEYS.get(os or '') or OS_KEYS[platform_to_os(config.get('navigator.platform', ''))]
             # Same coherence treatment launch_options applies (#729): lift
             # netbook geometry, then keep the GPU consistent with whatever
             # screen this identity ended up with. This path has no real
@@ -1529,7 +1589,9 @@ def generate_context_fingerprint(
             'width': config.get('screen.width'),
             'height': config.get('screen.height'),
             'colorDepth': config.get('screen.colorDepth'),
-            'devicePixelRatio': None,
+            # A desktop stays at 1 (see fpgen.yml); a phone at 1 dppx is the
+            # stranger claim.
+            'devicePixelRatio': fp['window'].get('devicePixelRatio') if is_mobile_config(config) else None,
         }
         webgl = {
             'unmaskedVendor': config.get('webGl:vendor'),
@@ -1580,10 +1642,25 @@ def generate_context_fingerprint(
         context_options['user_agent'] = ua
     sw = screen.get('width')
     sh = screen.get('height')
+    mobile = is_mobile_config(config)
+    if mobile:
+        # The launch-wide `mobile` switch cannot differ per context, but
+        # Playwright's own options reach the same places through Juggler:
+        # hasTouch gives the touch-only pointer and touch events, isMobile the
+        # meta viewport (Responsive Design Mode, for an Android UA only).
+        context_options['has_touch'] = True
+        if firefox_accepts_is_mobile():
+            context_options['is_mobile'] = True
+        LeakWarning.warn('mobile_resources', i_know_what_im_doing)
+        if sw and sh:
+            # Juggler reads the screen size to report screen.orientation.
+            context_options['screen'] = {'width': sw, 'height': sh}
     if sw and sh:
         context_options['viewport'] = {
             'width': sw,
-            'height': max(sh - 28, 600),
+            # A phone's browser chrome is its own; the 600px floor is for
+            # desktop windows.
+            'height': (config.get('window.outerHeight') or sh) if mobile else max(sh - 28, 600),
         }
     dpr = screen.get('devicePixelRatio')
     if dpr:
@@ -1719,6 +1796,36 @@ def handle_window_size(fp: Dict[str, Any], outer_width: int, outer_height: int) 
     window['outerHeight'] = outer_height
 
 
+_ANDROID_DEVICES: Optional[Dict[str, Any]] = None
+
+
+def _generate_android_fingerprint() -> Dict[str, Any]:
+    """A Firefox for Android phone, in fpgen's fingerprint shape.
+
+    The screen and window are one recorded device's, drawn by its weight. The
+    whole screen is available, as Firefox for Android reports it.
+    """
+    global _ANDROID_DEVICES
+    if _ANDROID_DEVICES is None:
+        with open(Path(__file__).parent / 'android-devices.json', 'rb') as f:
+            _ANDROID_DEVICES = json.load(f)
+    devices = _ANDROID_DEVICES['devices']
+    device = choices(devices, weights=[d['weight'] for d in devices])[0]  # nosec
+    screen = device['screen']
+    return {
+        'navigator': dict(_ANDROID_DEVICES['navigator']),
+        'screen': {
+            **screen,
+            'pixelDepth': screen['colorDepth'],
+            'availWidth': screen['width'],
+            'availHeight': screen['height'],
+            'availLeft': 0,
+            'availTop': 0,
+        },
+        'window': {**device['window'], 'screenX': 0, 'screenY': 0},
+    }
+
+
 def generate_fingerprint(
     window: Optional[Tuple[int, int]] = None,
     screen: Optional[Screen] = None,
@@ -1730,26 +1837,33 @@ def generate_fingerprint(
 
     `screen` bounds the generated screen; `window` overrides the outer window
     size afterwards. `os` is Camoufox's name for the platform ('linux', 'macos',
-    'windows', or several); anything else is passed to fpgen as a condition.
+    'windows', 'android', or several); anything else is passed to fpgen as a
+    condition. fpgen has no Firefox for Android, so 'android' draws a phone from
+    android-devices.json, and a list naming it picks one OS uniformly first.
     """
-    if os:
-        names = [os] if isinstance(os, str) else list(os)
+    names = ([os] if isinstance(os, str) else list(os)) if os else []
+    if 'android' in names:
+        names = [choice(names)]  # nosec
+    if names == ['android']:
+        fingerprint = _generate_android_fingerprint()
+    else:
+        if names:
+            try:
+                resolved = [_FPGEN_OS[str(n).lower()] for n in names]
+            except KeyError as exc:
+                raise ValueError(f'Unknown OS for fingerprint generation: {exc.args[0]!r}') from None
+            # fpgen takes one value or a predicate, not a list of alternatives.
+            conditions['os'] = resolved[0] if len(resolved) == 1 else (lambda v: v in set(resolved))
+        screen_conditions = screen.as_conditions() if screen is not None else {}
         try:
-            resolved = [_FPGEN_OS[str(n).lower()] for n in names]
-        except KeyError as exc:
-            raise ValueError(f'Unknown OS for fingerprint generation: {exc.args[0]!r}') from None
-        # fpgen takes one value or a predicate, not a list of alternatives.
-        conditions['os'] = resolved[0] if len(resolved) == 1 else (lambda v: v in set(resolved))
-    screen_conditions = screen.as_conditions() if screen is not None else {}
-    try:
-        fingerprint = _generator().generate(browser='Firefox', **conditions, **screen_conditions)
-    except Exception as exc:  # fpgen.exceptions.InvalidConstraints
-        if not screen_conditions or type(exc).__name__ != 'InvalidConstraints':
-            raise
-        # The screen bound is best-effort: a display the model has nothing to
-        # fit (a 1x1 Xvfb, a small panel) must not stop generation, and
-        # clamp_screen_to_display() still bounds the result afterwards.
-        fingerprint = _generator().generate(browser='Firefox', **conditions)
+            fingerprint = _generator().generate(browser='Firefox', **conditions, **screen_conditions)
+        except Exception as exc:  # fpgen.exceptions.InvalidConstraints
+            if not screen_conditions or type(exc).__name__ != 'InvalidConstraints':
+                raise
+            # The screen bound is best-effort: a display the model has nothing to
+            # fit (a 1x1 Xvfb, a small panel) must not stop generation, and
+            # clamp_screen_to_display() still bounds the result afterwards.
+            fingerprint = _generator().generate(browser='Firefox', **conditions)
 
     if window:  # User-specified outer window size
         handle_window_size(fingerprint, *window)

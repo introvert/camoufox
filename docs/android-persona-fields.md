@@ -8,13 +8,16 @@ and `mobile/android/app/geckoview-prefs.js`. Fenix (the Firefox for Android
 app) layers its own prefs on top, which are not in this tree. Where that could
 matter, the row says so, and a real device is the tie-breaker.
 
-`os="android"` sets everything marked **auto**. Every row can also be set by
+`os="android"` sets everything marked **auto**. fpgen records no Firefox for
+Android, so the device itself (screen, window, device pixel ratio, user agent,
+platform) is drawn from `python/src/camoufox/android-devices.json`: the Firefox
+for Android devices BrowserForge recorded, weighted by how often each was seen. Every row can also be set by
 hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 `firefox_user_prefs=` where the row names a pref.
 
 | Field | Firefox for Android | How Camoufox sets it | With `os="android"` |
 |---|---|---|---|
-| `navigator.userAgent` | `Mozilla/5.0 (Android 16; Mobile; rv:155.0) Gecko/155.0 Firefox/155.0` | `navigator.userAgent`. The HTTP `User-Agent` header follows it (`headers.User-Agent` overrides the header alone) | auto (BrowserForge) |
+| `navigator.userAgent` | `Mozilla/5.0 (Android 16; Mobile; rv:155.0) Gecko/155.0 Firefox/155.0` | `navigator.userAgent`. The HTTP `User-Agent` header follows it (`headers.User-Agent` overrides the header alone) | auto (`android-devices.json`) |
 | `navigator.platform` | `Linux armv81`: hardcoded in `Navigator::GetPlatform`, and yes, the digit **1**, not `armv8l` | `navigator.platform` | auto |
 | `navigator.oscpu` | `Linux armv81`: hardcoded in `nsHttpHandler` | `navigator.oscpu` | auto |
 | `navigator.appVersion` | `5.0 (Android 16)` | `navigator.appVersion` | auto (derived from the UA) |
@@ -22,7 +25,7 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 | `navigator.vendor` | `""` | `navigator.vendor` | Gecko default is already right |
 | `navigator.product` / `productSub` | `Gecko` / `20100101` | `navigator.product`, `navigator.productSub` | Gecko default is already right |
 | `navigator.appCodeName` / `appName` | `Mozilla` / `Netscape` | `navigator.appCodeName`, `navigator.appName` (workers follow) | Gecko default is already right |
-| `navigator.hardwareConcurrency` | the device's cores | `navigator.hardwareConcurrency` | auto |
+| `navigator.hardwareConcurrency` | the device's cores | `navigator.hardwareConcurrency` | the host's core count, as for every identity; with `pin_cpu_cores=True`, the recorded phone's 8 where the host has that many |
 | `navigator.maxTouchPoints` | `5` on multitouch phones | `navigator.maxTouchPoints`. A `has_touch` context or mobile mode without a count reports 5 | auto (5) |
 | `navigator.languages` | the app locales | `navigator.languages` (list), or `locale=`. Both feed `intl.accept_languages`, so `Accept-Language` stays the same list | from `locale` / `geoip` |
 | `navigator.pdfViewerEnabled` | `true` unless `pdfjs.disabled`. GeckoView leaves pdf.js on in-tree; **check Fenix on a real device** | `pdfViewerEnabled`. `navigator.plugins` and `mimeTypes` follow it, and the launcher sets `pdfjs.disabled` to match (policies.json no longer locks that pref) | Gecko default (`true`) |
@@ -33,7 +36,7 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 | `navigator.getBattery` | absent (chrome-only) | nothing to set | absent |
 | `navigator.share` | present (`dom.webshare.enabled`, geckoview-prefs.js) | pref `dom.webshare.enabled` | auto |
 | `navigator.standalone` | absent (Safari only) | nothing to set | absent |
-| `screen.width` × `height` | the device, portrait | `screen.width`, `screen.height` | auto |
+| `screen.width` × `height` | the device, portrait | `screen.width`, `screen.height` | auto (`android-devices.json`) |
 | `screen.availWidth` × `availHeight` | the same as the screen | `screen.availWidth`, `screen.availHeight` | auto (no taskbar carved out) |
 | `screen.colorDepth` | `24` | `screen.colorDepth` | auto |
 | `devicePixelRatio` | the device, e.g. `2.625`, `3` | pref `layout.css.devPixelsPerPx` (real: media queries and canvas agree), or `window.devicePixelRatio` (the JS value only) | auto, when headless or on a virtual display |
@@ -47,7 +50,7 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 | Pages without a meta viewport, or wider than the screen | laid out 980px wide and zoomed out to fit | zoom is on in mobile mode; Juggler maps clicks and viewport screenshots to the zoomed screen. `mobile:zoom: false` turns it off | zoomed out, like Android |
 | `navigator.doNotTrack` + `DNT` header | `unspecified`, no header | `navigator.doNotTrack` (`"1"`, `"0"`, `"unspecified"`); the header is sent only for `"1"` | Firefox default |
 | `navigator.globalPrivacyControl` + `Sec-GPC` header | `false`, no header, outside private browsing | `navigator.globalPrivacyControl`; window, workers and header move together | Firefox default |
-| WebGL vendor / renderer | the device GPU, sanitized, e.g. `Qualcomm` / `Adreno (TM) 650, or similar` | `webGl:vendor` / `webGl:renderer`, or `webgl_config=`. Camoufox has no parameter data for phone GPUs: the strings are set and the rest of WebGL is the host's, with a warning | a Linux desktop GPU, with a warning |
+| WebGL vendor / renderer | the device GPU, sanitized, e.g. `Qualcomm` / `Adreno (TM) 650, or similar` | `webGl:vendor` / `webGl:renderer`, or `webgl_config=`. fpgen records no phone GPUs: the strings are set and the rest of WebGL is the host's, with a warning, and naming a GPU turns on the canvas placeholder | a Linux GPU (the host's on a Linux host), with a warning |
 | WebGL default antialias | off (`webgl.default-antialias`) | pref `webgl.default-antialias` | auto |
 | `AudioContext().sampleRate` | the device, usually `48000` | `AudioContext:sampleRate` | host |
 | `Intl` time zone | the device | `timezone`, or `geoip` | from `geoip` |

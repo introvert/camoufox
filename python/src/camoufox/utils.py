@@ -21,8 +21,9 @@ from .exceptions import (
     InvalidPropertyType,
     NonFirefoxFingerprint,
 )
-from .fingerprints import Screen, platform_to_os, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES
+from .fingerprints import Screen, platform_to_os, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS
 from . import coherence
+from .coherence import is_mobile_config, is_mobile_user_agent
 from .geolocation import geoip_allowed, get_geolocation
 from .ip import Proxy, public_ip, valid_ipv4, valid_ipv6
 from .locales import handle_locales
@@ -467,7 +468,7 @@ def check_custom_fingerprint(fingerprint: Dict[str, Any]) -> None:
     # Check what the browser is
     user_agent = (fingerprint.get('navigator') or {}).get('userAgent') or ''
     browser_name = user_agent_parser.ParseUserAgent(user_agent).get('family', 'Non-Firefox')
-    if browser_name != 'Firefox':
+    if browser_name not in ('Firefox', 'Firefox Mobile'):
         raise NonFirefoxFingerprint(
             f'"{browser_name}" fingerprints are not supported in Camoufox. '
             'Using fingerprints from a browser other than Firefox WILL lead to detection. '
@@ -489,7 +490,7 @@ def check_valid_os(os: ListOrString) -> None:
     if not os.islower():
         raise InvalidOS(f"OS values must be lowercase: '{os}'")
     # Assert that the OS is supported by Camoufox
-    if os not in ('windows', 'macos', 'linux'):
+    if os not in ('windows', 'macos', 'linux', 'android'):
         raise InvalidOS(f"Camoufox does not support the OS: '{os}'")
 
 
@@ -531,6 +532,17 @@ def is_domain_set(
     return False
 
 
+# Keys under navigator. / screen. that are switches rather than device
+# properties: setting one says nothing about the generated navigator or screen,
+# so it must not trip the manual-config warnings or turn off the fix-ups that
+# stand down only when the caller drives the device values themselves.
+_SWITCH_KEYS = frozenset({'navigator.plugins', 'screen.orientation'})
+
+
+def _device_keys(config: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in config.items() if k not in _SWITCH_KEYS}
+
+
 def warn_manual_config(config: Dict[str, Any]) -> None:
     """
     Warns the user if they are manually setting properties that Camoufox already sets internally.
@@ -547,7 +559,7 @@ def warn_manual_config(config: Dict[str, Any]) -> None:
     if is_domain_set(config, 'headers.User-Agent'):
         LeakWarning.warn('header-ua', False)
     # Manual navigator setting
-    if is_domain_set(config, 'navigator.'):
+    if is_domain_set(_device_keys(config), 'navigator.'):
         LeakWarning.warn('navigator', False)
     # Touchscreen digitizer spoofing. Called out separately from the blanket
     # navigator warning because the knock-on effects reach past navigator into
@@ -557,7 +569,7 @@ def warn_manual_config(config: Dict[str, Any]) -> None:
     if config.get('instantAnimations'):
         LeakWarning.warn('instant_animations', False)
     # Manual screen/window setting
-    if is_domain_set(config, 'screen.', 'window.', 'document.body.'):
+    if is_domain_set(_device_keys(config), 'screen.', 'window.', 'document.body.'):
         LeakWarning.warn('viewport', False)
 
 
@@ -668,11 +680,12 @@ def attach_stock_media_defaults(target: Any) -> Any:
 
 
 def attach_desktop_only_warning(target: Any) -> Any:
-    """Warn when new_page()/new_context() asks for is_mobile: Camoufox only has
-    desktop identities, and Juggler ignores the option (TargetRegistry.js)."""
+    """Warn when new_page()/new_context() asks for is_mobile without a Firefox
+    for Android user agent: Juggler ignores the option for any other
+    (TargetRegistry.js), and the identity stays a desktop's."""
 
     def adjust(kwargs: Dict[str, Any]) -> None:
-        if kwargs.get('is_mobile'):
+        if kwargs.get('is_mobile') and not is_mobile_user_agent(kwargs.get('user_agent')):
             LeakWarning.warn('is_mobile')
 
     return _wrap_context_factories(target, adjust)
@@ -779,7 +792,7 @@ def context_identity(
     preset_os = platform_to_os(preset.get('navigator', {}).get('platform', '')) if preset else None
     preset_gpu = preset.get('webgl', {}) if preset else {}
     if (
-        (os or host_name) != host_name
+        POOL_KEYS.get(os or host_name) != host_os
         or (preset_os or host_name) != host_name
         or (gpu and preset and (preset_gpu.get('unmaskedVendor'), preset_gpu.get('unmaskedRenderer')) != gpu)
     ):
@@ -788,7 +801,7 @@ def context_identity(
             f'{" and its GPU " + repr(gpu) if gpu else ""}. Launch it with canvas_noise=True to give '
             'a context another OS or GPU.'
         )
-    return host_name, gpu
+    return os or host_name, gpu
 
 
 def new_context_options(
@@ -852,6 +865,43 @@ def sync_attach_vd(
     return browser
 
 
+WEBGL_CONFIG_ENV = 'CAMOUFOX_WEBGL_CONFIG'
+
+
+def webgl_config_from_env() -> Optional[Tuple[str, str]]:
+    """A fleet-wide default GPU, as "Vendor|Renderer" in CAMOUFOX_WEBGL_CONFIG.
+
+    A deployment often wants one GPU policy for every process without editing
+    each call site, and the config cannot hold it: the launcher writes
+    CAMOU_CONFIG fresh on every launch, so exporting it does nothing.
+    """
+    raw = environ.get(WEBGL_CONFIG_ENV)
+    if not raw:
+        return None
+    vendor, sep, renderer = raw.partition('|')
+    if not sep or not vendor.strip() or not renderer.strip():
+        raise ValueError(
+            f'{WEBGL_CONFIG_ENV} must be "Vendor|Renderer", for example '
+            f'"Intel|Intel(R) HD Graphics, or similar". Got: {raw!r}'
+        )
+    return vendor.strip(), renderer.strip()
+
+
+def _webgl_for_pair(
+    target_os: str, vendor: str, renderer: str, seed: int, mobile: bool, i_know_what_im_doing: bool
+) -> Dict[str, Any]:
+    """The WebGL config of a named GPU (webgl_for_gpu).
+
+    fpgen records no phone GPUs, so a phone's (Qualcomm, "Adreno (TM) 650, or
+    similar") could never be named. On a phone an unrecorded pair keeps its two
+    strings, with a warning: every other WebGL parameter is the host's.
+    """
+    if mobile and (vendor, renderer) not in firefox_gpus(target_os):
+        LeakWarning.warn('webgl_unknown_pair', i_know_what_im_doing)
+        return {'webGl:vendor': vendor, 'webGl:renderer': renderer, 'webGl2Enabled': True}
+    return webgl_for_gpu(target_os, vendor, renderer, seed=seed)
+
+
 def resolve_verstr(executable_path: Optional[Path] = None) -> str:
     """The Firefox version of the build about to launch: the named executable's
     own application.ini, or the installed release. A named executable without
@@ -913,7 +963,9 @@ def launch_options(
             Camoufox properties to use. (read https://github.com/daijro/camoufox/blob/main/README.md)
         os (Optional[ListOrString]):
             Operating system to use for the fingerprint generation.
-            Can be "windows", "macos", "linux", or a list to randomly choose from.
+            Can be "windows", "macos", "linux", "android", or a list to randomly choose from.
+            "android" draws a Firefox for Android phone and runs the browser in
+            mobile mode (touch-only pointer, touch events, meta viewport).
             Default: ["windows", "macos", "linux"]
         block_images (Optional[bool]):
             Whether to block all images.
@@ -1005,7 +1057,11 @@ def launch_options(
         webgl_config (Optional[Tuple[str, str]]):
             Use a specific WebGL vendor/renderer pair. Passed as a tuple of (vendor, renderer).
             The pair must be one fpgen has recorded from Firefox on `os`
-            (camoufox.webgl.firefox_gpus); any other raises ValueError.
+            (camoufox.webgl.firefox_gpus); any other raises ValueError, except on
+            a phone, whose GPUs fpgen never records: there the two strings are
+            kept and the rest of WebGL is the host's, with a warning.
+            Defaults to the CAMOUFOX_WEBGL_CONFIG environment variable
+            ("Vendor|Renderer"), below a preset's own GPU.
         canvas_noise (Optional[bool]):
             Replace canvas and WebGL readback with random data, as
             privacy.resistFingerprinting does in LibreWolf, Tor Browser and
@@ -1074,8 +1130,9 @@ def launch_options(
     # Snapshot which domains the USER set before fingerprint generation fills in
     # the rest. The post-generation fix-ups below must
     # only touch generated values, never override what the user passed.
-    _user_set_navigator = is_domain_set(config, 'navigator.')
-    _user_set_screen_window = is_domain_set(config, 'screen.', 'window.')
+    _user_set_navigator = is_domain_set(_device_keys(config), 'navigator.')
+    _user_set_screen_window = is_domain_set(_device_keys(config), 'screen.', 'window.')
+    _user_set_touch_points = 'navigator.maxTouchPoints' in config
     _user_set_media_devices = is_domain_set(config, 'mediaDevices:')
     _user_set_fonts = bool(fonts) or is_domain_set(config, 'fonts')
     _user_set_voices = is_domain_set(config, 'voices')
@@ -1097,13 +1154,18 @@ def launch_options(
     else:
         _identity_salt = identity_salt()
 
+    # The fleet-wide default GPU meets the same OS requirement an explicit
+    # argument does, but is applied only once the identity is drawn: it loses
+    # to anything chosen deliberately, a preset's or the config's own GPU too.
+    _default_webgl_config = webgl_config_from_env() if webgl_config is None else None
+
     # Assert the target OS is valid
     if os:
         check_valid_os(os)
 
     # webgl_config requires OS to be set
-    elif webgl_config:
-        raise ValueError('OS must be set when using webgl_config')
+    elif webgl_config or _default_webgl_config:
+        raise ValueError(f'OS must be set when using webgl_config or {WEBGL_CONFIG_ENV}')
 
     # Add the default addons
     add_default_addons(addons, exclude_addons)
@@ -1165,6 +1227,16 @@ def launch_options(
         )
 
     target_os = get_target_os(config)
+
+    # A phone -- os="android", or an Android user agent the caller passed -- has
+    # to behave like one. The device pixel ratio moves only where there is no
+    # real monitor to overflow: at a phone's 2.5-4 dppx a headful window grows
+    # past any desktop screen.
+    _mobile_dpr = None
+    if is_mobile_config(config) and fingerprint is not None and (headless or virtual_display):
+        _mobile_dpr = (fingerprint.get('window') or {}).get('devicePixelRatio')
+    if apply_mobile_mode(config, firefox_user_prefs, _mobile_dpr, keep_touch_points=_user_set_touch_points):
+        LeakWarning.warn('mobile_resources', i_know_what_im_doing)
 
     # A preset whose screen is a phone viewport is not a real desktop device;
     # the floor is normally skipped for presets, on the assumption that a preset
@@ -1476,6 +1548,19 @@ def launch_options(
     if allow_addon_new_tab:
         set_into(config, 'allowAddonNewtab', True)
 
+    # pdfViewerEnabled is answered from the config (pdf-viewer-spoofing.patch),
+    # with navigator.plugins and mimeTypes. The viewer itself follows, so a
+    # claimed "no viewer" also downloads PDFs instead of rendering them inline.
+    if isinstance(config.get('pdfViewerEnabled'), bool):
+        firefox_user_prefs.setdefault('pdfjs.disabled', not config['pdfViewerEnabled'])
+    # navigator.plugins moves the plugin and MIME lists alone, to test one half
+    # on its own. Every real Firefox exposes the PDF plugins exactly when it has
+    # a viewer, so any other pairing is a contradiction a page can read.
+    if isinstance(config.get('navigator.plugins'), bool) and config['navigator.plugins'] != (
+        config.get('pdfViewerEnabled', True) is not False
+    ):
+        LeakWarning.warn('plugins_pdf_mismatch', i_know_what_im_doing)
+
     # Set Firefox user preferences. Each toggle writes its pref on or off: a
     # persistent profile keeps a user.js pref in prefs.js after the launch that
     # set it, so a flag that only wrote when on stayed on for good.
@@ -1487,7 +1572,7 @@ def launch_options(
     firefox_user_prefs.setdefault('media.peerconnection.enabled', not block_webrtc)
     firefox_user_prefs.setdefault('browser.tabs.remote.useCrossOriginOpenerPolicy', not disable_coop)
     # A persistent context takes its context options here.
-    if launch_options.get('is_mobile'):
+    if launch_options.get('is_mobile') and not is_mobile_config(config):
         LeakWarning.warn('is_mobile', i_know_what_im_doing)
 
     # Drop values the source supplied that this identity cannot keep, before the
@@ -1495,6 +1580,8 @@ def launch_options(
     # sampling). Here, not earlier, because the check reads the core count and
     # the screen, which the host core count and the display clamp replace.
     coherence.drop_incoherent_source_values(config, target_os)
+    if _default_webgl_config and not (config.get('webGl:vendor') and config.get('webGl:renderer')):
+        webgl_config = _default_webgl_config
 
     cover_canvas, host = plan_rendering(
         target_os,
@@ -1513,13 +1600,28 @@ def launch_options(
     else:
         # A pair the caller named, or the preset's own GPU, keeps its name and
         # gets that device's recorded parameters. webgl_for_gpu raises for a GPU
-        # fpgen has never seen: the caller asked for something that does not exist.
+        # fpgen has never seen: the caller asked for something that does not
+        # exist, unless the identity is a phone (_webgl_for_pair).
+        _mobile = is_mobile_config(config)
         if webgl_config:
-            webgl_fp = webgl_for_gpu(target_os, *webgl_config, seed=identity_seed(config, _identity_salt))
+            webgl_fp = _webgl_for_pair(
+                target_os, *webgl_config, identity_seed(config, _identity_salt), _mobile, i_know_what_im_doing
+            )
+            # merge_into() keeps keys the config holds, so a preset's own pair
+            # would stay over the pinned GPU's parameters, naming two GPUs.
+            config.pop('webGl:vendor', None)
+            config.pop('webGl:renderer', None)
+            # Pinning skips sample_webgl_for_screen, so its two checks are made
+            # here. A warning, not a resample: the caller named this GPU.
+            _pinned = webgl_fp['webGl:renderer']
+            if not gpu_screen_is_plausible(_pinned, config.get('screen.width'), config.get('screen.height')):
+                LeakWarning.warn('webgl_pinned_screen', i_know_what_im_doing)
+            if is_software_renderer(_pinned):
+                LeakWarning.warn('webgl_pinned_software', i_know_what_im_doing)
         elif config.get('webGl:vendor') and config.get('webGl:renderer'):
-            webgl_fp = webgl_for_gpu(
+            webgl_fp = _webgl_for_pair(
                 target_os, config['webGl:vendor'], config['webGl:renderer'],
-                seed=identity_seed(config, _identity_salt),
+                identity_seed(config, _identity_salt), _mobile, i_know_what_im_doing,
             )
         elif host:
             # Claim the GPU the canvas really renders on.

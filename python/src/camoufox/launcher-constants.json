@@ -33,6 +33,16 @@
   "macEloquenceVoices": ["Eddy", "Flo", "Grandma", "Grandpa", "Reed", "Rocko", "Sandy", "Shelley"],
   "baselineTaskbarHeight": {"win": 48, "mac": 76, "lin": 0},
   "baselineMultiTouchPoints": 5,
+  "mobilePrefs": {
+    "dom.webshare.enabled": true,
+    "dom.capture.enabled": true,
+    "dom.forms.datetime.others": true,
+    "dom.media.webcodecs.enabled": false,
+    "media.setsinkid.enabled": false,
+    "dom.documentpip.enabled": false,
+    "dom.fullscreen.keyboard_lock.enabled": false,
+    "webgl.default-antialias": false
+  },
   "cachePrefs": {
     "browser.sessionhistory.max_total_viewers": -1,
     "browser.cache.memory.enable": true,

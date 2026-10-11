@@ -913,6 +913,30 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		expect(fromP.config["navigator.platform"]).toBe("MacIntel");
 	});
 
+	it("an Android context asks Playwright for a phone", () => {
+		const { context_options: opts, init_script } = generateContextFingerprint({
+			os: "android",
+			i_know_what_im_doing: true,
+		});
+		expect(opts.userAgent).toMatch(/\bAndroid\b/);
+		expect(opts.isMobile).toBe(true);
+		expect(opts.hasTouch).toBe(true);
+		expect(opts.deviceScaleFactor).toBeGreaterThan(1);
+		expect(opts.viewport.width).toBeLessThan(opts.viewport.height);
+		// Juggler derives screen.orientation from it.
+		expect(opts.screen.width).toBeLessThan(opts.screen.height);
+		expect(init_script).toContain('setNavigatorPlatform("Linux armv81")');
+	});
+
+	it("a desktop context is no phone", () => {
+		const { context_options: opts } = generateContextFingerprint({
+			os: "windows",
+		});
+		for (const key of ["isMobile", "hasTouch", "deviceScaleFactor", "screen"])
+			expect(opts).not.toHaveProperty(key);
+		expect(opts.viewport.height).toBeGreaterThanOrEqual(600);
+	});
+
 	it("a context with a Linux UA is Linux throughout", () => {
 		// fpgen's Linux pool now and then pairs the Linux UA with platform Win32
 		// and a Windows oscpu. launchOptions() fixed that and this path did not,
