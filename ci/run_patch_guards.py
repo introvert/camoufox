@@ -151,6 +151,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         result.record(f"patches/{guard.name}", outcome)
         if not proc.ok:
             failed.append(guard.name)
+            # The whole output, not just the tail: a guard prints its FAIL rows
+            # before a summary line, and the log is all a CI run leaves behind.
+            print(proc.combined(), file=sys.stderr, flush=True)
             tail = proc.combined().strip().splitlines()[-6:]
             result.note(f"{guard.name} failed ({proc.code}): " + " | ".join(t.strip() for t in tail))
         else:
