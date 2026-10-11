@@ -1,0 +1,12 @@
+# 24h quarantine on anything freshly published, as supply-chain cover.
+minimumReleaseAge: 1440
+
+onlyBuiltDependencies:
+  - esbuild
+  - playwright-core
+
+nodeLinker: hoisted
+linkWorkspacePackages: true
+preferWorkspacePackages: true
+publicHoistPattern:
+    - "*"
