@@ -32,13 +32,16 @@ name: Release
 # (see `ci.release set-build`). Every published library version is tagged too
 # (vX.Y.Z by the maintainer, vX.Y.ZbN by tag-library).
 
+# This fork does not run it: it publishes the `camoufox` packages, which are
+# upstream's, and the fork's browser releases come from build.yml on a tag. The
+# file stays so ci/tests keeps checking the plumbing it shares with upstream;
+# restore upstream's triggers here to release this way:
+#
+#   push:
+#     branches: [main]
+#     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 on:
-  push:
-    branches: [main]
-    # vX.Y.Z only. Browser tags (v156.0.1-beta.33) and library prerelease tags
-    # (v0.5.8b2) are created by this workflow's token, which starts no run, and
-    # check-promotable refuses anything else a person pushes.
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
 
 permissions: {}
 

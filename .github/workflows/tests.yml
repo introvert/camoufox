@@ -42,7 +42,8 @@ name: Tests
 
 on:
   pull_request:
-  # Pushes to main are tested by release.yml, which calls this workflow.
+  # Pushes to main: release.yml, which calls this workflow upstream, does not
+  # run in this fork (see its triggers).
   schedule:
     # Keeps the ccache alive. GitHub evicts a cache after 7 days unused, and a
     # cold Firefox build is over an hour; twice a week keeps pull-request builds
@@ -459,13 +460,10 @@ jobs:
     permissions:
       contents: read
     env:
-      # browser/scripts/patch.py writes the mozconfig from BUILD_TARGET and defaults to
-      # macos,arm64 when it is unset -- sensible for a developer on a Mac,
-      # wrong here. Without this, configure goes looking for the macOS SDK and
-      # dies with "No such file or directory: MacOSX26.5.sdk/SDKSettings.plist"
-      # three minutes in, which reads like a missing dependency rather than a
-      # cross-compile nobody asked for. multibuild.py sets this itself; `make
-      # dir` + `make build` do not.
+      # browser/scripts/patch.py writes the mozconfig from BUILD_TARGET and
+      # defaults to the host when it is unset. Pinned anyway, so the artifact
+      # every downstream job unpacks is the linux x86_64 one whatever the
+      # runner turns out to be.
       BUILD_TARGET: linux,x86_64
     steps:
       # Checkout first, because the cache key below is a hash of the tree.

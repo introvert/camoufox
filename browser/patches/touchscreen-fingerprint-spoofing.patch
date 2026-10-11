@@ -24,21 +24,21 @@ diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
 +  //
 +  // A touch context or mobile mode without a count of its own reports the five
 +  // touch points Firefox for Android reports on ordinary phones.
-+  std::optional<uint32_t> spoofed =
++  std::optional<uint32_t> value =
 +      MaskConfig::GetUint32("navigator.maxTouchPoints");
-+  if (spoofed && spoofed.value() == 0 && touchContext) {
-+    spoofed.reset();
++  if (value && value.value() == 0 && touchContext) {
++    value.reset();
 +  }
-+  if (!spoofed && (touchContext || MaskConfig::GetBool("mobile"))) {
-+    spoofed = 5;
++  if (!value && (touchContext || MaskConfig::GetBool("mobile"))) {
++    value = 5;
 +  }
-+  if (spoofed) {
++  if (value) {
 +    if (aCallerType != CallerType::System &&
 +        nsContentUtils::ShouldResistFingerprinting(
 +            GetDocShell(), RFPTarget::MaxTouchPointsCollapse)) {
-+      return nsRFPService::CollapseMaxTouchPoints(spoofed.value());
++      return nsRFPService::CollapseMaxTouchPoints(value.value());
 +    }
-+    return spoofed.value();
++    return value.value();
 +  }
 +
    // Responsive Design Mode overrides the maxTouchPoints property when
