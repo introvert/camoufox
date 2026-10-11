@@ -15,7 +15,7 @@ diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
 +  // everything past the screen edge is unreachable. Juggler maps input from
 +  // page to screen coordinates. `mobile:zoom: false` opts out.
 +  if (1 == 1) {
-+    return MaskConfig::GetBool("mobile:zoom").value_or(true) &&
++    return MaskConfig::GetOptionalBool("mobile:zoom").value_or(true) &&
 +           ShouldHandleMetaViewport(aDocument);
 +  }
  
@@ -40,7 +40,7 @@ diff --git a/layout/base/nsLayoutUtils.cpp b/layout/base/nsLayoutUtils.cpp
 +  // Zooming (AllowZoomingForDocument) stays off unless mobile:zoom asks for
 +  // it. Needs APZ on the widget, like any MobileViewportManager.
 +  if (1 == 1) {
-+    if (MaskConfig::CheckBool("mobile")) {
++    if (MaskConfig::GetBool("mobile")) {
 +      return true;
 +    }
 +    BrowsingContext* top = aDocument->GetBrowsingContext()

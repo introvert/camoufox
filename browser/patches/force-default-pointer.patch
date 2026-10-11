@@ -16,7 +16,7 @@ diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
 +  // Mobile mode claims Firefox for Android, which only has the touchscreen:
 +  // coarse and unable to hover, as the primary pointer and in the any- set
 +  // alike. This is the ANDROID branch above, chosen at runtime.
-+  if (MaskConfig::CheckBool("mobile")) {
++  if (MaskConfig::GetBool("mobile")) {
 +    return PointerCapabilities::Coarse;
 +  }
 +

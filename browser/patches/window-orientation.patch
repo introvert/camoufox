@@ -261,7 +261,7 @@ diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
 +  // The same rule as the meta viewport (nsLayoutUtils::
 +  // ShouldHandleMetaViewport): the whole browser in mobile mode, or a page
 +  // Juggler put in RDM for an isMobile context.
-+  if (MaskConfig::CheckBool("mobile")) {
++  if (MaskConfig::GetBool("mobile")) {
 +    return true;
 +  }
 +  nsGlobalWindowInner* win = xpc::WindowOrNull(aObj);

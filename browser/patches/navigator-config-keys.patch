@@ -79,7 +79,7 @@ diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
  }
  
  bool Navigator::CookieEnabled() {
-+  if (auto value = MaskConfig::GetBool("navigator.cookieEnabled")) {
++  if (auto value = MaskConfig::GetOptionalBool("navigator.cookieEnabled")) {
 +    return value.value();
 +  }
    // Check whether an exception overrides the global cookie behavior
@@ -95,7 +95,7 @@ diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
  }
  
  bool Navigator::OnLine() {
-+  if (auto value = MaskConfig::GetBool("navigator.onLine")) {
++  if (auto value = MaskConfig::GetOptionalBool("navigator.onLine")) {
 +    return value.value();
 +  }
    if (nsContentUtils::ShouldResistFingerprinting(
@@ -157,7 +157,7 @@ diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
 +}
 +
 +bool WorkerNavigator::OnLine() const {
-+  if (auto value = MaskConfig::GetBool("navigator.onLine")) {
++  if (auto value = MaskConfig::GetOptionalBool("navigator.onLine")) {
 +    return value.value();
 +  }
 +  return mOnline;

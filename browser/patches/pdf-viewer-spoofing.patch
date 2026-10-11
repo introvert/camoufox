@@ -11,7 +11,7 @@ diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
 +  // Camoufox: pdfViewerEnabled decides the whole PDF surface -- this flag and
 +  // the spec's hard-coded plugins/mimeTypes (nsPluginArray, nsMimeTypeArray)
 +  // -- so the three agree unless navigator.plugins is set on its own.
-+  if (auto value = MaskConfig::GetBool("pdfViewerEnabled")) {
++  if (auto value = MaskConfig::GetOptionalBool("pdfViewerEnabled")) {
 +    return value.value();
 +  }
    return !StaticPrefs::pdfjs_disabled() ||
@@ -48,10 +48,10 @@ diff --git a/dom/base/nsMimeTypeArray.cpp b/dom/base/nsMimeTypeArray.cpp
 +  // Camoufox: navigator.plugins exposes or hides the spec's PDF plugins and
 +  // their MIME types on its own; unset, they follow navigator.pdfViewerEnabled
 +  // (see Navigator.cpp), which is the only shape a real Firefox has.
-+  if (auto value = MaskConfig::GetBool("navigator.plugins")) {
++  if (auto value = MaskConfig::GetOptionalBool("navigator.plugins")) {
 +    return !value.value();
 +  }
-+  if (auto value = MaskConfig::GetBool("pdfViewerEnabled")) {
++  if (auto value = MaskConfig::GetOptionalBool("pdfViewerEnabled")) {
 +    return !value.value();
 +  }
    return StaticPrefs::pdfjs_disabled() &&
@@ -88,10 +88,10 @@ diff --git a/dom/base/nsPluginArray.cpp b/dom/base/nsPluginArray.cpp
 +  // Camoufox: navigator.plugins exposes or hides the spec's PDF plugins and
 +  // their MIME types on its own; unset, they follow navigator.pdfViewerEnabled
 +  // (see Navigator.cpp), which is the only shape a real Firefox has.
-+  if (auto value = MaskConfig::GetBool("navigator.plugins")) {
++  if (auto value = MaskConfig::GetOptionalBool("navigator.plugins")) {
 +    return !value.value();
 +  }
-+  if (auto value = MaskConfig::GetBool("pdfViewerEnabled")) {
++  if (auto value = MaskConfig::GetOptionalBool("pdfViewerEnabled")) {
 +    return !value.value();
 +  }
    return StaticPrefs::pdfjs_disabled() &&

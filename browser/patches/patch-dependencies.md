@@ -37,21 +37,26 @@ be listed there.
 | `fingerprint-injection.patch` | `navigator.*`, `screen.*`, `window.*` |
 | `font-hijacker.patch` | `fonts`, `navigator.platform` |
 | `font-system-fonts-css2.patch` | `navigator.platform`, `window.devicePixelRatio` |
-| `force-default-pointer.patch` | `navigator.maxTouchPoints` |
+| `force-default-pointer.patch` | `navigator.maxTouchPoints`, `mobile` (switches both pointer sets to Android's coarse, non-hovering touchscreen) |
 | `geolocation-spoofing.patch` | `geolocation:*` |
 | `locale-spoofing.patch` | `locale:*`, `navigator.language` |
 | `media-codec-spoofing.patch` | `media:spoof_codecs` (bypasses `PDMFactory::Supports()` in `MP4Decoder`/`MatroskaDecoder` so `canPlayType()`/`isTypeSupported()` don't leak system codec libraries) |
 | `media-device-spoofing.patch` | `mediaDevices:*` |
+| `mobile-meta-viewport.patch` | `mobile`, `mobile:zoom` (honours `<meta name="viewport">` in mobile mode, or in RDM for an Android `isMobile` context; zooming is on for a phone unless `mobile:zoom` is false) |
+| `navigator-config-keys.patch` | `navigator.appCodeName`, `appName`, `product`, `productSub`, `vendor`, `buildID`, `cookieEnabled`, `onLine` (window, and workers where they expose them) |
 | `navigator-spoofing.patch` | `navigator.*` |
 | `network-patches.patch` | `headers.*`, `navigator.userAgent` |
+| `pdf-viewer-spoofing.patch` | `pdfViewerEnabled`, `navigator.plugins` (the flag and the spec's PDF plugins/MIME types follow one value unless `navigator.plugins` is set on its own) |
+| `privacy-signals-spoofing.patch` | `navigator.doNotTrack`, `navigator.globalPrivacyControl` (the getter and the `DNT` / `Sec-GPC` headers answer from the config value; the GPC getter itself is `navigator-spoofing.patch`'s) |
 | `no-css-animations.patch` | `instantAnimations` |
 | `screen-spoofing.patch` | `screen.*` |
 | `system-ui-font-spoofing.patch` | `navigator.platform` |
 | `timezone-spoofing.patch` | `timezone` |
-| `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints` |
+| `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints`, `mobile` (Android's legacy touch APIs and 5 touch points; a Playwright `hasTouch` context also reports 5 unless a count is set) |
 | `voice-spoofing.patch` | `voices`, `voices:blockIfNotDefined` |
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
+| `window-orientation.patch` | `mobile` (builds `window.orientation` / `onorientationchange` everywhere and exposes them for a phone: mobile mode or an Android `isMobile` context) |
 
 To regenerate the list: `grep -l 'MaskConfig::' patches/*.patch`.
 

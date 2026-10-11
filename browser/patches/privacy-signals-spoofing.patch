@@ -1,7 +1,7 @@
 diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
 --- a/dom/base/Navigator.cpp
 +++ b/dom/base/Navigator.cpp
-@@ -780,20 +780,31 @@ void Navigator::GetBuildID(nsAString& aBuildID, CallerType aCallerType,
+@@ -760,12 +760,18 @@ void Navigator::GetBuildID(nsAString& aBuildID, CallerType aCallerType,
  
    aBuildID.Truncate();
    AppendASCIItoUTF16(buildID, aBuildID);
@@ -20,19 +20,6 @@ diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
      aResult.AssignLiteral("unspecified");
    }
  }
- 
- bool Navigator::GlobalPrivacyControl() {
-+  // Camoufox: the window, workers (WorkerNavigator) and the Sec-GPC header
-+  // (nsHttpChannel) all answer from navigator.globalPrivacyControl.
-+  if (auto value = MaskConfig::GetBool("navigator.globalPrivacyControl")) {
-+    return value.value();
-+  }
-   bool gpcStatus = StaticPrefs::privacy_globalprivacycontrol_enabled();
-   if (!gpcStatus) {
-     nsCOMPtr<nsILoadContext> loadContext = do_GetInterface(mWindow);
-     gpcStatus = loadContext && loadContext->UsePrivateBrowsing() &&
-                 StaticPrefs::privacy_globalprivacycontrol_pbmode_enabled();
-   }
 diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsHttpChannel.cpp
 --- a/netwerk/protocol/http/nsHttpChannel.cpp
 +++ b/netwerk/protocol/http/nsHttpChannel.cpp
@@ -51,7 +38,7 @@ diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsH
  #include "CacheControlParser.h"
  #include "CacheStorageService.h"
  #include "CookieService.h"
-@@ -12055,22 +12057,41 @@ void nsHttpChannel::SetOriginHeader() {
+@@ -12033,22 +12035,41 @@ void nsHttpChannel::SetOriginHeader() {
  
  void nsHttpChannel::SetDoNotTrack() {
    /**
@@ -79,7 +66,7 @@ diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsH
    MOZ_ASSERT(NS_IsMainThread(), "Must be called on the main thread");
  
 +  // Camoufox: follows navigator.globalPrivacyControl when it is set.
-+  if (auto value = MaskConfig::GetBool("navigator.globalPrivacyControl")) {
++  if (auto value = MaskConfig::GetOptionalBool("navigator.globalPrivacyControl")) {
 +    if (value.value()) {
 +      DebugOnly<nsresult> rv =
 +          mRequestHead.SetHeader(nsHttp::GlobalPrivacyControl, "1"_ns, false);
