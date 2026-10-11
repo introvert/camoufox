@@ -196,8 +196,10 @@ PROBE = r"""
 
 
 def _launch_kwargs(headless: Any) -> Dict[str, Any]:
+    # canvas_noise=False: the pinned GPU is not the host's, which turns on random
+    # readback, and this guard reads back pixels to check that WebGL renders.
     return dict(headless=headless, os="linux", webgl_config=(VENDOR, RENDERER),
-                executable_path=str(resolve_binary()))
+                canvas_noise=False, executable_path=str(resolve_binary()))
 
 
 def _check(results: Dict[str, Any], label: str, got: Any, expected: Any) -> None:
