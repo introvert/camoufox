@@ -21,7 +21,7 @@ from .exceptions import (
     InvalidPropertyType,
     NonFirefoxFingerprint,
 )
-from .fingerprints import Screen, platform_to_os, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS
+from .fingerprints import Screen, platform_to_os, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts
 from . import coherence
 from .coherence import is_mobile_config, is_mobile_user_agent
 from .geolocation import geoip_allowed, get_geolocation
@@ -1301,14 +1301,18 @@ def launch_options(
         # generator made earlier from a partial config is replaced.
         os_name = OS_NAMES.get(target_os, 'macos')
         try:
-            config['fonts'] = _generate_random_font_subset(
-                os_name,
-                seed=identity_seed(config, _identity_salt),
-                # host's own OS on macOS/Windows: the real system fonts are used
-                # (font-hijacker.patch keeps the bundle inactive), so only the
-                # OS base is claimed
-                native=(target_os in ('mac', 'win') and _host_os_key() == target_os),
-            )
+            if is_mobile_config(config):
+                # A phone's fixed font set, not a drawn desktop one.
+                config['fonts'] = android_fonts()
+            else:
+                config['fonts'] = _generate_random_font_subset(
+                    os_name,
+                    seed=identity_seed(config, _identity_salt),
+                    # host's own OS on macOS/Windows: the real system fonts are used
+                    # (font-hijacker.patch keeps the bundle inactive), so only the
+                    # OS base is claimed
+                    native=(target_os in ('mac', 'win') and _host_os_key() == target_os),
+                )
         except (OSError, ValueError) as e:
             FallbackWarning.warn(
                 'Drawing the font list', f"every font fonts.json lists for {target_os}", e,

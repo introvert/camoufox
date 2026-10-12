@@ -18,6 +18,7 @@ Run with:
 
 import json
 from contextlib import contextmanager
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -26,7 +27,9 @@ from camoufox import coherence, utils
 from camoufox._warnings import LeakWarning
 from camoufox.coherence import is_mobile_config, is_mobile_user_agent
 from camoufox.fingerprints import (
+    ANDROID_FONTS,
     MOBILE_FIREFOX_PREFS,
+    MOBILE_FONT_PREFS,
     apply_mobile_mode,
     generate_context_fingerprint,
     generate_fingerprint,
@@ -99,7 +102,7 @@ class TestApplyMobileMode:
         prefs = {}
         assert apply_mobile_mode(config, prefs, 2.75)
         assert config['mobile'] is True
-        assert prefs == {**MOBILE_FIREFOX_PREFS, 'layout.css.devPixelsPerPx': '2.75'}
+        assert prefs == {**MOBILE_FIREFOX_PREFS, **MOBILE_FONT_PREFS, 'layout.css.devPixelsPerPx': '2.75'}
 
     def test_desktop_is_left_alone(self):
         config = {'navigator.userAgent': WINDOWS_UA}
@@ -221,6 +224,40 @@ class TestLaunchOptions:
         assert prefs['dom.media.webcodecs.enabled'] is False
         assert prefs['media.setsinkid.enabled'] is False
         assert prefs['webgl.default-antialias'] is False
+
+
+class TestAndroidFonts:
+    """Firefox for Android's fonts: Roboto by default, a fixed phone font set."""
+
+    def test_the_set_is_renderable_on_linux(self):
+        lin = set(json.loads((Path(utils.__file__).parent / 'fonts.json').read_text())['lin'])
+        assert set(ANDROID_FONTS) <= lin
+
+    def test_the_set_is_a_phones(self):
+        assert {'Roboto', 'Noto Serif', 'Noto Color Emoji', 'Noto Sans CJK JP'} <= set(ANDROID_FONTS)
+        # Desktop Linux families a phone does not have.
+        assert not {'Ubuntu', 'DejaVu Sans', 'Liberation Sans', 'Noto Sans', 'Arimo', 'Twemoji Mozilla'} & set(ANDROID_FONTS)
+
+    def test_android_launch_reports_the_phone_set(self):
+        config, prefs = launch(os='android')
+        assert config['fonts'] == ANDROID_FONTS
+        assert prefs['font.default.x-western'] == 'sans-serif'
+        assert prefs['font.name-list.sans-serif.x-western'].startswith('Roboto,')
+        assert prefs['font.name-list.emoji'].split(', ')[1] == 'Noto Color Emoji'
+
+    def test_caller_fonts_win(self):
+        config, _ = launch(os='android', fonts=['Roboto'])
+        assert config['fonts'][0] == 'Roboto'
+        assert 'Noto Serif' not in config['fonts']
+
+    @pytest.mark.parametrize('os_name', ['windows', 'macos', 'linux'])
+    def test_desktop_keeps_its_default_font(self, os_name):
+        _, prefs = launch(os=os_name)
+        assert not set(MOBILE_FONT_PREFS) & set(prefs)
+
+    def test_android_context_reports_the_phone_set(self):
+        fp = generate_context_fingerprint(os='android', ff_version='155', i_know_what_im_doing=True)
+        assert fp['config']['fonts'] == ANDROID_FONTS
 
 
 class TestContextFingerprint:

@@ -197,11 +197,14 @@ inline bool GetBool(const std::string& key) {
 
 // The OS an identity presents, from its navigator.platform. None means no
 // platform is configured; Other, one no identity uses.
-enum class SpoofedOS { None, Windows, MacOS, Linux, Other };
+enum class SpoofedOS { None, Windows, MacOS, Linux, Android, Other };
 
 inline SpoofedOS SpoofedOSFor(std::string_view platform) {
   if (platform == "Win32") return SpoofedOS::Windows;
   if (platform == "MacIntel") return SpoofedOS::MacOS;
+  // Firefox for Android hardcodes this platform on every device (digit one,
+  // not "armv8l"). Desktop Linux on ARM reports "Linux aarch64".
+  if (platform == "Linux armv81") return SpoofedOS::Android;
   if (platform.rfind("Linux", 0) == 0) return SpoofedOS::Linux;
   return SpoofedOS::Other;
 }
@@ -225,6 +228,7 @@ inline std::optional<std::pair<uint16_t, uint16_t>> SpoofedEphemeralPorts(
     case SpoofedOS::MacOS:
       return std::pair<uint16_t, uint16_t>{49152, 65535};
     case SpoofedOS::Linux:
+    case SpoofedOS::Android:
       // The kernel's default net.ipv4.ip_local_port_range.
       return std::pair<uint16_t, uint16_t>{32768, 60999};
     default:

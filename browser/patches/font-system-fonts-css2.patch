@@ -36,6 +36,8 @@ answer for the spoofed OS:
                      (matches CreepJS GeckoFonts entry "Segoe UI" -> "Windows")
   - "Ubuntu" 14.6667px when navigator.platform starts with "Linux"
                      (a stock Ubuntu desktop's GTK interface font, "Ubuntu 11")
+  - "Roboto" 12px     when navigator.platform is "Linux armv81"
+                     (Firefox for Android; its nsLookAndFeel::NativeGetFont)
   - (falls through)  otherwise (iPhone / unspoofed)
 
 Chrome documents are excluded from the spoof branch and keep the host's real
@@ -87,7 +89,7 @@ index 056c0e2f7f..06dbf09955 100644
  #include <algorithm>
  #include <limits>
  
-@@ -9820,8 +9822,91 @@ already_AddRefed<nsFontMetrics> nsLayoutUtils::GetMetricsFor(
+@@ -9820,8 +9822,99 @@ already_AddRefed<nsFontMetrics> nsLayoutUtils::GetMetricsFor(
    return aPresContext->GetMetricsFor(font, params);
  }
  
@@ -175,12 +177,20 @@ index 056c0e2f7f..06dbf09955 100644
 +    aStyle.systemFont = true;
 +    return;
 +  }
++  if (aOS == MaskConfig::SpoofedOS::Android) {
++    // Firefox for Android: nsLookAndFeel::NativeGetFont answers "Roboto" at
++    // 9pt (12 CSS px), normal weight, for every keyword.
++    aName = u"Roboto"_ns;
++    aStyle.size = 9.0f * 96.0f / 72.0f;
++    aStyle.systemFont = true;
++    return;
++  }
 +  // iPhone / unspoofed: fall through to upstream behavior.
 +
  #if defined(XP_MACOSX) || defined(MOZ_WIDGET_UIKIT)
    aName = u"-apple-system"_ns;
    // Values taken from a macOS 10.15 system.
-@@ -9876,9 +9961,27 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
+@@ -9876,9 +9969,27 @@ void nsLayoutUtils::ComputeSystemFont(nsFont* aSystemFont,
                                        const Document* aDocument) {
    gfxFontStyle fontStyle;
    nsAutoString systemFontName;

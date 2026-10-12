@@ -49,9 +49,9 @@ export const SUPPORTED_OS = ["linux", "macos", "windows"] as const;
 export type SupportedOS = (typeof SUPPORTED_OS)[number];
 
 /**
- * The pools each OS draws its fonts, voices and GPU from. Firefox for Android
- * takes the Linux ones: Camoufox bundles no Android fonts, and fpgen records
- * no phone GPUs.
+ * The pools each OS draws its voices and GPU from. Firefox for Android takes
+ * the Linux ones: fpgen records no phone voices or GPUs. Its fonts are the
+ * fixed Android set (ANDROID_FONTS), rendered from the Linux bundle.
  */
 export const POOL_KEYS: Readonly<Record<string, TargetOS>> = {
 	macos: "mac",
@@ -895,6 +895,31 @@ export const MOBILE_FIREFOX_PREFS: Readonly<Record<string, any>> =
 	LAUNCHER_CONSTANTS.mobilePrefs;
 
 /**
+ * Firefox for Android's own font prefs (modules/libpref/init/all.js, its
+ * `#if defined(ANDROID)` blocks): sans-serif is the default font and resolves
+ * to Roboto, serif to Noto Serif, emoji to Noto Color Emoji. A desktop build
+ * defaults to serif, so unstyled text measured desktop-wide without them.
+ * Families the bundle lacks (Google Sans, Droid Sans, Charis SIL Compact) are
+ * skipped by the browser, as on a phone that does not ship them.
+ */
+export const MOBILE_FONT_PREFS: Readonly<Record<string, any>> =
+	LAUNCHER_CONSTANTS.mobileFontPrefs;
+
+/**
+ * The families of a stock Android install that the Linux bundle can render:
+ * Roboto, the Noto script and CJK families, Noto Color Emoji and Droid Sans
+ * Fallback. A phone has one fixed set, so it is not drawn. DejaVu Sans Mono is
+ * the one family Android lacks: it backs `monospace` in place of Droid Sans
+ * Mono (same 0.6em advance), which the bundle does not have.
+ */
+export const ANDROID_FONTS: readonly string[] = LAUNCHER_CONSTANTS.androidFonts;
+
+/** The font list a Firefox for Android identity reports. */
+export function androidFonts(): string[] {
+	return [...ANDROID_FONTS];
+}
+
+/**
  * Make a config that claims Firefox for Android behave like it, and return
  * whether it is mobile.
  *
@@ -916,8 +941,10 @@ export function applyMobileMode(
 	if (!("mobile" in config)) config.mobile = true;
 	if (!keepTouchPoints && num(config["navigator.maxTouchPoints"] || 0) < 2)
 		config["navigator.maxTouchPoints"] = BASELINE_MULTI_TOUCH_POINTS;
-	for (const [pref, value] of Object.entries(MOBILE_FIREFOX_PREFS)) {
-		if (!(pref in firefoxUserPrefs)) firefoxUserPrefs[pref] = value;
+	for (const prefs of [MOBILE_FIREFOX_PREFS, MOBILE_FONT_PREFS]) {
+		for (const [pref, value] of Object.entries(prefs)) {
+			if (!(pref in firefoxUserPrefs)) firefoxUserPrefs[pref] = value;
+		}
 	}
 	// A real device pixel ratio, so `(resolution)` media queries, srcset and
 	// canvas backing stores agree with window.devicePixelRatio.
@@ -1670,7 +1697,7 @@ export function targetOsFromPlatform(plat: string): SupportedOS {
  * @param webgl_config The [vendor, renderer] a drawn identity claims, instead
  *   of drawing one.
  * @param i_know_what_im_doing Silences the warning that a phone takes its
- *   fonts, voices and GPU from the Linux pools.
+ *   voices and GPU from the Linux pools.
  */
 export function generateContextFingerprint({
 	preset,
@@ -1726,6 +1753,8 @@ export function generateContextFingerprint({
 			pyStr(get(config, "navigator.platform", "")),
 		);
 
+		if (!("fonts" in config) && isMobileConfig(config))
+			config.fonts = androidFonts();
 		if (!("fonts" in config)) {
 			try {
 				config.fonts = generateRandomFontSubset(

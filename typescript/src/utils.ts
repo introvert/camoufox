@@ -20,6 +20,7 @@ import {
 	NonFirefoxFingerprint,
 } from "./exceptions.js";
 import {
+	androidFonts,
 	applyMobileMode,
 	audioSeedFromIdentity,
 	clampScreenToDisplay,
@@ -1663,15 +1664,18 @@ export async function launchOptions({
 		// always gets the same font list (#442/#765).
 		const osName = OS_NAMES[targetOs] ?? "macos";
 		try {
-			config.fonts = utilsDeps.generateRandomFontSubset(
-				osName,
-				utilsDeps.identitySeed(config, salt),
-				// host's own OS on macOS/Windows: the real system fonts are used
-				// (font-hijacker.patch keeps the bundle inactive), so only the OS
-				// base is claimed
-				(targetOs === "mac" || targetOs === "win") &&
-					utilsDeps.hostOsKey() === targetOs,
-			);
+			config.fonts = coherence.isMobileConfig(config)
+				? // A phone's fixed font set, not a drawn desktop one.
+					androidFonts()
+				: utilsDeps.generateRandomFontSubset(
+						osName,
+						utilsDeps.identitySeed(config, salt),
+						// host's own OS on macOS/Windows: the real system fonts are used
+						// (font-hijacker.patch keeps the bundle inactive), so only the OS
+						// base is claimed
+						(targetOs === "mac" || targetOs === "win") &&
+							utilsDeps.hostOsKey() === targetOs,
+					);
 		} catch (e) {
 			if (!isPyError(e, "OSError", "ValueError")) throw e;
 			FallbackWarning.warn(
