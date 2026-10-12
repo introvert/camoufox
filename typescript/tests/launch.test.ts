@@ -1125,6 +1125,31 @@ describe.skipIf(!MODEL.ok)(
 			}
 		});
 
+		it("a user agent alone still fixes the drawn platform", async () => {
+			// A Linux draw can carry another OS's platform beside its Linux oscpu.
+			// The caller set only the user agent, so platform and oscpu follow it.
+			const fp = fingerprints.generateFingerprint({ os: "linux" });
+			fp.navigator.platform = "Win32";
+			const config = await launchConfig({
+				os: undefined,
+				fingerprint: fp,
+				config: { "navigator.userAgent": LINUX_UA },
+			});
+			expect(config["navigator.platform"]).toBe("Linux x86_64");
+			expect(config["navigator.oscpu"]).toBe("Linux x86_64");
+		});
+
+		it("the caller's platform is kept", async () => {
+			const config = await launchConfig({
+				os: undefined,
+				config: {
+					"navigator.userAgent": LINUX_UA,
+					"navigator.platform": "Linux i686",
+				},
+			});
+			expect(config["navigator.platform"]).toBe("Linux i686");
+		});
+
 		it("a user agent and os disagreeing warns", async () => {
 			const { config, warned } = await launchWarning(
 				{
