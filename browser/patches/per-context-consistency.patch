@@ -1,0 +1,292 @@
+diff --git a/dom/base/NavigatorManager.h b/dom/base/NavigatorManager.h
+--- a/dom/base/NavigatorManager.h
++++ b/dom/base/NavigatorManager.h
+@@ -1,10 +1,11 @@
+ /* Camoufox: Per-context navigator property manager */
+ #ifndef mozilla_dom_NavigatorManager_h
+ #define mozilla_dom_NavigatorManager_h
+ 
++#include "js/TypeDecls.h"
+ #include "nsString.h"
+ #include "RoverfoxStorageManager.h"
+ 
+ namespace MaskConfig {
+ enum class SpoofedOS;
+ }
+@@ -84,12 +85,29 @@ class NavigatorManager {
+     key.AppendPrintf("nav_ua_%u", aId);
+     return RoverfoxStorageManager::GetString(key, aOut);
+   }
+ 
+   static bool IsUaFunctionEnabledForWebIDL(JSContext* aCx, JSObject* aObj);
+ 
++  // The appVersion Firefox reports for a browser that sends `aUserAgent`:
++  // "5.0 (<OS tokens>)" without rv, the architecture or the Windows build
++  // ("5.0 (Windows)", "5.0 (Macintosh)", "5.0 (X11)", "5.0 (Android 16)"), as
++  // the launchers derive navigator.appVersion. False if the UA has no such
++  // part. A per-context user agent brings its own, or appVersion keeps naming
++  // the launch's OS next to it.
++  static bool AppVersionFromUserAgent(const nsAString& aUserAgent,
++                                      nsAString& aOut);
++
++  // The language list behind a per-context locale (Playwright's `locale`,
++  // which Juggler sets as the browsing context's languageOverride). Firefox
++  // used the override verbatim, so a context created with "de-DE" sent
++  // "Accept-Language: de-DE" and reported navigator.languages ["de-DE"]. The
++  // launch-wide locale lists the language without the region too
++  // (CamoufoxWindow.sys.mjs): "de-DE" -> "de-DE, de". A list is kept as given.
++  static void ExpandLanguageOverride(const nsACString& aOverride,
++                                     nsACString& aOut);
+ };
+ 
+ }  // namespace dom
+ }  // namespace mozilla
+ 
+ #endif  // mozilla_dom_NavigatorManager_h
+diff --git a/dom/base/NavigatorManager.cpp b/dom/base/NavigatorManager.cpp
+--- a/dom/base/NavigatorManager.cpp
++++ b/dom/base/NavigatorManager.cpp
+@@ -1,9 +1,11 @@
+ /* Camoufox: Per-context navigator property manager */
+ #include "NavigatorManager.h"
+ #include "MaskConfig.hpp"
++#include "nsCharSeparatedTokenizer.h"
++#include "nsReadableUtils.h"
+ 
+ namespace mozilla {
+ namespace dom {
+ 
+ /* static */
+ MaskConfig::SpoofedOS NavigatorManager::GetSpoofedOS(uint32_t aId) {
+@@ -35,8 +37,63 @@ bool NavigatorManager::IsHwcFunctionEnabledForWebIDL(JSContext* aCx,
+ /* static */
+ bool NavigatorManager::IsUaFunctionEnabledForWebIDL(JSContext* aCx,
+                                                     JSObject* aObj) {
+   return RoverfoxStorageManager::IsSetterOffered(aObj, "nav_ua");
+ }
+ 
++/* static */
++bool NavigatorManager::AppVersionFromUserAgent(const nsAString& aUserAgent,
++                                               nsAString& aOut) {
++  constexpr auto kPrefix = u"Mozilla/5.0 ("_ns;
++  if (!StringBeginsWith(aUserAgent, kPrefix)) {
++    return false;
++  }
++  const int32_t close = aUserAgent.FindChar(u')', kPrefix.Length());
++  if (close < 0) {
++    return false;
++  }
++  const nsDependentSubstring block =
++      Substring(aUserAgent, kPrefix.Length(), close - kPrefix.Length());
++
++  nsAutoString kept;
++  for (const auto& token : nsCharSeparatedTokenizer(block, u';').ToRange()) {
++    if (token.IsEmpty() || StringBeginsWith(token, u"rv:"_ns) ||
++        token.EqualsLiteral("Win64") || token.EqualsLiteral("x64") ||
++        token.EqualsLiteral("Mobile") || token.EqualsLiteral("Tablet") ||
++        StringBeginsWith(token, u"Linux "_ns) ||
++        StringBeginsWith(token, u"Intel Mac OS X"_ns)) {
++      continue;
++    }
++    if (!kept.IsEmpty()) {
++      kept.AppendLiteral(u"; ");
++    }
++    if (StringBeginsWith(token, u"Windows"_ns)) {
++      kept.AppendLiteral(u"Windows");
++    } else {
++      kept.Append(token);
++    }
++  }
++  if (kept.IsEmpty()) {
++    return false;
++  }
++  aOut.AssignLiteral(u"5.0 (");
++  aOut.Append(kept);
++  aOut.Append(u')');
++  return true;
++}
++
++/* static */
++void NavigatorManager::ExpandLanguageOverride(const nsACString& aOverride,
++                                              nsACString& aOut) {
++  aOut.Assign(aOverride);
++  if (aOverride.FindChar(',') != kNotFound) {
++    return;
++  }
++  const int32_t dash = aOverride.FindChar('-');
++  if (dash > 0) {
++    aOut.AppendLiteral(", ");
++    aOut.Append(Substring(aOverride, 0, dash));
++  }
++}
++
+ }  // namespace dom
+ }  // namespace mozilla
+diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
+--- a/dom/base/Navigator.cpp
++++ b/dom/base/Navigator.cpp
+@@ -331,12 +331,22 @@ void Navigator::GetAppCodeName(nsAString& aAppCodeName, ErrorResult& aRv) {
+ 
+   CopyASCIItoUTF16(appName, aAppCodeName);
+ }
+ 
+ void Navigator::GetAppVersion(nsAString& aAppVersion, CallerType aCallerType,
+                               ErrorResult& aRv) const {
++  // Camoufox: a per-context user agent brings its own appVersion
++  if (mWindow) {
++    const uint32_t userContextId =
++        RoverfoxStorageManager::UserContextId(mWindow);
++    nsAutoString stored;
++    if (NavigatorManager::GetUserAgent(userContextId, stored) &&
++        NavigatorManager::AppVersionFromUserAgent(stored, aAppVersion)) {
++      return;
++    }
++  }
+   // Camoufox: global config fallback for appVersion
+   if (auto value = MaskConfig::GetString("navigator.appVersion")) {
+     aAppVersion.Assign(NS_ConvertUTF8toUTF16(value.value()));
+     return;
+   }
+   nsCOMPtr<Document> doc = mWindow->GetExtantDoc();
+@@ -379,13 +389,14 @@ void Navigator::GetAcceptLanguages(nsTArray<nsString>& aLanguages,
+ 
+   aLanguages.Clear();
+ 
+   // E.g. "de-de, en-us,en".
+   nsAutoCString acceptLang;
+   if (aLanguageOverride) {
+-    acceptLang.Assign(aLanguageOverride->get());
++    // Camoufox: the language list a Firefox set to this locale reports
++    NavigatorManager::ExpandLanguageOverride(*aLanguageOverride, acceptLang);
+   } else {
+     intl::LocaleService::GetInstance()->GetAcceptLanguages(acceptLang);
+   }
+ 
+   // Split values on commas.
+   for (nsDependentCSubstring lang :
+diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
+--- a/dom/workers/WorkerNavigator.cpp
++++ b/dom/workers/WorkerNavigator.cpp
+@@ -169,12 +169,22 @@ void WorkerNavigator::SetLanguages(const nsTArray<nsString>& aLanguages) {
+   mProperties.mLanguages = aLanguages.Clone();
+ }
+ 
+ void WorkerNavigator::GetAppVersion(nsString& aAppVersion,
+                                     CallerType aCallerType,
+                                     ErrorResult& aRv) const {
++  // Camoufox: a per-context user agent brings its own appVersion
++  if (WorkerPrivate* wp = GetCurrentThreadWorkerPrivate()) {
++    nsAutoString stored;
++    if (mozilla::dom::NavigatorManager::GetUserAgent(
++            wp->GetOriginAttributes().mUserContextId, stored) &&
++        mozilla::dom::NavigatorManager::AppVersionFromUserAgent(stored,
++                                                                aAppVersion)) {
++      return;
++    }
++  }
+   if (auto value = MaskConfig::GetString("navigator.appVersion"))
+     return aAppVersion.Assign(NS_ConvertUTF8toUTF16(value.value()));
+   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+   MOZ_ASSERT(workerPrivate);
+ 
+   if (aCallerType != CallerType::System) {
+diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/HttpBaseChannel.cpp
+--- a/netwerk/protocol/http/HttpBaseChannel.cpp
++++ b/netwerk/protocol/http/HttpBaseChannel.cpp
+@@ -38,12 +38,13 @@
+ #include "mozilla/dom/BrowsingContext.h"
+ #include "mozilla/dom/CanonicalBrowsingContext.h"
+ #include "mozilla/dom/ContentChild.h"
+ #include "mozilla/dom/Document.h"
+ #include "mozilla/dom/FetchPriority.h"
+ #include "mozilla/dom/LoadURIOptionsBinding.h"
++#include "mozilla/dom/NavigatorManager.h"
+ #include "mozilla/dom/ParentProcessChannelHandle.h"
+ #include "mozilla/dom/Performance.h"
+ #include "mozilla/dom/PerformanceStorage.h"
+ #include "mozilla/dom/PolicyContainer.h"
+ #include "mozilla/dom/ProcessIsolation.h"
+ #include "mozilla/dom/RequestBinding.h"
+@@ -535,12 +536,26 @@ HttpBaseChannel::SetTRRMode(nsIRequest::TRRMode aTRRMode) {
+ 
+ NS_IMETHODIMP
+ HttpBaseChannel::SetDocshellUserAgentOverride() {
+   RefPtr<dom::BrowsingContext> bc;
+   MOZ_ALWAYS_SUCCEEDS(mLoadInfo->GetBrowsingContext(getter_AddRefs(bc)));
+   if (!bc) {
++    // Camoufox: worker and service worker requests have no browsing context
++    // to carry the page's user agent override, so they went out with the
++    // launch-wide one -- a Windows UA from an Android context's service
++    // worker. Send the user agent the request's user context was given.
++    const uint32_t userContextId =
++        mLoadInfo->GetOriginAttributes().mUserContextId;
++    nsAutoString contextUserAgent;
++    if (userContextId &&
++        dom::NavigatorManager::GetUserAgent(userContextId, contextUserAgent) &&
++        !contextUserAgent.IsEmpty()) {
++      return SetRequestHeaderInternal(
++          "User-Agent"_ns, NS_ConvertUTF16toUTF8(contextUserAgent), false,
++          nsHttpHeaderArray::eVarietyRequestEnforceDefault);
++    }
+     return NS_OK;
+   }
+ 
+   nsAutoString customUserAgent;
+   bc->GetCustomUserAgent(customUserAgent);
+   if (customUserAgent.IsEmpty() || customUserAgent.IsVoid()) {
+diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
+--- a/netwerk/protocol/http/nsHttpHandler.cpp
++++ b/netwerk/protocol/http/nsHttpHandler.cpp
+@@ -36,12 +36,13 @@
+ #include "mozilla/StaticPrefs_privacy.h"
+ #include "mozilla/StaticPrefs_security.h"
+ #include "mozilla/StoragePrincipalHelper.h"
+ #include "mozilla/SyncRunnable.h"
+ #include "mozilla/dom/ContentParent.h"
+ #include "mozilla/dom/Navigator.h"
++#include "mozilla/dom/NavigatorManager.h"
+ #include "mozilla/dom/Promise.h"
+ #include "mozilla/dom/network/Connection.h"
+ #include "mozilla/glean/GleanPings.h"
+ #include "mozilla/glean/NetwerkProtocolHttpMetrics.h"
+ #include "mozilla/intl/LocaleService.h"
+ #include "mozilla/ipc/URIUtils.h"
+@@ -735,12 +736,15 @@ nsresult nsHttpHandler::AddAcceptAndDictionaryHeaders(
+     }
+   }
+   // guard may call aCallback here
+   return rv;
+ }
+ 
++static nsresult PrepareAcceptLanguages(const char* i_AcceptLanguages,
++                                       nsACString& o_AcceptLanguages);
++
+ nsresult nsHttpHandler::AddStandardRequestHeaders(
+     nsHttpRequestHead* request, nsIURI* aURI, bool aIsHTTPS,
+     ExtContentPolicyType aContentPolicyType, bool aShouldResistFingerprinting,
+     const nsCString& aLanguageOverride) {
+   nsresult rv;
+ 
+@@ -773,14 +777,21 @@ nsresult nsHttpHandler::AddStandardRequestHeaders(
+ 
+   rv = request->SetHeader(nsHttp::Accept, accept, false,
+                           nsHttpHeaderArray::eVarietyRequestOverride);
+   if (NS_FAILED(rv)) return rv;
+ 
+   if (!aLanguageOverride.IsEmpty()) {
++    // Camoufox: the list navigator.languages reports for this override, with
++    // the q-values Firefox gives intl.accept_languages.
++    nsAutoCString languages;
++    mozilla::dom::NavigatorManager::ExpandLanguageOverride(aLanguageOverride,
++                                                           languages);
+     nsAutoCString acceptLanguage;
+-    acceptLanguage.Assign(aLanguageOverride.get());
++    if (NS_FAILED(PrepareAcceptLanguages(languages.get(), acceptLanguage))) {
++      acceptLanguage.Assign(aLanguageOverride);
++    }
+     rv = request->SetHeader(nsHttp::Accept_Language, acceptLanguage, false,
+                             nsHttpHeaderArray::eVarietyRequestOverride);
+     if (NS_FAILED(rv)) return rv;
+   } else {
+     // Add the "Accept-Language" header.  This header is also exposed to the
+     // service worker.

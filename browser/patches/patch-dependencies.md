@@ -74,6 +74,7 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `font-list-spoofing.patch` | `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId` |
 | `timezone-spoofing.patch`, `webrtc-ip-spoofing.patch` | `audio-fingerprint-manager.patch` for `RoverfoxStorageManager.h` in `dom/base/nsGlobalWindowInner.cpp` |
 | `font-system-fonts-css2.patch`, `system-ui-font-spoofing.patch`, `webrtc-ip-spoofing.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
+| `per-context-consistency.patch` | `navigator-spoofing.patch` for `NavigatorManager` and its includes in `dom/base/Navigator.cpp` and `dom/workers/WorkerNavigator.cpp` |
 
 ## RoverfoxStorageManager
 
