@@ -21,6 +21,7 @@ Written by daijro.
 #include <cstddef>
 #include <vector>
 #include <algorithm>
+#include <unordered_map>
 
 #ifdef _WIN32
 #  include <windows.h>
@@ -94,10 +95,35 @@ inline bool HasKey(const std::string& key, const nlohmann::json& data) {
   return data.contains(key);
 }
 
-inline std::optional<std::string> GetString(const std::string& key) {
-  const auto& data = GetJson();
-  if (!HasKey(key, data)) return std::nullopt;
-  return data[key].get<std::string>();
+/**
+ * The value of a top-level config key, or null when the key is not set.
+ * Spoofed getters (navigator.*, screen.*, window sizes) call the Get*
+ * helpers below on every read, and nlohmann's object lookup is a std::map
+ * walk of string compares, plus a std::string built from the caller's
+ * literal, twice per call. A page can time a getter, so that cost has to
+ * stay near stock's: the config never changes after startup, so its keys
+ * are indexed once into a hash map of string_views that point into the
+ * parsed config itself.
+ */
+inline const nlohmann::json* Lookup(std::string_view key) {
+  static std::once_flag initFlag;
+  static std::unordered_map<std::string_view, const nlohmann::json*> index;
+  std::call_once(initFlag, []() {
+    const auto& data = GetJson();
+    if (!data.is_object()) return;
+    index.reserve(data.size());
+    for (auto it = data.begin(); it != data.end(); ++it) {
+      index.emplace(std::string_view(it.key()), &it.value());
+    }
+  });
+  auto found = index.find(key);
+  return found == index.end() ? nullptr : found->second;
+}
+
+inline std::optional<std::string> GetString(std::string_view key) {
+  const auto* value = Lookup(key);
+  if (!value) return std::nullopt;
+  return value->get<std::string>();
 }
 
 inline std::vector<std::string> GetStringList(const std::string& key) {
@@ -145,53 +171,56 @@ inline bool IsFontAllowed(std::string_view family) {
 }
 
 template <typename T>
-inline std::optional<T> GetUintImpl(const std::string& key) {
-  const auto& data = GetJson();
-  if (!HasKey(key, data)) return std::nullopt;
-  if (data[key].is_number_unsigned()) return data[key].get<T>();
-  printf_stderr("ERROR: Value for key '%s' is not an unsigned integer\n",
-                key.c_str());
+inline std::optional<T> GetUintImpl(std::string_view key) {
+  const auto* value = Lookup(key);
+  if (!value) return std::nullopt;
+  if (value->is_number_unsigned()) return value->get<T>();
+  printf_stderr("ERROR: Value for key '%.*s' is not an unsigned integer\n",
+                static_cast<int>(key.size()), key.data());
   return std::nullopt;
 }
 
-inline std::optional<uint64_t> GetUint64(const std::string& key) {
+inline std::optional<uint64_t> GetUint64(std::string_view key) {
   return GetUintImpl<uint64_t>(key);
 }
 
-inline std::optional<uint32_t> GetUint32(const std::string& key) {
+inline std::optional<uint32_t> GetUint32(std::string_view key) {
   return GetUintImpl<uint32_t>(key);
 }
 
-inline std::optional<int32_t> GetInt32(const std::string& key) {
-  const auto& data = GetJson();
-  if (!HasKey(key, data)) return std::nullopt;
-  if (data[key].is_number_integer()) return data[key].get<int32_t>();
-  printf_stderr("ERROR: Value for key '%s' is not an integer\n", key.c_str());
+inline std::optional<int32_t> GetInt32(std::string_view key) {
+  const auto* value = Lookup(key);
+  if (!value) return std::nullopt;
+  if (value->is_number_integer()) return value->get<int32_t>();
+  printf_stderr("ERROR: Value for key '%.*s' is not an integer\n",
+                static_cast<int>(key.size()), key.data());
   return std::nullopt;
 }
 
-inline std::optional<double> GetDouble(const std::string& key) {
-  const auto& data = GetJson();
-  if (!HasKey(key, data)) return std::nullopt;
-  if (data[key].is_number_float()) return data[key].get<double>();
-  if (data[key].is_number_unsigned() || data[key].is_number_integer())
-    return static_cast<double>(data[key].get<int64_t>());
-  printf_stderr("ERROR: Value for key '%s' is not a double\n", key.c_str());
+inline std::optional<double> GetDouble(std::string_view key) {
+  const auto* value = Lookup(key);
+  if (!value) return std::nullopt;
+  if (value->is_number_float()) return value->get<double>();
+  if (value->is_number_unsigned() || value->is_number_integer())
+    return static_cast<double>(value->get<int64_t>());
+  printf_stderr("ERROR: Value for key '%.*s' is not a double\n",
+                static_cast<int>(key.size()), key.data());
   return std::nullopt;
 }
 
 // For the rare caller that must tell an unset key from false. A plain
 // std::optional<bool> in a condition tests presence, not the value, so the
 // common case is GetBool below.
-inline std::optional<bool> GetOptionalBool(const std::string& key) {
-  const auto& data = GetJson();
-  if (!HasKey(key, data)) return std::nullopt;
-  if (data[key].is_boolean()) return data[key].get<bool>();
-  printf_stderr("ERROR: Value for key '%s' is not a boolean\n", key.c_str());
+inline std::optional<bool> GetOptionalBool(std::string_view key) {
+  const auto* value = Lookup(key);
+  if (!value) return std::nullopt;
+  if (value->is_boolean()) return value->get<bool>();
+  printf_stderr("ERROR: Value for key '%.*s' is not a boolean\n",
+                static_cast<int>(key.size()), key.data());
   return std::nullopt;
 }
 
-inline bool GetBool(const std::string& key) {
+inline bool GetBool(std::string_view key) {
   return GetOptionalBool(key).value_or(false);
 }
 

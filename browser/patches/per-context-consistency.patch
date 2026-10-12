@@ -13,9 +13,9 @@ diff --git a/dom/base/NavigatorManager.h b/dom/base/NavigatorManager.h
  namespace MaskConfig {
  enum class SpoofedOS;
  }
-@@ -84,12 +85,29 @@ class NavigatorManager {
-     key.AppendPrintf("nav_ua_%u", aId);
-     return RoverfoxStorageManager::GetString(key, aOut);
+@@ -81,12 +82,29 @@ class NavigatorManager {
+     return RoverfoxStorageManager::GetContextString(sCache, "nav_ua_", aId,
+                                                     aOut);
    }
  
    static bool IsUaFunctionEnabledForWebIDL(JSContext* aCx, JSObject* aObj);

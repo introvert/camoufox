@@ -391,6 +391,48 @@ function generateFontconfig(
 	return runtimeConf;
 }
 
+/**
+ * Playwright gives a launch 30 s. The first launch with a font configuration
+ * builds fontconfig's cache of every bundled font before its first window,
+ * which takes longer than that on a slow or busy machine.
+ */
+export const FIRST_LAUNCH_TIMEOUT_MS = 300_000;
+
+/**
+ * `options` with FIRST_LAUNCH_TIMEOUT_MS as the launch timeout when the browser
+ * will build its font cache first, unless the caller set a timeout. The cache
+ * is cold when fontconfig wrote nothing to its cache directory (the bundled
+ * fonts.conf names only $XDG_CACHE_HOME/fontconfig) since this font
+ * configuration was generated. A read-only cache directory stays cold, and
+ * every launch then rebuilds the cache in memory.
+ */
+export function withFirstLaunchTimeout(
+	options: Record<string, any>,
+): Record<string, any> {
+	const env: Record<string, any> = options.env ?? {};
+	const fontconfigFile = env.FONTCONFIG_FILE;
+	if ("timeout" in options || !fontconfigFile) {
+		return options;
+	}
+	const cacheHome =
+		env.XDG_CACHE_HOME || path.join(env.HOME || os.homedir(), ".cache");
+	try {
+		const since = fs.statSync(fontconfigFile).mtimeMs;
+		const cacheDir = path.join(cacheHome, "fontconfig");
+		for (const name of fs.readdirSync(cacheDir)) {
+			if (
+				name.includes(".cache-") &&
+				fs.statSync(path.join(cacheDir, name)).mtimeMs >= since
+			) {
+				return options;
+			}
+		}
+	} catch {
+		// No cache directory yet: cold.
+	}
+	return { ...options, timeout: FIRST_LAUNCH_TIMEOUT_MS };
+}
+
 function isDir(p: string): boolean {
 	try {
 		return fs.statSync(p).isDirectory();

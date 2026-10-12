@@ -185,6 +185,38 @@ def _generate_fontconfig(
     return runtime_conf
 
 
+# Playwright gives a launch 30 s. The first launch with a font configuration
+# builds fontconfig's cache of every bundled font before its first window, which
+# takes longer than that on a slow or busy machine.
+FIRST_LAUNCH_TIMEOUT_MS = 300_000
+
+
+def with_first_launch_timeout(options: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    `options` with FIRST_LAUNCH_TIMEOUT_MS as the launch timeout when the
+    browser will build its font cache first, unless the caller set a timeout.
+    The cache is cold when fontconfig wrote nothing to its cache directory (the
+    bundled fonts.conf names only $XDG_CACHE_HOME/fontconfig) since this font
+    configuration was generated. A read-only cache directory stays cold, and
+    every launch then rebuilds the cache in memory.
+    """
+    env = options.get('env') or {}
+    fontconfig_file = env.get('FONTCONFIG_FILE')
+    if 'timeout' in options or not fontconfig_file:
+        return options
+    cache_home = env.get('XDG_CACHE_HOME') or os.path.join(
+        env.get('HOME') or os.path.expanduser('~'), '.cache'
+    )
+    try:
+        since = os.path.getmtime(fontconfig_file)
+        with os.scandir(os.path.join(cache_home, 'fontconfig')) as entries:
+            if any('.cache-' in e.name and e.stat().st_mtime >= since for e in entries):
+                return options
+    except OSError:
+        pass
+    return {**options, 'timeout': FIRST_LAUNCH_TIMEOUT_MS}
+
+
 def warn_if_executable_predates_playwright(path: Optional[Path]) -> None:
     """Warn when a caller's own binary is older than their Playwright needs.
 

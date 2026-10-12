@@ -182,7 +182,9 @@ await plain.close();
 
 Prefer `NewBrowser()`: it also defaults new pages to no viewport when the
 window size is spoofed, and to the host's own color scheme and motion settings.
-`launchOptions()` returns Playwright's camelCase keys (`executablePath`,
+It also allows the first launch five minutes instead of Playwright's 30 seconds,
+because that launch builds fontconfig's cache of the bundled fonts. A `timeout`
+you pass is kept. `launchOptions()` returns Playwright's camelCase keys (`executablePath`,
 `firefoxUserPrefs`), and does not handle `headless: "virtual"`.
 
 ## Launch options

@@ -11,7 +11,11 @@
 import { type BrowserServer, firefox } from "playwright-core";
 import { withUnpinnedLaunch } from "./cpu_affinity.js";
 import { camelCase } from "./sync_api.js";
-import { type LaunchOptions, launchOptions } from "./utils.js";
+import {
+	type LaunchOptions,
+	launchOptions,
+	withFirstLaunchTimeout,
+} from "./utils.js";
 import { VirtualDisplay } from "./virtdisplay.js";
 
 export interface LaunchServerOptions extends Omit<LaunchOptions, "headless"> {
@@ -73,7 +77,9 @@ export async function launchServer({
 	}
 
 	try {
-		const config = await launchOptions({ ...options, headless: headlessBool });
+		const config = withFirstLaunchTimeout(
+			await launchOptions({ ...options, headless: headlessBool }),
+		);
 		// The server's browser is spawned from this process too, so it must not
 		// start inside another launch's CPU pin.
 		const server = await withUnpinnedLaunch(() =>
