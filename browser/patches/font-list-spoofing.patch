@@ -233,23 +233,80 @@ index 039316b8d6..42b2b42650 100644
  #include "mozilla/gfx/2D.h"
  #include "mozilla/gfx/Logging.h"
  #include "mozilla/glean/GfxMetrics.h"
-@@ -1789,6 +1790,16 @@ bool gfxPlatformFontList::FindAndAddFamiliesLocked(
-   nsAutoCString key;
-   GenerateFontListKey(aFamily, key);
+@@ -901,9 +902,24 @@ void gfxPlatformFontList::GenerateFontLi
+   ToLowerCase(aKeyName);
+ }
  
-+  // Per-context font list filtering
-+  {
-+    uint32_t ctx = mozilla::dom::FontListManager::GetCurrentContext();
-+    if (ctx != 0 && mozilla::dom::FontListManager::HasFontList(ctx)) {
-+      if (!mozilla::dom::FontListManager::IsFontAllowed(ctx, key)) {
-+        return false;
-+      }
-+    }
++// Camoufox: the user context whose own font list (setFontList) governs lookups
++// on this thread, or 0 when the launch list does. The id comes from the
++// thread-local set by AutoFontListContext; chrome documents never use one.
++static uint32_t ContextWithFontList(
++    FontVisibilityProvider* aFontVisibilityProvider) {
++  if (aFontVisibilityProvider && aFontVisibilityProvider->IsChrome()) {
++    return 0;
 +  }
++  const uint32_t ctx = mozilla::dom::FontListManager::GetCurrentContext();
++  return ctx != 0 && mozilla::dom::FontListManager::HasFontList(ctx) ? ctx : 0;
++}
 +
-   bool allowHidden = bool(aFlags & FindFamiliesFlags::eSearchHiddenFamilies);
-   FontVisibility visibilityLevel =
-       aFontVisibilityProvider ? aFontVisibilityProvider->GetFontVisibility()
+ /* static */
+ bool gfxPlatformFontList::MaskedFontListAppliesTo(
+     FontVisibilityProvider* aFontVisibilityProvider) {
++  if (ContextWithFontList(aFontVisibilityProvider) != 0) {
++    return true;
++  }
+   if (!MaskConfig::HasFontAllowlist()) {
+     return false;
+   }
+@@ -919,6 +935,12 @@ bool gfxPlatformFontList::MaskedFontList
+ bool gfxPlatformFontList::MaskedFontListBlocks(
+     FontVisibilityProvider* aFontVisibilityProvider,
+     const nsACString& aLowercaseFamily) {
++  // A context's own list replaces the launch list rather than narrowing it:
++  // the launcher draws each list as a complete font set for one OS version.
++  if (const uint32_t ctx = ContextWithFontList(aFontVisibilityProvider)) {
++    return !mozilla::dom::FontListManager::IsFontAllowed(ctx,
++                                                         aLowercaseFamily);
++  }
+   return MaskedFontListAppliesTo(aFontVisibilityProvider) &&
+          !MaskConfig::IsFontAllowed(std::string_view(
+              aLowercaseFamily.BeginReading(), aLowercaseFamily.Length()));
+@@ -1265,12 +1287,17 @@ already_AddRefed<gfxFont> gfxPlatformFon
+                              : FontVisibility::User;
+   MOZ_ASSERT(!mCodepointsWithNoFonts[level].test(aCh),
+              "don't call for codepoints already known to be unsupported");
++  // Camoufox: under a context's own font list the answer holds for that
++  // context only, so it is neither read from nor written to the per-process
++  // caches below, which every other context and document shares.
++  const bool contextFontList =
++      ContextWithFontList(aFontVisibilityProvider) != 0;
+ 
+   // Try to short-circuit font fallback for U+FFFD, used to represent
+   // encoding errors: just use cached family from last time U+FFFD was seen.
+   // This helps speed up pages with lots of encoding errors, binary-as-text,
+   // etc.
+-  if (aCh == 0xFFFD) {
++  if (aCh == 0xFFFD && !contextFontList) {
+     gfxFontEntry* fontEntry = nullptr;
+     auto& fallbackFamily = mReplacementCharFallbackFamily[level];
+     if (fallbackFamily.mShared) {
+@@ -1345,12 +1372,14 @@ already_AddRefed<gfxFont> gfxPlatformFon
+ 
+   // no match? add to set of non-matching codepoints
+   if (!font) {
+-    mCodepointsWithNoFonts[level].set(aCh);
++    if (!contextFontList) {
++      mCodepointsWithNoFonts[level].set(aCh);
++    }
+   } else {
+     *aVisibility = fallbackFamily.mShared
+                        ? fallbackFamily.mShared->Visibility()
+                        : fallbackFamily.mUnshared->Visibility();
+-    if (aCh == 0xFFFD) {
++    if (aCh == 0xFFFD && !contextFontList) {
+       mReplacementCharFallbackFamily[level] = fallbackFamily;
+     }
+   }
 diff --git a/gfx/thebes/gfxTextRun.cpp b/gfx/thebes/gfxTextRun.cpp
 index bc887921c8..a1d299e650 100644
 --- a/gfx/thebes/gfxTextRun.cpp
@@ -262,7 +319,7 @@ index bc887921c8..a1d299e650 100644
  #include "mozilla/dom/Document.h"
  #include "mozilla/dom/RoverfoxStorageManager.h"
  
-@@ -1922,6 +1923,8 @@ class DeferredClearResolvedFonts final : public nsIRunnable {
+@@ -1922,6 +1923,8 @@ class DeferredClearResolvedFonts final :
  NS_IMPL_ISUPPORTS(DeferredClearResolvedFonts, nsIRunnable)
  
  void gfxFontGroup::EnsureFontList() {
@@ -271,6 +328,17 @@ index bc887921c8..a1d299e650 100644
    // Ensure resolved font instances are valid; discard them if necessary.
    auto* pfl = gfxPlatformFontList::PlatformFontList();
    if (mFontListGeneration != pfl->GetGeneration()) {
+@@ -3185,6 +3188,10 @@ gfxFloat gfxFontGroup::GetUnderlineOffse
+ already_AddRefed<gfxFont> gfxFontGroup::FindFontForChar(
+     uint32_t aCh, uint32_t aPrevCh, uint32_t aNextCh, Script aRunScript,
+     gfxFont* aPrevMatchedFont, FontMatchType* aMatchType) {
++  // Per-context font list: the pref-font and system fallback lookups below
++  // resolve families through the platform font list too.
++  mozilla::dom::AutoFontListContext autoFontListCtx(mUserContextId);
++
+   // If the char is a cluster extender, we want to use the same font as the
+   // preceding character if possible. This is preferable to using the font
+   // group because it avoids breaks in shaping within a cluster.
 diff --git a/layout/style/FontFaceSet.cpp b/layout/style/FontFaceSet.cpp
 index 638454ab5e..d79060dd93 100644
 --- a/layout/style/FontFaceSet.cpp

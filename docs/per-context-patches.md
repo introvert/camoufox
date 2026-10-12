@@ -162,7 +162,7 @@ real value.
 | `navigator-spoofing.patch` | `Navigator::GetPlatform`, `GetOscpu`, `HardwareConcurrency`, `GetUserAgent`, `GetAppVersion` (global only; `per-context-consistency.patch` derives a context's from its user agent); the `WorkerNavigator` versions of platform, cores and UA | Falls back to `navigator.*` in `CAMOU_CONFIG`. |
 | `webrtc-ip-spoofing.patch` | `SanitizeSDPForIPLeak`, `CandidateReady`, candidate `.address`/`.relatedAddress`, `getStats()`, `UpdateDefaultCandidate`, `NrSocketBase::CreateSocket` | Forces `default_address_only` while spoofing; loopback, link-local and private addresses are left alone. UDP candidate ports come from the ephemeral range of the identity's OS (`MaskConfig::SpoofedEphemeralPorts()`), so a Windows identity on Linux never shows a Linux port. |
 | `webgl-spoofing.patch` | `ClientWebGLContext::GetParameter` | Per context: vendor and renderer. Global only (`CAMOU_CONFIG`): parameters, extensions, shader precision. Works from `OffscreenCanvas` in workers. |
-| `font-list-spoofing.patch` | `gfxPlatformFontList::FindAndAddFamiliesLocked` | A thread-local context id, set by an RAII guard in `FontFaceSet::Check/Load` and `gfxFontGroup::EnsureFontList`, avoids changing ~50 signatures. The list is in the shared store, so it holds in every content process. Workers are not filtered. |
+| `font-list-spoofing.patch` | `gfxPlatformFontList::MaskedFontListBlocks`, which `FindAndAddFamiliesLocked`, `GlobalFontFallback` and `local()` sources consult | A context's list replaces the launch `fonts` list for its documents; it does not narrow it. Chrome documents and contexts without a list keep the launch list. A thread-local context id, set by an RAII guard in `FontFaceSet::Check/Load`, `gfxFontGroup::EnsureFontList` and `gfxFontGroup::FindFontForChar`, avoids changing ~50 signatures. A fallback lookup under a context's list is not cached process-wide. The list is in the shared store, so it holds in every content process. Workers are not filtered. |
 | `speech-voices-spoofing.patch` | `SpeechSynthesis::GetVoices` | Filters the real list by name; a listed voice that is not installed is left out. |
 
 Global-only patches (no setter) read `CAMOU_CONFIG` at startup:
@@ -221,6 +221,7 @@ renders, so some signals still show the real OS:
 | GPU rasterization | Canvas and WebGL output carry the host GPU driver's rasterization |
 | System colors | `AccentColor` and system colors differ by OS and desktop |
 | Shader precision behaviour | Actual precision follows the real driver even when the reported formats are spoofed |
+| Fonts of another OS | A context's font list only chooses among the fonts the process can reach. On Linux that is the fontconfig written at launch for the launch identity's OS, so a context whose list names another OS's fonts cannot render them, and the missing names fall back like an absent font |
 
 Run each identity on the OS it claims. The per-context patches make each
 context a different person on the same OS, not a different OS. Where that is

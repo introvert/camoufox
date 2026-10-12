@@ -71,7 +71,7 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `media-device-spoofing.patch` | `audio-context-spoofing.patch` for `/camoucfg` in `dom/media/moz.build` |
 | `system-ui-font-spoofing.patch` | `font-hijacker.patch` for `MaskConfig.hpp` in `gfx/thebes/gfxPlatformFontList.cpp` and `/camoucfg` in `gfx/thebes/moz.build` |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator-spoofing.patch` for `MaskConfig.hpp` in `dom/base/Navigator.cpp` |
-| `font-list-spoofing.patch` | `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId` |
+| `font-list-spoofing.patch` | `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId`; `font-hijacker.patch` for `gfxPlatformFontList::MaskedFontListBlocks`, which it extends with the context's own list |
 | `timezone-spoofing.patch`, `webrtc-ip-spoofing.patch` | `audio-fingerprint-manager.patch` for `RoverfoxStorageManager.h` in `dom/base/nsGlobalWindowInner.cpp` |
 | `font-system-fonts-css2.patch`, `system-ui-font-spoofing.patch`, `webrtc-ip-spoofing.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
 | `per-context-consistency.patch` | `navigator-spoofing.patch` for `NavigatorManager` and its includes in `dom/base/Navigator.cpp` and `dom/workers/WorkerNavigator.cpp` |
