@@ -1,9 +1,8 @@
 diff --git a/dom/base/RoverfoxStorageManager.cpp b/dom/base/RoverfoxStorageManager.cpp
 new file mode 100644
-index 0000000000..c5f3dd4247
 --- /dev/null
 +++ b/dom/base/RoverfoxStorageManager.cpp
-@@ -0,0 +1,298 @@
+@@ -0,0 +1,302 @@
 +#include "RoverfoxStorageManager.h"
 +#include "mozilla/Preferences.h"
 +#include "nsIPrefBranch.h"
@@ -68,6 +67,7 @@ index 0000000000..c5f3dd4247
 +  } else {
 +    GetLocalCache().InsertOrUpdate(aPrefName, value);
 +  }
++  ++sGeneration;
 +}
 +
 +// libpref's table is main-thread only: a release build looks it up without a
@@ -106,6 +106,7 @@ index 0000000000..c5f3dd4247
 +    MutexAutoLock lock(GetLocalCacheMutex());
 +    if (!GetLocalCache().Contains(name)) {
 +      GetLocalCache().InsertOrUpdate(name, nsCString(value));
++      ++sGeneration;
 +    }
 +  }
 +}
@@ -118,6 +119,7 @@ index 0000000000..c5f3dd4247
 +  {
 +    MutexAutoLock lock(GetLocalCacheMutex());
 +    GetLocalCache().InsertOrUpdate(prefName, nsCString(value));
++    ++sGeneration;
 +    GetMissCache().Remove(prefName);
 +  }
 +  // Sync to parent for cross-process availability
@@ -191,6 +193,7 @@ index 0000000000..c5f3dd4247
 +    GetMissCache().Insert(prefName);
 +  } else {
 +    GetLocalCache().InsertOrUpdate(prefName, fromParent);
++    ++sGeneration;
 +  }
 +}
 +
@@ -304,17 +307,22 @@ index 0000000000..c5f3dd4247
 +}  // namespace mozilla
 diff --git a/dom/base/RoverfoxStorageManager.h b/dom/base/RoverfoxStorageManager.h
 new file mode 100644
-index 0000000000..c7dad0158f
 --- /dev/null
 +++ b/dom/base/RoverfoxStorageManager.h
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,159 @@
 +#ifndef mozilla_dom_RoverfoxStorageManager_h
 +#define mozilla_dom_RoverfoxStorageManager_h
++
++#include <string>
++#include <utility>
 +
 +#include "nsString.h"
 +#include "nsTHashMap.h"
 +#include "nsTHashSet.h"
 +#include "nsHashKeys.h"
++#include "MainThreadUtils.h"
++#include "mozilla/Atomics.h"
++#include "mozilla/Maybe.h"
 +#include "mozilla/Mutex.h"
 +
 +class JSObject;
@@ -349,6 +357,93 @@ index 0000000000..c7dad0158f
 +  static uint32_t UserContextId(const nsINode* aNode);
 +  static uint32_t UserContextId(nsPIDOMWindowInner* aWindow);
 +
++  // Changes whenever a value this process can read may have changed, so a
++  // caller can keep what it derived from the storage until then (Cache).
++  static uint32_t Generation() { return sGeneration; }
++
++  // A value derived from the storage for one context, kept until the storage
++  // changes. Spoofed DOM getters read through one on every call, and a page
++  // can time a getter, so a read must cost about what the stock getter does:
++  // building the key and locking the storage cost several times that.
++  // Main thread only.
++  template <typename T>
++  class Cache {
++   public:
++    template <typename F>
++    const Maybe<T>& Get(uint32_t aUserContextId, F&& aRead) {
++      MOZ_ASSERT(NS_IsMainThread());
++      const uint32_t generation = Generation();
++      if (!mFilled || mGeneration != generation ||
++          mUserContextId != aUserContextId) {
++        mValue = aRead();
++        mGeneration = generation;
++        mUserContextId = aUserContextId;
++        mFilled = true;
++      }
++      return mValue;
++    }
++
++   private:
++    Maybe<T> mValue;
++    uint32_t mGeneration = 0;
++    uint32_t mUserContextId = 0;
++    bool mFilled = false;
++  };
++
++  // aRead()'s value, through aCache on the main thread; other threads (workers,
++  // style) read the storage directly.
++  template <typename T, typename F, typename Use>
++  static bool ReadCached(Cache<T>& aCache, uint32_t aId, F&& aRead, Use&& aUse) {
++    if (!NS_IsMainThread()) {
++      Maybe<T> value = aRead();
++      if (value) aUse(*value);
++      return value.isSome();
++    }
++    const Maybe<T>& value = aCache.Get(aId, aRead);
++    if (value) aUse(*value);
++    return value.isSome();
++  }
++
++  // The values the per-context managers store under aPrefix + the context id
++  // ("nav_plat_3").
++  static bool GetContextString(Cache<std::u16string>& aCache,
++                               const char* aPrefix, uint32_t aId,
++                               nsAString& aOut) {
++    return ReadCached(
++        aCache, aId,
++        [&]() -> Maybe<std::u16string> {
++          nsAutoString stored;
++          if (!GetString(ContextKey(aPrefix, aId), stored)) {
++            return Nothing();
++          }
++          return Some(std::u16string(stored.BeginReading(), stored.Length()));
++        },
++        [&](const std::u16string& aValue) {
++          aOut.Assign(aValue.data(), aValue.size());
++        });
++  }
++
++  static bool GetContextUint(Cache<uint32_t>& aCache, const char* aPrefix,
++                             uint32_t aId, uint32_t& aOut) {
++    return ReadCached(
++        aCache, aId,
++        [&]() -> Maybe<uint32_t> {
++          uint32_t stored = 0;
++          if (!GetUint(ContextKey(aPrefix, aId), stored)) {
++            return Nothing();
++          }
++          return Some(stored);
++        },
++        [&](uint32_t aValue) { aOut = aValue; });
++  }
++
++  static nsAutoString ContextKey(const char* aPrefix, uint32_t aId) {
++    nsAutoString key;
++    key.AppendASCII(aPrefix);
++    key.AppendInt(aId);
++    return key;
++  }
++
 +  // Per-context window.setX() setters. A setter is offered to a window until
 +  // its context has used it; aName names the setter's "used" flag.
 +  static void MarkSetterUsed(const char* aName, uint32_t aUserContextId);
@@ -366,6 +461,8 @@ index 0000000000..c7dad0158f
 +  static nsTHashSet<nsCString>& GetMissCache();
 +  static nsTHashMap<nsCStringHashKey, nsCString>& GetLocalCache();
 +  static mozilla::Mutex& GetLocalCacheMutex();
++
++  static inline Atomic<uint32_t, ReleaseAcquire> sGeneration{0};
 +};
 +
 +}  // namespace dom

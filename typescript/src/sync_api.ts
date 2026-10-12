@@ -33,6 +33,7 @@ import {
 	pinnedCoreCount,
 	STOCK_MEDIA_DEFAULTS,
 	spoofsWindowDimensions,
+	withFirstLaunchTimeout,
 } from "./utils.js";
 import { VirtualDisplay } from "./virtdisplay.js";
 
@@ -118,6 +119,7 @@ export async function NewBrowser(
 				debug,
 			});
 		}
+		fromOptions = withFirstLaunchTimeout(fromOptions);
 	} catch (error) {
 		// A failed launch must not leave the Xvfb process behind.
 		virtualDisplay?.kill();

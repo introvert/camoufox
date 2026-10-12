@@ -1,2 +1,2 @@
 version=157.0.1
-release=beta.36
+release=beta.37

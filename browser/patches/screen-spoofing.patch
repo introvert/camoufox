@@ -26,10 +26,9 @@ index 0000000000..044cc7787a
 +}  // namespace mozilla
 diff --git a/dom/base/ScreenDimensionManager.h b/dom/base/ScreenDimensionManager.h
 new file mode 100644
-index 0000000000..a36944f3c6
 --- /dev/null
 +++ b/dom/base/ScreenDimensionManager.h
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,86 @@
 +/* Camoufox: Per-context screen dimension manager */
 +#ifndef mozilla_dom_ScreenDimensionManager_h
 +#define mozilla_dom_ScreenDimensionManager_h
@@ -61,24 +60,28 @@ index 0000000000..a36944f3c6
 +  }
 +
 +  static bool GetDimensions(uint32_t aId, uint32_t& aWidth, uint32_t& aHeight) {
-+    nsAutoString wKey;
-+    wKey.AppendPrintf("scr_w_%u", aId);
-+    nsAutoString hKey;
-+    hKey.AppendPrintf("scr_h_%u", aId);
-+    // Both or neither: a half-applied size is a worse lie than no lie at all,
-+    // since screen.width and screen.height would come from different displays.
-+    uint32_t width = 0;
-+    uint32_t height = 0;
-+    if (!RoverfoxStorageManager::GetUint(wKey, width) ||
-+        !RoverfoxStorageManager::GetUint(hKey, height)) {
-+      return false;
-+    }
-+    if (!width || !height) {
-+      return false;
-+    }
-+    aWidth = width;
-+    aHeight = height;
-+    return true;
++    static RoverfoxStorageManager::Cache<std::pair<uint32_t, uint32_t>> sCache;
++    return RoverfoxStorageManager::ReadCached(
++        sCache, aId,
++        [&]() -> Maybe<std::pair<uint32_t, uint32_t>> {
++          // Both or neither: a half-applied size is a worse lie than no lie
++          // at all, since screen.width and screen.height would come from
++          // different displays.
++          uint32_t width = 0;
++          uint32_t height = 0;
++          if (!RoverfoxStorageManager::GetUint(
++                  RoverfoxStorageManager::ContextKey("scr_w_", aId), width) ||
++              !RoverfoxStorageManager::GetUint(
++                  RoverfoxStorageManager::ContextKey("scr_h_", aId), height) ||
++              !width || !height) {
++            return Nothing();
++          }
++          return Some(std::make_pair(width, height));
++        },
++        [&](const std::pair<uint32_t, uint32_t>& aSize) {
++          aWidth = aSize.first;
++          aHeight = aSize.second;
++        });
 +  }
 +
 +  static void SetColorDepth(uint32_t aId, uint32_t aDepth) {
@@ -89,10 +92,11 @@ index 0000000000..a36944f3c6
 +  }
 +
 +  static bool GetColorDepth(uint32_t aId, uint32_t& aDepth) {
-+    nsAutoString key;
-+    key.AppendPrintf("scr_depth_%u", aId);
++    static RoverfoxStorageManager::Cache<uint32_t> sCache;
 +    uint32_t depth = 0;
-+    if (!RoverfoxStorageManager::GetUint(key, depth) || !depth) {
++    if (!RoverfoxStorageManager::GetContextUint(sCache, "scr_depth_", aId,
++                                                depth) ||
++        !depth) {
 +      return false;
 +    }
 +    aDepth = depth;

@@ -23,6 +23,7 @@ from .utils import (
     new_context_options,
     persistent_context_options,
     spoofs_window_dimensions,
+    with_first_launch_timeout,
 )
 
 
@@ -116,6 +117,7 @@ async def AsyncNewBrowser(
             None,
             partial(launch_options, headless=headless, debug=debug, **kwargs),
         )
+    from_options = with_first_launch_timeout(from_options)
 
     # Playwright's default viewport deadlocks Juggler when the window is spoofed
     # to a different size (daijro/camoufox#666), so default to no_viewport.

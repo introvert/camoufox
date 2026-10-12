@@ -21,6 +21,7 @@ from .utils import (
     persistent_context_options,
     spoofs_window_dimensions,
     sync_attach_vd,
+    with_first_launch_timeout,
 )
 
 
@@ -120,6 +121,7 @@ def NewBrowser(
         # and measurable still agree -- the identity just loses that one draw.
         kwargs.setdefault('pin_cpu_cores', False)
         from_options = launch_options(headless=headless, debug=debug, **kwargs)
+    from_options = with_first_launch_timeout(from_options)
 
     # Playwright's default viewport deadlocks Juggler when the window is spoofed
     # to a different size (daijro/camoufox#666), so default to no_viewport.

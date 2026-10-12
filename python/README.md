@@ -199,6 +199,9 @@ with sync_playwright() as playwright:
 
 Prefer `NewBrowser()`: it also defaults new pages to `no_viewport` when the
 window size is spoofed, and to the host's own color scheme and motion settings.
+It also allows the first launch five minutes instead of Playwright's 30 seconds,
+because that launch builds fontconfig's cache of the bundled fonts. A `timeout`
+you pass is kept.
 
 ## Launch options
 
