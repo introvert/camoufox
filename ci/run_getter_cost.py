@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import http.server
 import json
+import os
 import platform
 import socket
 import statistics
@@ -171,7 +172,11 @@ def main() -> int:
     lines.append(f"| **Total, {len(GETTERS)} getters** | {total_stock:.0f} | " + " | ".join(cells) + " |")
     lines += ["", f"Median of {ROUNDS * args.passes} rounds of {READS:,} reads per getter, "
               f"{args.passes} launches per browser."]
-    summary("\n".join(lines))
+    table = "\n".join(lines)
+    # The log as well as the job summary: the log is what the API serves.
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        print(table, flush=True)
+    summary(table)
     return 0
 
 
