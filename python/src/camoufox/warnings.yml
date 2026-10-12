@@ -11,6 +11,11 @@ geolocation: >-
     This can lead to detection if your target geolocation does not match your IP.
     Pass `geoip=True` or a target IP (ex: geoip='123.45.67.89') to let Camoufox populate this data for you.
 
+ua_os_mismatch: >-
+    The user agent in your config names a different OS than the `os` you passed.
+    Camoufox generates the rest of the fingerprint for the user agent's OS, so the
+    platform, GPU and fonts match the user agent the browser sends.
+
 header-ua: >-
     Do not set the header.User-Agent manually. Camoufox will generate a User-Agent for you.
 
