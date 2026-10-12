@@ -2566,7 +2566,7 @@ def test_every_expensive_build_step_is_skipped_on_a_hit():
     guard = "steps.prebuilt.outputs.cache-hit != 'true'"
     expensive = ("Maximize build space", "Remove unwanted tools", "Install build dependencies",
                  "Create swap", "Prepare the source tree", "Build",
-                 "Package the binary for the test jobs", "Restore ccache")
+                 "Package the binary for the test jobs", "Restore sccache", "Stop sccache")
     for name in expensive:
         step = next((s for s in steps if s.get("name") == name), None)
         assert step is not None, f"{name} is gone -- update this list"
@@ -2577,12 +2577,29 @@ def test_the_prebuilt_cache_has_no_restore_keys():
     """A prefix match would serve a browser built from different sources.
 
     Everywhere else in this workflow `restore-keys` is right -- a partially warm
-    ccache is still warm. Here it would hand the test jobs the wrong binary
+    sccache is still warm. Here it would hand the test jobs the wrong binary
     while every suite reported on it as though it were the one under review.
     """
     step = next(s for s in _build_job()["steps"] if s.get("id") == "prebuilt")
     assert "restore-keys" not in step["with"]
     assert step["with"]["path"] == "camoufox-dist.tar.zst"
+
+
+@pytest.mark.parametrize("workflow", ["tests.yml", "build.yml"])
+def test_the_compiler_cache_saved_is_the_one_the_build_fills(workflow):
+    """The mozconfig picks sccache, so a cached ~/.ccache is an empty directory.
+
+    That is how every build went cold, about 95 minutes on four cores, while
+    the workflow still looked as if it cached.
+    """
+    import yaml
+
+    mozconfig = (CI_ROOT.parent / "browser" / "assets" / "base.mozconfig").read_text(encoding="utf-8")
+    assert "--with-ccache=sccache" in mozconfig
+    job = yaml.safe_load((WORKFLOW.parent / workflow).read_text(encoding="utf-8"))["jobs"]["build"]
+    cache_dir = job["env"]["SCCACHE_DIR"]
+    restore = next(s for s in job["steps"] if s.get("name") == "Restore sccache")
+    assert restore["with"]["path"] in (cache_dir, "${{ env.SCCACHE_DIR }}")
 
 
 # ---------------------------------------------------------------------------

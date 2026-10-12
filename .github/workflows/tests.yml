@@ -45,7 +45,7 @@ on:
   # Pushes to main: release.yml, which calls this workflow upstream, does not
   # run in this fork (see its triggers).
   schedule:
-    # Keeps the ccache alive. GitHub evicts a cache after 7 days unused, and a
+    # Keeps the sccache alive. GitHub evicts a cache after 7 days unused, and a
     # cold Firefox build is over an hour; twice a week keeps pull-request builds
     # restoring a warm one from main.
     - cron: "0 5 * * 1,4"
@@ -158,7 +158,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "browser_changed=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Not a pull request -- building, which also refreshes the shared ccache."
+            echo "::notice::Not a pull request -- building, which also refreshes the shared sccache."
             exit 0
           fi
           sources='^(browser/patches/|browser/additions/|browser/settings/|browser/assets/|browser/scripts/|browser/bundle/fontconfig/|browser/upstream\.sh|browser/Makefile)'
@@ -465,6 +465,11 @@ jobs:
       # every downstream job unpacks is the linux x86_64 one whatever the
       # runner turns out to be.
       BUILD_TARGET: linux,x86_64
+      # The mozconfig prefers the sccache that `mach bootstrap` installs over
+      # ccache, so this is the cache the build actually fills. Bounded so the
+      # saved cache fits beside the others in the repository's cache quota.
+      SCCACHE_DIR: /home/runner/.cache/sccache
+      SCCACHE_CACHE_SIZE: 8G
     steps:
       # Checkout first, because the cache key below is a hash of the tree.
       - uses: actions/checkout@v4
@@ -536,21 +541,19 @@ jobs:
           sudo apt-get install -y lld-18 clang-18
           sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-18 100
           sudo apt-get update
-          # The mozconfig sets --with-ccache; configure fails hard without it
-          # rather than degrading.
-          sudo apt-get install -y msitools p7zip-full aria2 ccache libsqlite3-dev
+          sudo apt-get install -y msitools p7zip-full aria2 libsqlite3-dev
 
-      - name: Restore ccache
+      - name: Restore sccache
         if: steps.prebuilt.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
-          path: ~/.ccache
+          path: ${{ env.SCCACHE_DIR }}
           # Keyed on the browser version and the patch set, so a pull request
           # that does not touch browser/patches/ starts from a fully warm cache.
-          key: ccache-${{ needs.resolve.outputs.browser_version }}-${{ hashFiles('browser/patches/**', 'browser/additions/**', 'browser/assets/*.mozconfig') }}
+          key: sccache-linux-x86_64-${{ needs.resolve.outputs.browser_version }}-${{ hashFiles('browser/patches/**', 'browser/additions/**', 'browser/assets/*.mozconfig') }}
           restore-keys: |
-            ccache-${{ needs.resolve.outputs.browser_version }}-
-            ccache-
+            sccache-linux-x86_64-${{ needs.resolve.outputs.browser_version }}-
+            sccache-linux-x86_64-
 
       - name: Create swap
         if: steps.prebuilt.outputs.cache-hit != 'true'
@@ -567,8 +570,6 @@ jobs:
       - name: Prepare the source tree
         if: steps.prebuilt.outputs.cache-hit != 'true'
         run: |
-          ccache -M 8G && ccache -z
-          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
           # ci.run_prepare runs setup-minimal -> dir -> mozbootstrap, retrying
           # only the two that download things and only when the failure reads as
           # transient. `mach bootstrap` pulls toolchains from Taskcluster, and a
@@ -587,8 +588,11 @@ jobs:
           CARGO_BUILD_JOBS: "1"
         run: python3 -m ci.run_build
 
-      - run: ccache -s
+      # Stopping the server flushes the cache to disk before it is saved, and
+      # prints the hit rate.
+      - name: Stop sccache
         if: steps.prebuilt.outputs.cache-hit != 'true'
+        run: ~/.mozbuild/sccache/sccache --stop-server
 
       - name: Package the binary for the test jobs
         if: steps.prebuilt.outputs.cache-hit != 'true'
