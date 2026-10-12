@@ -91,8 +91,9 @@ jobs:
             gh release upload "${{ inputs.tag }}" $(find artifacts -name '*.zip') --clobber
           else
             tag="${{ inputs.tag }}"
+            arches=$(find artifacts -name '*.zip' | grep -o 'x86_64\|arm64' | sort -u | paste -sd+)
             gh release create "$tag" \
-              --title "cfox${tag#v} (lin+mac, x86_64)" \
+              --title "cfox${tag#v} (lin+mac, $arches)" \
               --prerelease \
               "${notes[@]}" \
               $(find artifacts -name '*.zip')

@@ -13,7 +13,7 @@ on:
       - main
 
 # A second push to a pull request makes the first build pointless; let it go
-# rather than holding four runners for two hours on stale code. Tag builds are
+# rather than holding four runners on stale code. Tag builds are
 # never cancelled -- they produce the release.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -22,6 +22,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    env:
+      # The mozconfig prefers the sccache that `mach bootstrap` installs, so
+      # this is the cache the build fills. Bounded so four targets' caches
+      # fit in the repository's cache quota.
+      SCCACHE_DIR: /home/runner/.cache/sccache
+      SCCACHE_CACHE_SIZE: 8G
     strategy:
       matrix:
         # Windows is not shipped. Dropping it also keeps a Windows-only
@@ -29,13 +35,13 @@ jobs:
         # job to succeed. i686 went with it -- it was a Windows-only arch,
         # unsupported on both linux and macos.
         #
-        # A pull request builds both platforms on one architecture. What it is
-        # there to catch is code that does not compile, and a patch guarded by
-        # MOZ_WIDGET_GTK has to be seen from both sides of that guard; the
-        # second architecture repeats the same sources and would double the
-        # wait for it. Tags still build the full four.
-        target: [linux, macos]
-        arch: ${{ fromJSON(github.event_name == 'pull_request' && '["x86_64"]' || '["x86_64","arm64"]') }}
+        # Pull requests build all four, so copy-prebuilt-release.yml can
+        # publish every architecture from the pull request's run instead of
+        # waiting on a tag build. arm64 is listed first: jobs are queued in
+        # matrix order, so when runners are scarce the arm64 builds start
+        # first.
+        arch: [arm64, x86_64]
+        target: [macos, linux]
 
     steps:
       - name: Maximize build space
@@ -98,9 +104,23 @@ jobs:
           # from that repository, so drop it before updating.
           sudo rm -f /etc/apt/sources.list.d/*llvm* /etc/apt/sources.list.d/*llvm*.sources || true
           sudo apt-get update
-          # ccache: the mozconfig enables --with-ccache, but the runner image no
-          # longer ships it, so configure fails with "Cannot find ccache".
-          sudo apt-get install -y msitools p7zip-full aria2 ccache libsqlite3-dev
+          sudo apt-get install -y msitools p7zip-full aria2 libsqlite3-dev
+
+      - name: Read the browser version
+        id: upstream
+        run: grep '^version=' browser/upstream.sh >> "$GITHUB_OUTPUT"
+
+      - name: Restore sccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          # The same prefix tests.yml uses for linux x86_64, so either workflow
+          # can start from the other's cache. A pull request reads caches saved
+          # on its own branch and on main.
+          key: sccache-${{ matrix.target }}-${{ matrix.arch }}-${{ steps.upstream.outputs.version }}-${{ hashFiles('browser/patches/**', 'browser/additions/**', 'browser/assets/*.mozconfig') }}
+          restore-keys: |
+            sccache-${{ matrix.target }}-${{ matrix.arch }}-${{ steps.upstream.outputs.version }}-
+            sccache-${{ matrix.target }}-${{ matrix.arch }}-
 
       - name: Fetch source
         working-directory: browser
@@ -130,6 +150,11 @@ jobs:
           CARGO_BUILD_JOBS: "1"
         working-directory: browser
         run: python3 ./multibuild.py --target ${{ matrix.target }} --arch ${{ matrix.arch }}
+
+      # Stopping the server flushes the cache to disk before it is saved, and
+      # prints the hit rate.
+      - name: Stop sccache
+        run: ~/.mozbuild/sccache/sccache --stop-server
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
