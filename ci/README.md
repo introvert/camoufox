@@ -32,7 +32,7 @@ resolve ── static ─────────────── lint, tribal
 | `typescript` | `ci.run_typescript` | Type check, lint, vitest, byte-for-byte parity with `python/` |
 | `install` | `ci.run_install` | The packed packages install into clean environments and fetch a real browser |
 | `build` / `fetch-browser` | `ci.run_prepare`, `ci.run_build` | The browser under test: compiled from this branch, or the published release built from the same sources |
-| `patch-guards` | `ci.run_patch_guards --group spoofing\|automation\|parity`, `ci.run_skiplist_audit` | One guard per shipped behaviour ([`browser/tests/playwright/`](../browser/tests/playwright/README.md)); every skiplist entry still fails |
+| `patch-guards` | `ci.run_patch_guards --group spoofing\|automation\|parity`, `ci.run_skiplist_audit` | One guard per shipped behaviour ([`browser/tests/playwright/`](../browser/tests/playwright/README.md)); every skiplist entry still fails. The parity leg also reports `ci.run_getter_cost` in its summary: spoofed getters' cost per read against stock Firefox and the last tag build |
 | `build-tester` | `ci.run_build_tester` | The raw binary against the anti-detect checks ([README](../browser/tests/build-tester/README.md)) |
 | `typescript-browser` | `ci.run_typescript --browser` | The npm launcher against a real browser |
 | `playwright` | `ci.run_playwright --shard i/6` | Upstream playwright-python's suite, plus [`browser/tests/playwright/camoufox/`](../browser/tests/playwright/camoufox/README.md) |
@@ -271,6 +271,7 @@ Releases cut before manifests existed (up to `v156.0.1-beta.32`) pair by the tag
 | `python3 -m ci.run_install --tmpdir /mnt/tmpfs` | | Packed packages and a real fetch; the tmpdir must be its own filesystem |
 | `python3 -m ci.run_patch_guards --binary <bin>` | yes | Patch guards; `--group spoofing\|automation\|parity`, `--only <name>` |
 | `python3 -m ci.run_patch_guards --binary <bin> --only stock-gpu-parity` | yes | WebGL and WebGPU against stock Firefox of the same version, downloaded into `.ci-work` ([upgrade step](../docs/patch-upgrading-guide.md#browser-owned-gpu-values)) |
+| `python3 -m ci.run_getter_cost --build this=<bin>` | yes | Per-read cost of 20 spoofed getters over stock Firefox; repeat `--build name=<bin>` to compare builds |
 | `python3 -m ci.run_build_tester --binary <bin>` | yes | build-tester |
 | `python3 -m ci.run_skiplist_audit --binary <bin>` | yes | Every skiplist entry still fails |
 | `python3 -m ci.run_playwright --binary <bin>` | yes | The Playwright suite; `--shard 3/6` for one shard |

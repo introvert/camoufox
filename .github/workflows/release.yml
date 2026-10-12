@@ -71,6 +71,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write # tests.yml's summary job declares it; it comments on pull requests only
+      actions: read # the patch-guards parity leg downloads the last tag build
     uses: ./.github/workflows/tests.yml
     with:
       ref: ${{ github.sha }}

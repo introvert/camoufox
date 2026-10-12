@@ -853,6 +853,8 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      # The getter-cost report downloads the last tag build's artifact.
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -871,6 +873,22 @@ jobs:
       # `make stage-fonts` here would find no source tree and do nothing.
       - if: matrix.leg != 'skiplist'
         run: xvfb-run -a python3 -m ci.run_patch_guards --group "${{ matrix.leg }}" --binary "$CAMOUFOX_BINARY"
+      - name: Getter cost against stock Firefox and the last release
+        if: matrix.leg == 'parity'
+        # A report in the job summary, not a gate: see ci/run_getter_cost.py.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-work/release
+          # The last tag build is the browser this branch would replace; its
+          # release may still be a draft, so take it from the run.
+          read -r run_id tag < <(gh run list -R "$GITHUB_REPOSITORY" -w build.yml -e push -s success -L 1 \
+            --json databaseId,headBranch -q '.[0] | "\(.databaseId) \(.headBranch)"')
+          gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n CamoufoxBuilds-linux-x86_64 -D .ci-work/release
+          unzip -q .ci-work/release/*.zip -d .ci-work/release/bin
+          python3 -m ci.run_getter_cost \
+            --build "this branch=$CAMOUFOX_BINARY" --build "$tag=.ci-work/release/bin/camoufox-bin"
       - name: Every skiplist entry is still failing
         if: matrix.leg == 'skiplist'
         # About two minutes: one fresh browser per entry, and a correct skiplist
