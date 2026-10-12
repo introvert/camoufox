@@ -1353,6 +1353,10 @@ def from_preset(preset: Dict, ff_version: Optional[str] = None, salt: Optional[i
         config['screen.availWidth'] = screen['availWidth']
     if screen.get('availHeight'):
         config['screen.availHeight'] = screen['availHeight']
+    # A preset records no window position. Pin one so the page does not read
+    # wherever the host placed the window, which differs between a throwaway
+    # and a persistent profile.
+    handle_screenXY(config, preset)
 
     webgl = preset.get('webgl', {})
     if webgl.get('unmaskedVendor'):

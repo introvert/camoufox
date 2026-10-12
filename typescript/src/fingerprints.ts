@@ -1473,6 +1473,10 @@ export function fromPreset(
 		config["screen.availWidth"] = screen.availWidth;
 	if (pyTruthy(screen.availHeight))
 		config["screen.availHeight"] = screen.availHeight;
+	// A preset records no window position. Pin one so the page does not read
+	// wherever the host placed the window, which differs between a throwaway
+	// and a persistent profile.
+	handleScreenXY(config, preset);
 
 	const webgl: Record<string, any> = preset.webgl ?? {};
 	if (pyTruthy(webgl.unmaskedVendor))

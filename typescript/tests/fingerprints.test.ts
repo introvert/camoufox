@@ -398,6 +398,11 @@ describe("fixHardwareConcurrency", () => {
 	});
 });
 
+it("a preset pins the window position (test_launch_geometry.py)", () => {
+	const c = fromPreset({ screen: { width: 1920, height: 1080 } }, null, 0);
+	expect([c["window.screenX"], c["window.screenY"]]).toEqual([0, 0]);
+});
+
 describe("preset appVersion (test_preset_appversion.py)", () => {
 	const preset = (platform: string, userAgent: string) => ({
 		navigator: { platform, userAgent },
