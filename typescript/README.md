@@ -253,7 +253,9 @@ phone's device pixel ratio when headless or on a virtual display.
 
 fpgen records no Firefox for Android, so the phone is drawn from
 `android-devices.json`, a handful of real devices recorded by BrowserForge.
-Fonts, speech voices and the WebGL GPU come from the Linux pools, with a
+Fonts are Android's (Roboto, the Noto families, Noto Color Emoji) as far as
+the bundle has them, with Firefox for Android's default fonts and a Roboto
+`system-ui`. Speech voices and the WebGL GPU come from the Linux pools, with a
 `LeakWarning`. A phone GPU can still be named
 (`webgl_config: ["Qualcomm", "Adreno (TM) 650, or similar"]`); its strings are
 kept and the rest of WebGL is the host's, with a warning.
