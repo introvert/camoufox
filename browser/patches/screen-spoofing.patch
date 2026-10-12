@@ -481,7 +481,7 @@ diff --git a/toolkit/components/resistfingerprinting/nsRFPService.h b/toolkit/co
 index 73637fad0d..08f281dc17 100644
 --- a/toolkit/components/resistfingerprinting/nsRFPService.h
 +++ b/toolkit/components/resistfingerprinting/nsRFPService.h
-@@ -603,8 +603,11 @@ class nsRFPService final : public nsIObserver, public nsIRFPService {
+@@ -600,8 +600,11 @@
    // Returns the value of privacy.resistFingerprinting.exemptedDomains pref
    static void GetExemptedDomainsLowercase(nsCString& aExemptedDomains);
  
@@ -492,5 +492,5 @@ index 73637fad0d..08f281dc17 100644
 +                                              bool aIsFullscreen,
 +                                              const nsAString& aPlatform);
  
-   static uint64_t GetSpoofedStorageLimit();
+   static int64_t GetSpoofedStorageLimit();
  

@@ -22,11 +22,11 @@ diff --git a/browser/modules/moz.build b/browser/modules/moz.build
 index eebf824044..9c5e4f48e1 100644
 --- a/browser/modules/moz.build
 +++ b/browser/modules/moz.build
-@@ -117,6 +117,7 @@ EXTRA_JS_MODULES += [
+@@ -125,6 +125,7 @@
      "BrowserUIUtils.sys.mjs",
      "BrowserUsageTelemetry.sys.mjs",
      "BrowserWindowTracker.sys.mjs",
 +    "CamoufoxWindow.sys.mjs",
      "ContentCrashHandlers.sys.mjs",
      "Dedupe.sys.mjs",
-     "Discovery.sys.mjs",
+     "EveryWindow.sys.mjs",

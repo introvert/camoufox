@@ -74,9 +74,9 @@ diff --git a/netwerk/protocol/http/nsHttpChannel.cpp b/netwerk/protocol/http/nsH
 +    return;
 +  }
 +
-   if (StaticPrefs::privacy_globalprivacycontrol_functionality_enabled() &&
-       (StaticPrefs::privacy_globalprivacycontrol_enabled() ||
-        (StaticPrefs::privacy_globalprivacycontrol_pbmode_enabled() &&
-         NS_UsePrivateBrowsing(this)))) {
+   if (StaticPrefs::privacy_globalprivacycontrol_enabled() ||
+       (StaticPrefs::privacy_globalprivacycontrol_pbmode_enabled() &&
+        NS_UsePrivateBrowsing(this))) {
      // Send the header with a value of 1 to indicate opting-out
      DebugOnly<nsresult> rv =
+         mRequestHead.SetHeader(nsHttp::GlobalPrivacyControl, "1"_ns, false);
