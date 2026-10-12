@@ -13,7 +13,7 @@ never rebased. The fork's own work lives in:
 - patches upstream does not have: `mobile-meta-viewport`, `navigator-config-keys`,
   `pdf-viewer-spoofing`, `per-context-consistency`, `privacy-signals-spoofing`,
   `proxy-auth-isolation`, `webgl-headless-egl`, `webrequest-blocking-timeout`,
-  `window-orientation`, and
+  `window-orientation`, `window-position-wm-placement` (daijro/camoufox#822), and
   the `mobile` additions to `force-default-pointer` and
   `touchscreen-fingerprint-spoofing`
 - Juggler: mobile mode, orientation, visual-viewport input mapping, proxy auth
