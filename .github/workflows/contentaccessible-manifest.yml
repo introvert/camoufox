@@ -5,9 +5,8 @@
 # against a manifest recorded from another Firefox version, so every uplift
 # needs a fresh one, and recording it needs a stock Firefox install. This
 # downloads that install, runs the generator and fails when the committed
-# manifest differs. The regenerated file is uploaded as an artifact and also
-# printed to the log (gzip + base64, between BEGIN/END markers) so it can be
-# recovered without artifact access.
+# manifest differs. The regenerated file is uploaded as an artifact, and the
+# diff against the committed one is printed to the log.
 name: Contentaccessible Manifest
 
 on:
@@ -49,12 +48,8 @@ jobs:
 
       - name: Compare with the committed manifest
         run: |
-          echo "BEGIN contentaccessible-manifest.json.gz.b64"
-          gzip -9c browser/scripts/data/contentaccessible-manifest.json | base64 -w 0
-          echo
-          echo "END contentaccessible-manifest.json.gz.b64"
           if ! git diff --quiet -- browser/scripts/data/contentaccessible-manifest.json; then
-            git diff --stat -- browser/scripts/data/contentaccessible-manifest.json
-            echo "::error::contentaccessible-manifest.json is stale for Firefox $FIREFOX_VERSION; commit the regenerated file (artifact or the log block above)."
+            git diff -- browser/scripts/data/contentaccessible-manifest.json
+            echo "::error::contentaccessible-manifest.json is stale for Firefox $FIREFOX_VERSION; commit the regenerated file (the artifact, or apply the diff above)."
             exit 1
           fi
