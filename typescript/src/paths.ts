@@ -114,6 +114,8 @@ export interface LauncherConstants {
 	baselineTaskbarHeight: Record<"win" | "mac" | "lin", number>;
 	baselineMultiTouchPoints: number;
 	mobilePrefs: Record<string, any>;
+	mobileFontPrefs: Record<string, any>;
+	androidFonts: string[];
 	cachePrefs: Record<string, any>;
 }
 export const LAUNCHER_CONSTANTS: Readonly<LauncherConstants> = loadDataFile(

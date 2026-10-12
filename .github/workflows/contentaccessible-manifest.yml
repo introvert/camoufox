@@ -1,0 +1,55 @@
+# Regenerate browser/scripts/data/contentaccessible-manifest.json from the
+# stock Firefox release that browser/upstream.sh pins.
+#
+# The patch guard contentaccessible-parity.py refuses to compare a build
+# against a manifest recorded from another Firefox version, so every uplift
+# needs a fresh one, and recording it needs a stock Firefox install. This
+# downloads that install, runs the generator and fails when the committed
+# manifest differs. The regenerated file is uploaded as an artifact, and the
+# diff against the committed one is printed to the log.
+name: Contentaccessible Manifest
+
+on:
+  pull_request:
+    paths:
+      - "browser/upstream.sh"
+      - "browser/scripts/gen-contentaccessible-manifest.py"
+      - "browser/scripts/data/contentaccessible-manifest.json"
+      - ".github/workflows/contentaccessible-manifest.yml"
+  workflow_dispatch:
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download stock Firefox
+        run: |
+          source browser/upstream.sh
+          echo "FIREFOX_VERSION=$version" >> "$GITHUB_ENV"
+          base="https://archive.mozilla.org/pub/firefox/releases/$version/linux-x86_64/en-US"
+          mkdir -p stock
+          for ext in tar.xz tar.bz2; do
+            if curl -fsSL -o "stock/firefox.$ext" "$base/firefox-$version.$ext"; then
+              tar -xf "stock/firefox.$ext" -C stock
+              break
+            fi
+          done
+          test -f stock/firefox/application.ini
+
+      - name: Regenerate the manifest
+        run: python3 browser/scripts/gen-contentaccessible-manifest.py stock/firefox
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contentaccessible-manifest-${{ env.FIREFOX_VERSION }}
+          path: browser/scripts/data/contentaccessible-manifest.json
+
+      - name: Compare with the committed manifest
+        run: |
+          if ! git diff --quiet -- browser/scripts/data/contentaccessible-manifest.json; then
+            git diff -- browser/scripts/data/contentaccessible-manifest.json
+            echo "::error::contentaccessible-manifest.json is stale for Firefox $FIREFOX_VERSION; commit the regenerated file (the artifact, or apply the diff above)."
+            exit 1
+          fi

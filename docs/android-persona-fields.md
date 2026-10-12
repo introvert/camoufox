@@ -61,7 +61,10 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 | `HTMLInputElement.capture` | present (geckoview-prefs.js) | pref `dom.capture.enabled` | auto |
 | `<input type=month/week>` | real pickers | pref `dom.forms.datetime.others` | auto |
 | Scrollbar width | 0 (overlay) | pref `ui.useOverlayScrollbars` | auto |
-| Fonts, speech voices | Android's (Roboto, Noto, ...) | `fonts`, `voices`. Camoufox bundles no Android fonts | the Linux pools, with a warning |
+| Fonts | Android's (Roboto, Noto, Noto Color Emoji, ...) | `fonts` | Android's set as far as the Linux bundle has it (`androidFonts` in `launcher-constants.json`); Droid Sans Mono, Cutive Mono, Coming Soon, Dancing Script and Carrois Gothic SC are missing, and DejaVu Sans Mono backs `monospace` |
+| Default font, generic families | sans-serif, Roboto; serif Noto Serif; monospace 12px | prefs `font.default.*`, `font.name-list.*`, `font.size.monospace.*` (Firefox for Android's `all.js`) | `mobileFontPrefs` in `launcher-constants.json` |
+| `system-ui`, CSS2 system fonts (`font: caption`, ...) | Roboto, 12px | `navigator.platform` `Linux armv81` (`SpoofedOS::Android`) | Roboto, 12px |
+| Speech voices | Android's | `voices` | the Linux pool, with a warning |
 
 ## Known wrong values in hand-built personas
 

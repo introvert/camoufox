@@ -10,7 +10,7 @@ index 42b2b42650..b0aac2e38a 100644
  #include "mozilla/gfx/2D.h"
  #include "mozilla/gfx/Logging.h"
  #include "mozilla/glean/GfxMetrics.h"
-@@ -2298,9 +2299,57 @@ void gfxPlatformFontList::MaybeRemoveCmap(gfxCharacterMap* aCharMap,
+@@ -2298,9 +2299,63 @@ void gfxPlatformFontList::MaybeRemoveCmap(gfxCharacterMap* aCharMap,
    }
  }
  
@@ -40,6 +40,7 @@ index 42b2b42650..b0aac2e38a 100644
 +    case SpoofedOS::Windows:
 +#endif
 +    case SpoofedOS::Linux:
++    case SpoofedOS::Android:
 +      return os;
 +    default:
 +      return SpoofedOS::None;
@@ -61,6 +62,11 @@ index 42b2b42650..b0aac2e38a 100644
 +      // font-system-fonts-css2.patch for the CSS2 keywords.
 +      *aFamilies.AppendElement() = "Ubuntu"_ns;
 +      return;
++    case MaskConfig::SpoofedOS::Android:
++      // Firefox for Android's nsLookAndFeel::NativeGetFont answers "Roboto"
++      // for every system font.
++      *aFamilies.AppendElement() = "Roboto"_ns;
++      return;
 +    default:
 +      break;
 +  }
@@ -68,7 +74,7 @@ index 42b2b42650..b0aac2e38a 100644
    // TODO: On macOS, use CTCreateUIFontForLanguage or such thing (though the
    // code below ends up using [NSFont systemFontOfSize: 0.0].
    nsFont systemFont;
-@@ -2428,12 +2477,23 @@ gfxPlatformFontList::GetPrefFontsLangGroupLocked(
+@@ -2428,12 +2483,23 @@ gfxPlatformFontList::GetPrefFontsLangGroupLocked(
    }
  
    auto index = static_cast<size_t>(aGenericType);
@@ -94,7 +100,7 @@ index 42b2b42650..b0aac2e38a 100644
    }
    return prefFonts;
  }
-@@ -3028,6 +3088,11 @@ void gfxPlatformFontList::ClearLangGroupPrefFontsLocked() {
+@@ -3028,6 +3094,11 @@ void gfxPlatformFontList::ClearLangGroupPrefFontsLocked() {
        pref = nullptr;
      }
    }
@@ -118,7 +124,7 @@ index bdd4b52666..f8a5f8b748 100644
 +  // MaskConfig::SpoofedOS (GetPrefFontsLangGroupLocked).
 +  std::array<mozilla::RangedArray<mozilla::UniquePtr<PrefFontList>,
 +                                  eFontPrefLang_First, eFontPrefLang_Count>,
-+             5>
++             6>
 +      mSpoofedSystemUIPrefFonts MOZ_GUARDED_BY(mLock);
  
    // When system-wide font lookup fails for a character, cache it to skip future

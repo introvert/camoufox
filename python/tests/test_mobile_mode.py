@@ -18,6 +18,7 @@ Run with:
 
 import json
 from contextlib import contextmanager
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -26,7 +27,9 @@ from camoufox import coherence, utils
 from camoufox._warnings import LeakWarning
 from camoufox.coherence import is_mobile_config, is_mobile_user_agent
 from camoufox.fingerprints import (
+    ANDROID_FONTS,
     MOBILE_FIREFOX_PREFS,
+    MOBILE_FONT_PREFS,
     apply_mobile_mode,
     generate_context_fingerprint,
     generate_fingerprint,
@@ -99,7 +102,7 @@ class TestApplyMobileMode:
         prefs = {}
         assert apply_mobile_mode(config, prefs, 2.75)
         assert config['mobile'] is True
-        assert prefs == {**MOBILE_FIREFOX_PREFS, 'layout.css.devPixelsPerPx': '2.75'}
+        assert prefs == {**MOBILE_FIREFOX_PREFS, **MOBILE_FONT_PREFS, 'layout.css.devPixelsPerPx': '2.75'}
 
     def test_desktop_is_left_alone(self):
         config = {'navigator.userAgent': WINDOWS_UA}
@@ -193,9 +196,47 @@ class TestLaunchOptions:
         assert config['mobile'] is True
 
     def test_android_user_agent_alone_switches_mobile_on(self):
-        config, prefs = launch(os='linux', config={'navigator.userAgent': ANDROID_UA})
+        config, prefs = launch(config={'navigator.userAgent': ANDROID_UA})
         assert config['mobile'] is True
         assert prefs['ui.useOverlayScrollbars'] == 1
+
+    def test_android_user_agent_without_os_gets_a_phone_navigator(self):
+        # Without os=, the generator drew a random desktop OS, so the Android
+        # UA sat next to platform "Win32" / "MacIntel".
+        for _ in range(8):
+            config, _ = launch(config={'navigator.userAgent': ANDROID_UA})
+            assert config['navigator.platform'].startswith('Linux arm')
+            assert config['navigator.appVersion'] == '5.0 (Android 16)'
+
+    @pytest.mark.parametrize('ua, platform, app_version', [
+        (WINDOWS_UA, 'Win32', '5.0 (Windows)'),
+        (LINUX_UA, 'Linux x86_64', '5.0 (X11)'),
+    ])
+    def test_user_agent_decides_the_os(self, ua, platform, app_version):
+        for _ in range(4):
+            config, _ = launch(config={'navigator.userAgent': ua})
+            assert config['navigator.platform'] == platform
+            assert config['navigator.appVersion'] == app_version
+
+    def test_user_agent_and_os_disagreeing_warns(self):
+        with pytest.warns(LeakWarning, match='names a different OS'):
+            config, _ = launch(os='windows', config={'navigator.userAgent': ANDROID_UA},
+                               i_know_what_im_doing=False)
+        assert config['navigator.platform'].startswith('Linux arm')
+
+    def test_user_agent_in_the_os_list_is_quiet(self, recwarn):
+        launch(os=['windows', 'android'], config={'navigator.userAgent': ANDROID_UA},
+               i_know_what_im_doing=False)
+        assert not [w for w in recwarn if 'names a different OS' in str(w.message)]
+
+    def test_app_version_follows_the_callers_user_agent(self):
+        ua = ANDROID_UA.replace('Android 16', 'Android 14')
+        config, _ = launch(config={'navigator.userAgent': ua})
+        assert config['navigator.appVersion'] == '5.0 (Android 14)'
+
+    def test_callers_app_version_is_kept(self):
+        config, _ = launch(config={'navigator.userAgent': ANDROID_UA, 'navigator.appVersion': '5.0 (X11)'})
+        assert config['navigator.appVersion'] == '5.0 (X11)'
 
     @pytest.mark.parametrize('os_name', ['windows', 'macos', 'linux'])
     def test_desktop_launch_is_untouched(self, os_name):
@@ -223,6 +264,40 @@ class TestLaunchOptions:
         assert prefs['webgl.default-antialias'] is False
 
 
+class TestAndroidFonts:
+    """Firefox for Android's fonts: Roboto by default, a fixed phone font set."""
+
+    def test_the_set_is_renderable_on_linux(self):
+        lin = set(json.loads((Path(utils.__file__).parent / 'fonts.json').read_text())['lin'])
+        assert set(ANDROID_FONTS) <= lin
+
+    def test_the_set_is_a_phones(self):
+        assert {'Roboto', 'Noto Serif', 'Noto Color Emoji', 'Noto Sans CJK JP'} <= set(ANDROID_FONTS)
+        # Desktop Linux families a phone does not have.
+        assert not {'Ubuntu', 'DejaVu Sans', 'Liberation Sans', 'Noto Sans', 'Arimo', 'Twemoji Mozilla'} & set(ANDROID_FONTS)
+
+    def test_android_launch_reports_the_phone_set(self):
+        config, prefs = launch(os='android')
+        assert config['fonts'] == ANDROID_FONTS
+        assert prefs['font.default.x-western'] == 'sans-serif'
+        assert prefs['font.name-list.sans-serif.x-western'].startswith('Roboto,')
+        assert prefs['font.name-list.emoji'].split(', ')[1] == 'Noto Color Emoji'
+
+    def test_caller_fonts_win(self):
+        config, _ = launch(os='android', fonts=['Roboto'])
+        assert config['fonts'][0] == 'Roboto'
+        assert 'Noto Serif' not in config['fonts']
+
+    @pytest.mark.parametrize('os_name', ['windows', 'macos', 'linux'])
+    def test_desktop_keeps_its_default_font(self, os_name):
+        _, prefs = launch(os=os_name)
+        assert not set(MOBILE_FONT_PREFS) & set(prefs)
+
+    def test_android_context_reports_the_phone_set(self):
+        fp = generate_context_fingerprint(os='android', ff_version='155', i_know_what_im_doing=True)
+        assert fp['config']['fonts'] == ANDROID_FONTS
+
+
 class TestContextFingerprint:
     def test_android_context_asks_playwright_for_a_phone(self):
         fp = generate_context_fingerprint(os='android', ff_version='155', i_know_what_im_doing=True)
@@ -248,7 +323,7 @@ class TestContextFingerprint:
 
 class TestReviewFixes:
     def test_desktop_fingerprint_under_android_ua_gets_a_digitizer(self):
-        config, _ = launch(os='linux', config={'navigator.userAgent': ANDROID_UA})
+        config, _ = launch(fingerprint=generate_fingerprint(os='linux'), config={'navigator.userAgent': ANDROID_UA})
         assert config['navigator.maxTouchPoints'] == 5
 
     def test_caller_touch_points_are_kept(self):

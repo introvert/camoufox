@@ -3,7 +3,7 @@ Verify the system-ui font spoofing patch (system-ui-font-spoofing.patch).
 
 The patch reads navigator.platform from MaskConfig and returns the appropriate
 system font for GetSystemUIFontFamilies(): Helvetica for macOS, Segoe UI for
-Windows. Without it, Linux spoofing macOS resolves system-ui to "Sans" via GTK.
+Windows, Roboto for Firefox for Android (navigator.platform "Linux armv81"). Without it, Linux spoofing macOS resolves system-ui to "Sans" via GTK.
 
 Usage:
     python browser/tests/playwright/patches/system-ui-font-spoofing.py
@@ -29,6 +29,7 @@ from helpers import launch_camoufox
 EXPECTED_FONT = {
     "macos": "Helvetica",
     "windows": "Segoe UI",
+    "android": "Roboto",
 }
 
 MEASURE_TEXT_JS = """(() => {
@@ -53,7 +54,14 @@ MEASURE_TEXT_JS = """(() => {
         results[name] = ctx.measureText(testStr).width;
     }
 
-    return { widths: results, baseline: baseW };
+    // The CSS2 system-font keywords (font-system-fonts-css2.patch).
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    el.style.font = 'caption';
+    const caption = getComputedStyle(el).fontFamily + ' ' + getComputedStyle(el).fontSize;
+    el.remove();
+
+    return { widths: results, baseline: baseW, caption };
 })()"""
 
 
@@ -63,9 +71,19 @@ async def test_os(target_os: str) -> bool:
         print(f"  SKIP: no expected system-ui font for {target_os}")
         return True
 
-    async with launch_camoufox(os=target_os) as (page, config):
-        platform = config.get("navigator.platform", "unknown")
-        result = await page.evaluate(MEASURE_TEXT_JS)
+    if target_os == "android":
+        # No presets record a phone: launch a drawn Firefox for Android identity.
+        from camoufox.async_api import AsyncCamoufox
+
+        async with AsyncCamoufox(os="android", headless=True, i_know_what_im_doing=True) as browser:
+            page = await browser.new_page()
+            await page.goto("about:blank")
+            platform = await page.evaluate("navigator.platform")
+            result = await page.evaluate(MEASURE_TEXT_JS)
+    else:
+        async with launch_camoufox(os=target_os) as (page, config):
+            platform = config.get("navigator.platform", "unknown")
+            result = await page.evaluate(MEASURE_TEXT_JS)
 
     widths = result["widths"]
     baseline = result["baseline"]
@@ -73,6 +91,10 @@ async def test_os(target_os: str) -> bool:
     print(f"  navigator.platform: {platform}")
     print(f"  Expected system-ui: {expected_family}")
     print(f"  Baseline (mono):    {baseline}")
+    print(f"  font: caption:      {result['caption']}")
+    if target_os == "android" and result["caption"] != "Roboto 12px":
+        print("  FAIL: font: caption is not Firefox for Android's Roboto 12px")
+        return False
     for name, w in widths.items():
         tag = " (baseline)" if w == baseline else ""
         print(f"    {name:20s}  {w}{tag}")
@@ -103,7 +125,7 @@ async def test_os(target_os: str) -> bool:
 
 async def main() -> int:
     all_passed = True
-    for target_os in ["macos", "windows"]:
+    for target_os in ["macos", "windows", "android"]:
         print(f"\n=== {target_os} ===")
         passed = await test_os(target_os)
         if not passed:

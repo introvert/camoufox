@@ -143,3 +143,12 @@ class TestViewportOperationsDoNotDeadlock:
                 config = launch(os=os_name)
                 assert "window.innerWidth" not in config, os_name
                 assert "window.innerHeight" not in config, os_name
+
+
+def test_a_preset_pins_the_window_position():
+    """A preset records no window position, so the page would otherwise read the
+    host's placement, which differs between a throwaway and a persistent profile."""
+    from camoufox.fingerprints import from_preset
+
+    config = from_preset({"screen": {"width": 1920, "height": 1080}}, salt=0)
+    assert (config["window.screenX"], config["window.screenY"]) == (0, 0)

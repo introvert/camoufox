@@ -11,6 +11,11 @@ geolocation: >-
     This can lead to detection if your target geolocation does not match your IP.
     Pass `geoip=True` or a target IP (ex: geoip='123.45.67.89') to let Camoufox populate this data for you.
 
+ua_os_mismatch: >-
+    The user agent in your config names a different OS than the `os` you passed.
+    Camoufox generates the rest of the fingerprint for the user agent's OS, so the
+    platform, GPU and fonts match the user agent the browser sends.
+
 header-ua: >-
     Do not set the header.User-Agent manually. Camoufox will generate a User-Agent for you.
 
@@ -50,10 +55,13 @@ is_mobile: >-
     or has_touch, device_scale_factor and viewport for the parts you need.
 
 mobile_resources: >-
-    A Firefox for Android identity takes its fonts, speech voices and WebGL GPU from the
-    Linux pools, because Camoufox bundles no Android fonts and fpgen records no phone GPUs.
-    Pages that fingerprint those will not see an Android device. The layout-facing
-    signals (user agent, pointer, touch, viewport, screen) do match Firefox for Android.
+    A Firefox for Android identity takes its speech voices and WebGL GPU from the Linux
+    pools, because fpgen records no phone voices or GPUs. Its fonts are Android's
+    (Roboto, Noto, Noto Color Emoji) as far as the bundle has them; Android-only families
+    such as Droid Sans Mono, Cutive Mono and Dancing Script are missing. Pages that
+    fingerprint the GPU or voices will not see an Android device. The layout-facing
+    signals (user agent, pointer, touch, viewport, screen, system font) do match Firefox
+    for Android.
 
 block_webgl: >-
     Disabling WebGL is not recommended. Many WAFs will check if WebGL is enabled.

@@ -20,9 +20,9 @@ FPGEN_DATA = load_yaml('fpgen.yml')
 # Camoufox's OS names, and the short keys the bundled data files use.
 OS_KEYS = {'macos': 'mac', 'windows': 'win', 'linux': 'lin'}
 OS_NAMES = {key: name for name, key in OS_KEYS.items()}
-# The pools each OS draws its fonts, voices and GPU from. Firefox for Android
-# takes the Linux ones: Camoufox bundles no Android fonts, and fpgen records no
-# phone GPUs.
+# The pools each OS draws its voices and GPU from. Firefox for Android takes
+# the Linux ones: fpgen records no phone voices or GPUs. Its fonts are the fixed
+# Android set (ANDROID_FONTS), rendered from the Linux bundle.
 POOL_KEYS = {**OS_KEYS, 'android': 'lin'}
 
 
@@ -135,9 +135,9 @@ def _load_os_fonts() -> Dict[str, List[str]]:
 # Each OS's base font set: every family a stock install ships, intersected with
 # the bundle, so it is always reported in full and never subsetted. Regenerate
 # essential-fonts.json with fonts.json (`browser/scripts/gen-fonts-json.py
-# --print-bases`). On Windows it includes the GDI-substitution and Light /
-# Semilight names fonts.conf rewrites unconditionally: they render, so they
-# must be reported.
+# --print-bases`). It holds the alias names fonts.conf rewrites only where
+# every base of the OS carries them: on Windows the GDI-substitution and Light /
+# Semilight names, on Linux the metric aliases whose target every base has.
 with open(os.path.join(os.path.dirname(__file__), 'essential-fonts.json'), 'rb') as _f:
     _ESSENTIAL = json.loads(_f.read())
 _ESSENTIAL_FONTS_WINDOWS: List[str] = _ESSENTIAL['win']
@@ -377,9 +377,9 @@ def _generate_random_font_subset(
     chosen = set(result)
 
     # _ESSENTIAL_FONTS_* is the guaranteed floor underneath whichever base was
-    # drawn: the GDI-substitution names on Windows and the alias names fonts.conf
-    # rewrites unconditionally have no file of their own, so they render for
-    # every identity and must be reported by every identity.
+    # drawn. It adds the alias names every base of the OS carries but no base
+    # lists as a family (the Linux metric aliases): they have no file of their
+    # own, and they render for every identity, so every identity reports them.
     for font in full_list:
         if font in essential and font not in chosen:
             result.append(font)
@@ -775,6 +775,24 @@ def fix_navigator_arch(config: Dict[str, Any], target_os: str) -> None:
 # Web-visible defaults where Firefox for Android differs from desktop Firefox;
 # docs/android-persona-fields.md gives each one's source.
 MOBILE_FIREFOX_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['mobilePrefs']
+# Firefox for Android's own font prefs (modules/libpref/init/all.js, its
+# `#if defined(ANDROID)` blocks): sans-serif is the default font and resolves
+# to Roboto, serif to Noto Serif, emoji to Noto Color Emoji. A desktop build
+# defaults to serif, so unstyled text measured desktop-wide without them.
+# Families the bundle lacks (Google Sans, Droid Sans, Charis SIL Compact) are
+# skipped by the browser, as on a phone that does not ship them.
+MOBILE_FONT_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['mobileFontPrefs']
+# The families of a stock Android install that the Linux bundle can render:
+# Roboto, the Noto script and CJK families, Noto Color Emoji and Droid Sans
+# Fallback. A phone has one fixed set, so it is not drawn. DejaVu Sans Mono is
+# the one family Android lacks: it backs `monospace` in place of Droid Sans
+# Mono (same 0.6em advance), which the bundle does not have.
+ANDROID_FONTS: List[str] = LAUNCHER_CONSTANTS['androidFonts']
+
+
+def android_fonts() -> List[str]:
+    """The font list a Firefox for Android identity reports."""
+    return list(ANDROID_FONTS)
 
 
 def apply_mobile_mode(
@@ -799,8 +817,9 @@ def apply_mobile_mode(
     config.setdefault('mobile', True)
     if not keep_touch_points and (config.get('navigator.maxTouchPoints') or 0) < 2:
         config['navigator.maxTouchPoints'] = BASELINE_MULTI_TOUCH_POINTS
-    for pref, value in MOBILE_FIREFOX_PREFS.items():
-        firefox_user_prefs.setdefault(pref, value)
+    for prefs in (MOBILE_FIREFOX_PREFS, MOBILE_FONT_PREFS):
+        for pref, value in prefs.items():
+            firefox_user_prefs.setdefault(pref, value)
     if device_pixel_ratio:
         # A real device pixel ratio, so `(resolution)` media queries, srcset
         # and canvas backing stores agree with window.devicePixelRatio.
@@ -1334,6 +1353,10 @@ def from_preset(preset: Dict, ff_version: Optional[str] = None, salt: Optional[i
         config['screen.availWidth'] = screen['availWidth']
     if screen.get('availHeight'):
         config['screen.availHeight'] = screen['availHeight']
+    # A preset records no window position. Pin one so the page does not read
+    # wherever the host placed the window, which differs between a throwaway
+    # and a persistent profile.
+    handle_screenXY(config, preset)
 
     webgl = preset.get('webgl', {})
     if webgl.get('unmaskedVendor'):
@@ -1511,7 +1534,7 @@ def generate_context_fingerprint(
         webgl_config: The (vendor, renderer) a drawn identity claims, instead of
             drawing one.
         i_know_what_im_doing: Silences the warning that a phone takes its
-            fonts, voices and GPU from the Linux pools.
+            voices and GPU from the Linux pools.
     """
     if preset is not None:
         # Use real fingerprint preset
@@ -1539,6 +1562,8 @@ def generate_context_fingerprint(
         os_name = platform_to_os(config.get('navigator.platform', ''))
 
         # fpgen.yml maps neither fonts nor voices
+        if 'fonts' not in config and is_mobile_config(config):
+            config['fonts'] = android_fonts()
         if 'fonts' not in config:
             fonts = _draw_fonts(
                 os_name, identity_seed(config, _salt), "the browser's launch-time fonts",

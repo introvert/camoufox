@@ -194,7 +194,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 
 | Option | Type | Default | Effect |
 |---|---|---|---|
-| `os` | `string \| string[]` | fpgen's real-world mix | `"windows"`, `"macos"`, `"linux"`, `"android"`, or a list to pick from. See [Firefox for Android](#firefox-for-android). |
+| `os` | `string \| string[]` | fpgen's real-world mix | `"windows"`, `"macos"`, `"linux"`, `"android"`, or a list to pick from. A `navigator.userAgent` in `config` overrides it with the user agent's OS (a `LeakWarning` when they disagree). See [Firefox for Android](#firefox-for-android). |
 | `headless` | `boolean \| "virtual"` | `false` | See [Headless modes](#headless-modes). |
 | `proxy` | `{ server, username?, password?, bypass? }` | none | Playwright proxy. |
 | `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. |
@@ -253,7 +253,9 @@ phone's device pixel ratio when headless or on a virtual display.
 
 fpgen records no Firefox for Android, so the phone is drawn from
 `android-devices.json`, a handful of real devices recorded by BrowserForge.
-Fonts, speech voices and the WebGL GPU come from the Linux pools, with a
+Fonts are Android's (Roboto, the Noto families, Noto Color Emoji) as far as
+the bundle has them, with Firefox for Android's default fonts and a Roboto
+`system-ui`. Speech voices and the WebGL GPU come from the Linux pools, with a
 `LeakWarning`. A phone GPU can still be named
 (`webgl_config: ["Qualcomm", "Adreno (TM) 650, or similar"]`); its strings are
 kept and the rest of WebGL is the host's, with a warning.

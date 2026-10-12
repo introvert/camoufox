@@ -125,10 +125,10 @@ diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
 --- a/dom/workers/WorkerNavigator.cpp
 +++ b/dom/workers/WorkerNavigator.cpp
 @@ -128,12 +128,44 @@ bool WorkerNavigator::GlobalPrivacyControl() const {
+       }
      }
    }
-   return StaticPrefs::privacy_globalprivacycontrol_functionality_enabled() &&
-          gpcStatus;
+   return gpcStatus;
  }
  
 +void WorkerNavigator::GetAppCodeName(nsString& aAppCodeName,
