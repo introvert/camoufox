@@ -1,0 +1,18 @@
+{
+  "source": "BrowserForge 1.2.4 (apify_fingerprint_datapoints 0.15.0), browser=firefox os=android device=mobile. fpgen records no Firefox for Android. weight is each device's share of the recorded fingerprints.",
+  "navigator": {
+    "userAgent": "Mozilla/5.0 (Android 16; Mobile; rv:150.0) Gecko/150.0 Firefox/150.0",
+    "platform": "Linux armv81",
+    "oscpu": "Linux armv81",
+    "hardwareConcurrency": 8,
+    "maxTouchPoints": 5
+  },
+  "devices": [
+    {"weight": 4, "screen": {"width": 384, "height": 832, "colorDepth": 24}, "window": {"outerWidth": 384, "outerHeight": 787, "devicePixelRatio": 3.75}},
+    {"weight": 2, "screen": {"width": 420, "height": 933, "colorDepth": 24}, "window": {"outerWidth": 420, "outerHeight": 855, "devicePixelRatio": 3}},
+    {"weight": 2, "screen": {"width": 378, "height": 811, "colorDepth": 24}, "window": {"outerWidth": 378, "outerHeight": 770, "devicePixelRatio": 2.857142857142857}},
+    {"weight": 1, "screen": {"width": 414, "height": 897, "colorDepth": 24}, "window": {"outerWidth": 414, "outerHeight": 817, "devicePixelRatio": 2.608695652173913}},
+    {"weight": 1, "screen": {"width": 512, "height": 1142, "colorDepth": 24}, "window": {"outerWidth": 512, "outerHeight": 1032, "devicePixelRatio": 2.5}},
+    {"weight": 1, "screen": {"width": 396, "height": 881, "colorDepth": 24}, "window": {"outerWidth": 396, "outerHeight": 780, "devicePixelRatio": 2.727272727272727}}
+  ]
+}

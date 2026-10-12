@@ -1,0 +1,274 @@
+# Upstream Playwright tests Camoufox cannot pass by design.
+#
+# This is not a list of things that are broken. It is a list of places where
+# Camoufox deliberately breaks upstream's automation contract, because that
+# contract is exactly what an anti-bot system looks for. Every entry names the
+# behaviour and why it is intentional.
+#
+# The bar for adding an entry:
+#
+#   A test fails because Camoufox does something differently ON PURPOSE, and a
+#   fix would mean giving up the thing the fork exists to do.
+#
+# "It was failing when I got here" is not a reason -- that is a regression
+# wearing a disguise. `ci/summarize.py` rejects an entry with an empty reason,
+# so this file cannot quietly turn into a list of unexplained failures.
+#
+# A reason is not evidence, though. The first version of this file inherited all
+# nine `tests/async/*.disabled` files from the vendored suite and gave each a
+# plausible-sounding justification without running any of them: of the 202 tests
+# that skipped, 193 passed. A written reason made them look verified, which is
+# worse than leaving them bare.
+#
+# So `ci/run_skiplist_audit.py` now runs every entry with the skiplist disabled
+# and FAILS THE BUILD if a skipped test passes. An entry has to keep earning its
+# place. Add one only after watching it fail.
+#
+# Entries are matched against pytest node ids. `module` skips a whole file;
+# `test` skips one node id; `pattern` is a substring match, used sparingly.
+#
+# The suite runs with main-world execution enabled (see ci/pw_camoufox_plugin.py),
+# which is why the list is as short as it is -- roughly 37 tests that would
+# otherwise fail on "X is not defined" pass without needing an entry here.
+
+schema: 1
+
+skip:
+  # --- synthesized input -----------------------------------------------------
+  #
+  # Camoufox routes every synthesized mouse and wheel event through the
+  # humanization chokepoint in
+  # browser/additions/juggler/input/MouseDispatch.js: real trajectories, real
+  # timings, trusted events.
+  #
+  # That breaks far less than this section used to claim. test_click.py,
+  # test_check.py, test_fill.py, test_focus.py, test_dispatch_event.py and
+  # test_element_handle.py were skipped wholesale -- 160 tests -- and all of
+  # them pass. The last two, test_click.py's stable-position tests, were blamed
+  # on humanized travel time; they failed because every animation finished at
+  # once, so the element Playwright waited on never moved. With animations on
+  # stock timing (instantAnimations is now opt-in) they pass too.
+  #
+  # See docs/input-dispatch.md.
+  # browser/tests/playwright/patches/humanize-mouse-trajectory.py and
+  # browser/tests/playwright/patches/input-ack-backstop.py assert the behaviour
+  # that replaces them.
+
+  - test: tests/async/test_keyboard.py::test_should_send_proper_codes_while_typing
+    reason: >-
+      Typing "!" on a US layout takes Shift, and upstream asserts the three events
+      it dispatches for the character alone, with shiftKey false throughout. A
+      page listening to keydown therefore sees a character no keyboard could have
+      produced. Camoufox presses Shift around the shifted character, so the page
+      sees "Keydown: Shift ShiftLeft 16 [Shift]" before it and shiftKey true on
+      the character's own events. The character's own key/code/keyCode are
+      unchanged (! Digit1 49); what upstream asserts is the absence of the Shift.
+
+  - test: tests/async/test_keyboard.py::test_should_press_plus
+    reason: >-
+      The same auto-Shift, reached through keyboard.press("+") rather than
+      type(). Listed separately because dropping auto-Shift would have to unskip
+      both.
+
+  # --- client certificates the BROWSER has to present ------------------------
+  #
+  # Not the whole module. Playwright offers client certs two ways, and only one
+  # of them goes through the browser:
+  #
+  #   playwright.request.new_context(client_certificates=...)  -> the Node driver
+  #       does the TLS handshake itself. Works: both tests using it pass.
+  #   browser.new_context(client_certificates=...)             -> the BROWSER does
+  #       the handshake, and this build has no client-cert support to do it with.
+  #
+  # Listed per test rather than per module because a module entry hid that
+  # distinction -- and the audit caught it, in CI, one run after it was written.
+  # Worth recording why it was written: all five fail on a local machine where
+  # something else listens on port 8000, which the fixture server hard-codes. The
+  # Node client then speaks TLS to a plain HTTP server ("wrong version number"),
+  # which looked like uniform absence of support. CI is the authority here.
+
+  - test: tests/async/test_browsercontext_client_certificates.py::test_should_work_with_new_context
+    reason: >-
+      browser.new_context(client_certificates=...) needs the browser to present a
+      certificate during the TLS handshake. The Camoufox build has no client-cert
+      support, so the server never sees one and the page never renders the
+      "certificate was issued by" text the test asserts.
+
+  - test: tests/async/test_browsercontext_client_certificates.py::test_should_work_with_new_context_passing_as_content
+    reason: >-
+      The same browser-side handshake, with the certificate passed as bytes
+      rather than a path.
+
+  - test: tests/async/test_browsercontext_client_certificates.py::test_should_work_with_new_persistent_context
+    reason: >-
+      The same browser-side handshake, through a persistent context.
+
+  - test: tests/sync/test_browsercontext_client_certificates.py::test_should_work_with_new_context
+    reason: >-
+      The sync mirror of the browser-side handshake above. Listed separately so
+      removing one when support lands cannot silently leave the other behind.
+
+  - test: tests/sync/test_browsercontext_client_certificates.py::test_should_work_with_new_context_passing_as_content
+    reason: >-
+      The sync mirror, certificate passed as bytes.
+
+  - test: tests/sync/test_browsercontext_client_certificates.py::test_should_work_with_new_persistent_context
+    reason: >-
+      The sync mirror, through a persistent context.
+
+  # --- HTTPS-First through a plain HTTP proxy ----------------------------------
+  #
+  # Stock Firefox upgrades an http:// navigation to https:// first, and a server
+  # can see whether a browser does. Playwright's own Firefox build turns that off
+  # (playwright.cfg: dom.security.https_first = false); Camoufox keeps the stock
+  # default. Through a proxy, the upgrade becomes a CONNECT tunnel, and these
+  # tests' proxy is the test server, which answers plain GETs only. Checked both
+  # ways: Playwright's Firefox fails these with HTTPS-First on, and Camoufox
+  # passes them with it off. A real proxy handles CONNECT, as every https:// site
+  # needs it to.
+
+  - test: tests/async/test_proxy.py::test_should_use_proxy
+    reason: >-
+      Navigates to http://non-existent.com through a proxy that serves plain GETs
+      only. Camoufox keeps Firefox's default HTTPS-First, so the navigation is
+      tried as https:// first, through a CONNECT tunnel the test server cannot
+      open; Playwright's Firefox passes only because it disables HTTPS-First.
+
+  - test: tests/async/test_proxy.py::test_should_use_proxy_for_second_page
+    reason: >-
+      The same http:// navigation through a GET-only proxy, on two pages.
+
+  - test: tests/async/test_proxy.py::test_should_work_with_ip_port_notion
+    reason: >-
+      The same http:// navigation through a GET-only proxy, given as ip:port.
+
+  - test: tests/async/test_proxy.py::test_proxy_should_allow_none_for_optional_settings
+    reason: >-
+      The same http:// navigation through a GET-only proxy, with the optional
+      settings passed as None.
+
+  - test: tests/async/test_proxy.py::test_should_authenticate
+    reason: >-
+      The same http:// navigation through a GET-only proxy that also asks for
+      credentials.
+
+  - test: tests/async/test_proxy.py::test_should_authenticate_with_empty_password
+    reason: >-
+      The same http:// navigation through a GET-only proxy that asks for
+      credentials, with an empty password.
+
+  # test_browsercontext_proxy.py shares one browser across the module, and once
+  # HTTPS-First's https:// attempt fails, Firefox adds an exception for the host
+  # (dom.security.https_first_add_exception_on_failure) that lasts as long as
+  # that browser's profile. So only the module's first proxied navigation fails,
+  # and which test makes it depends on order and on which shard each test lands
+  # in.
+  # Each test fails when it runs first, as the skiplist audit runs it, so every
+  # one is listed. Listing only some leaves a failure in whichever shard runs
+  # an unlisted one first.
+
+  - test: tests/async/test_browsercontext_proxy.py::test_should_use_proxy
+    reason: >-
+      The same http:// navigation through a GET-only proxy, set on the context
+      instead of the browser. Fails whenever it is the first proxied navigation
+      of the module's shared browser.
+
+  - test: tests/async/test_browsercontext_proxy.py::test_proxy_should_allow_none_for_optional_settings
+    reason: >-
+      The context-proxy navigation with the optional settings passed as None.
+      Fails whenever it is the first proxied navigation of the module's shared
+      browser.
+
+  - test: tests/async/test_browsercontext_proxy.py::test_should_use_proxy_for_second_page
+    reason: >-
+      The context-proxy navigation on two pages. Fails whenever it is the first
+      proxied navigation of the module's shared browser.
+
+  - test: tests/async/test_browsercontext_proxy.py::test_should_work_with_ip_port_notion
+    reason: >-
+      The context-proxy navigation, given as ip:port. Fails whenever it is the
+      first proxied navigation of the module's shared browser.
+
+  - test: tests/async/test_browsercontext_proxy.py::test_should_authenticate
+    reason: >-
+      The context-proxy navigation through a proxy that asks for credentials.
+      Fails whenever it is the first proxied navigation of the module's shared
+      browser.
+
+  - test: tests/async/test_browsercontext_proxy.py::test_should_authenticate_with_empty_password
+    reason: >-
+      The context-proxy navigation with an empty password. Fails whenever it is
+      the first proxied navigation of the module's shared browser.
+
+  # --- the popup blocker -----------------------------------------------------
+  #
+  # Firefox blocks window.open() that is not called while handling user input.
+  # Playwright and geckodriver both ship that blocker OFF, and the difference is
+  # one bit of page JS with no permission and nothing to wait for, so Camoufox
+  # keeps Firefox's default and lifts it only for the driver's own evaluate
+  # (nsIDocShell.driverPopupsAllowed; browser/patches/popup-blocker-parity.patch,
+  # browser/tests/playwright/patches/popup-blocker-parity.py).
+  #
+  # page.evaluate(() => window.open(...)) therefore still works, which is what
+  # nearly every popup test in the suite does. This one is the exception.
+
+  - test: tests/async/test_browsercontext.py::test_page_event_should_have_an_opener
+    reason: >-
+      The fixture it navigates to, /popup/window-open.html, calls window.open()
+      from the PAGE's own script at load, with no user gesture. Stock Firefox
+      returns null there and opens nothing, so no page event arrives and
+      popup.opener() has nothing to assert. Upstream can rely on it only because
+      Playwright's Firefox ships dom.disable_open_during_load=false. Every other
+      popup test in the suite goes through page.evaluate and still passes.
+
+  - test: tests/async/test_popup.py::test_should_work_with_fake_clicking_target__blank_and_rel_noopener
+    reason: >-
+      A scripted `a.click()` on a <a target=_blank> link, which carries no user
+      activation, so stock Firefox blocks the popup and upstream can only assert
+      one because Playwright's Firefox ships the blocker off. Camoufox's driver
+      door does not reach this case either: it is a content-process docShell
+      flag and link retargeting is decided in the parent (see
+      browser/patches/popup-blocker-parity.patch). page.click() still works -- it
+      synthesizes a real click, which grants a real activation -- and so does
+      page.evaluate(() => window.open(...)).
+
+  # --- scrollbars in an emulated viewport --------------------------------------
+  #
+  # Upstream's headless Firefox hides content scrollbars with an agent style
+  # sheet, which a page can read back, so Camoufox leaves them to the platform
+  # look-and-feel (browser/additions/juggler/components/Juggler.js). These
+  # tests were still passing only because Juggler put every viewport context
+  # into Responsive Design Mode, whose overlay scrollbars take no width. It no
+  # longer does unless isMobile is set, as in Playwright's own Juggler since
+  # microsoft/playwright#41859 (browser/additions/juggler/TargetRegistry.js,
+  # guard browser/tests/playwright/patches/viewport-no-rdm.py). The suite
+  # launches the bare binary headless on Linux, which draws classic 12 px
+  # scrollbars, so a 500 px wide grid.html page lays out 488 px of content, as
+  # stock Firefox does.
+
+  - test: tests/async/test_element_handle.py::test_bounding_box
+    reason: >-
+      grid.html in a 500x500 viewport: beside a 12 px classic scrollbar nine
+      50 px boxes fit per row, not ten, so box 13 is at x=150 rather than the
+      x=100 upstream measures with no scrollbar width.
+
+  - test: tests/sync/test_element_handle.py::test_bounding_box
+    reason: >-
+      The sync twin of tests/async/test_element_handle.py::test_bounding_box:
+      box 13 is at x=150 beside a classic scrollbar, not 100.
+
+  - test: tests/async/test_locators.py::test_locators_should_return_bounding_box
+    reason: >-
+      The same grid.html measurement through a locator: x=150 beside a 12 px
+      classic scrollbar, not the 100 upstream measures with none.
+
+  - test: tests/sync/test_locators.py::test_locators_should_return_bounding_box
+    reason: >-
+      The sync twin of the locator bounding-box test: x=150 beside a classic
+      scrollbar, not 100.
+
+  - test: tests/async/test_screenshot.py::test_should_screenshot_with_mask
+    reason: >-
+      Compares a 500x500 grid.html screenshot with a golden image that has no
+      scrollbar. Here the page draws the classic scrollbar stock Firefox draws,
+      and that strip differs (5339 pixels).
