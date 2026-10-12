@@ -21,7 +21,7 @@ from .exceptions import (
     InvalidPropertyType,
     NonFirefoxFingerprint,
 )
-from .fingerprints import Screen, platform_to_os, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts
+from .fingerprints import Screen, platform_to_os, _set_app_version, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts
 from . import coherence
 from .coherence import is_mobile_config, is_mobile_user_agent
 from .geolocation import geoip_allowed, get_geolocation
@@ -415,6 +415,13 @@ def get_target_os(config: Dict[str, Any]) -> Literal['mac', 'win', 'lin']:
     if config.get("navigator.userAgent"):
         return determine_ua_os(config["navigator.userAgent"])
     return OS_NAME
+
+
+def os_from_user_agent(user_agent: str) -> str:
+    """The `os` whose fingerprints describe the device sending `user_agent`."""
+    if is_mobile_user_agent(user_agent):
+        return 'android'
+    return OS_NAMES[determine_ua_os(user_agent)]
 
 
 def determine_ua_os(user_agent: str) -> Literal['mac', 'win', 'lin']:
@@ -966,6 +973,8 @@ def launch_options(
             Can be "windows", "macos", "linux", "android", or a list to randomly choose from.
             "android" draws a Firefox for Android phone and runs the browser in
             mobile mode (touch-only pointer, touch events, meta viewport).
+            A `navigator.userAgent` in `config` overrides it with the user
+            agent's OS, with a warning when the two disagree.
             Default: ["windows", "macos", "linux"]
         block_images (Optional[bool]):
             Whether to block all images.
@@ -1163,8 +1172,19 @@ def launch_options(
     if os:
         check_valid_os(os)
 
+    # A user agent the caller chose decides which device the rest of the
+    # fingerprint describes. Drawn for another OS, the platform, oscpu, GPU and
+    # fonts contradict it ("Win32" behind an Android user agent).
+    _user_ua = config.get('navigator.userAgent')
+    _user_set_app_version = 'navigator.appVersion' in config
+    if _user_ua:
+        _ua_os = os_from_user_agent(_user_ua)
+        if os and _ua_os not in ([os] if isinstance(os, str) else os):
+            LeakWarning.warn('ua_os_mismatch', i_know_what_im_doing)
+        os = _ua_os
+
     # webgl_config requires OS to be set
-    elif webgl_config or _default_webgl_config:
+    if not os and (webgl_config or _default_webgl_config):
         raise ValueError(f'OS must be set when using webgl_config or {WEBGL_CONFIG_ENV}')
 
     # Add the default addons
@@ -1225,6 +1245,12 @@ def launch_options(
             config,
             from_fpgen(fingerprint, ff_version_str),
         )
+
+    # The drawn appVersion came from the drawn user agent, whose OS version need
+    # not be the caller's ("Android 14" beside "Android 16"). Firefox derives it
+    # from the user agent it sends, so derive it from the caller's.
+    if _user_ua and not _user_set_app_version:
+        _set_app_version(config)
 
     target_os = get_target_os(config)
 

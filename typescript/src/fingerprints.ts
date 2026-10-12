@@ -1414,7 +1414,7 @@ export function appVersionFromUserAgent(
  * Left unset it falls through to the HOST's value; taken from fpgen it is a
  * draw of its own, and fpgen pairs some Linux user agents with "5.0 (Windows)".
  */
-function setAppVersion(config: Config): void {
+export function setAppVersion(config: Config): void {
 	const derived = appVersionFromUserAgent(config["navigator.userAgent"] ?? "");
 	if (derived) config["navigator.appVersion"] = derived;
 }

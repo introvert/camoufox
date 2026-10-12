@@ -194,7 +194,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 
 | Option | Type | Default | Effect |
 |---|---|---|---|
-| `os` | `string \| string[]` | fpgen's real-world mix | `"windows"`, `"macos"`, `"linux"`, `"android"`, or a list to pick from. See [Firefox for Android](#firefox-for-android). |
+| `os` | `string \| string[]` | fpgen's real-world mix | `"windows"`, `"macos"`, `"linux"`, `"android"`, or a list to pick from. A `navigator.userAgent` in `config` overrides it with the user agent's OS (a `LeakWarning` when they disagree). See [Firefox for Android](#firefox-for-android). |
 | `headless` | `boolean \| "virtual"` | `false` | See [Headless modes](#headless-modes). |
 | `proxy` | `{ server, username?, password?, bypass? }` | none | Playwright proxy. |
 | `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. |

@@ -196,9 +196,47 @@ class TestLaunchOptions:
         assert config['mobile'] is True
 
     def test_android_user_agent_alone_switches_mobile_on(self):
-        config, prefs = launch(os='linux', config={'navigator.userAgent': ANDROID_UA})
+        config, prefs = launch(config={'navigator.userAgent': ANDROID_UA})
         assert config['mobile'] is True
         assert prefs['ui.useOverlayScrollbars'] == 1
+
+    def test_android_user_agent_without_os_gets_a_phone_navigator(self):
+        # Without os=, the generator drew a random desktop OS, so the Android
+        # UA sat next to platform "Win32" / "MacIntel".
+        for _ in range(8):
+            config, _ = launch(config={'navigator.userAgent': ANDROID_UA})
+            assert config['navigator.platform'].startswith('Linux arm')
+            assert config['navigator.appVersion'] == '5.0 (Android 16)'
+
+    @pytest.mark.parametrize('ua, platform, app_version', [
+        (WINDOWS_UA, 'Win32', '5.0 (Windows)'),
+        (LINUX_UA, 'Linux x86_64', '5.0 (X11)'),
+    ])
+    def test_user_agent_decides_the_os(self, ua, platform, app_version):
+        for _ in range(4):
+            config, _ = launch(config={'navigator.userAgent': ua})
+            assert config['navigator.platform'] == platform
+            assert config['navigator.appVersion'] == app_version
+
+    def test_user_agent_and_os_disagreeing_warns(self):
+        with pytest.warns(LeakWarning, match='names a different OS'):
+            config, _ = launch(os='windows', config={'navigator.userAgent': ANDROID_UA},
+                               i_know_what_im_doing=False)
+        assert config['navigator.platform'].startswith('Linux arm')
+
+    def test_user_agent_in_the_os_list_is_quiet(self, recwarn):
+        launch(os=['windows', 'android'], config={'navigator.userAgent': ANDROID_UA},
+               i_know_what_im_doing=False)
+        assert not [w for w in recwarn if 'names a different OS' in str(w.message)]
+
+    def test_app_version_follows_the_callers_user_agent(self):
+        ua = ANDROID_UA.replace('Android 16', 'Android 14')
+        config, _ = launch(config={'navigator.userAgent': ua})
+        assert config['navigator.appVersion'] == '5.0 (Android 14)'
+
+    def test_callers_app_version_is_kept(self):
+        config, _ = launch(config={'navigator.userAgent': ANDROID_UA, 'navigator.appVersion': '5.0 (X11)'})
+        assert config['navigator.appVersion'] == '5.0 (X11)'
 
     @pytest.mark.parametrize('os_name', ['windows', 'macos', 'linux'])
     def test_desktop_launch_is_untouched(self, os_name):
@@ -285,7 +323,7 @@ class TestContextFingerprint:
 
 class TestReviewFixes:
     def test_desktop_fingerprint_under_android_ua_gets_a_digitizer(self):
-        config, _ = launch(os='linux', config={'navigator.userAgent': ANDROID_UA})
+        config, _ = launch(fingerprint=generate_fingerprint(os='linux'), config={'navigator.userAgent': ANDROID_UA})
         assert config['navigator.maxTouchPoints'] == 5
 
     def test_caller_touch_points_are_kept(self):

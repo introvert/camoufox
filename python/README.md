@@ -282,6 +282,11 @@ the browser answer like the phone:
   WebCodecs absent, ...), and the phone's device pixel ratio when headless or
   on a virtual display
 
+A user agent passed in `config` picks the OS the rest of the identity is drawn
+for, so `config={"navigator.userAgent": <a Firefox for Android UA>}` alone draws
+a phone, with `navigator.appVersion` taken from that user agent. An `os` that
+names a different OS is overridden, with a `LeakWarning`.
+
 fpgen records no Firefox for Android, so the phone (screen, window, device
 pixel ratio, user agent, platform) is drawn from `android-devices.json`, a
 handful of real devices recorded by BrowserForge. Fonts, speech voices and the

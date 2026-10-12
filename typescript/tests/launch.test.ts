@@ -1097,6 +1097,84 @@ describe.skipIf(!MODEL.ok)(
 			expect(config["audio:seed"]).toBe(9);
 		});
 
+		const ANDROID_UA =
+			"Mozilla/5.0 (Android 16; Mobile; rv:155.0) Gecko/155.0 Firefox/155.0";
+
+		it("an Android user agent without os gets a phone navigator", async () => {
+			for (let i = 0; i < 8; i++) {
+				const config = await launchConfig({
+					os: undefined,
+					config: { "navigator.userAgent": ANDROID_UA },
+				});
+				expect(config["navigator.platform"]).toMatch(/^Linux arm/);
+				expect(config["navigator.appVersion"]).toBe("5.0 (Android 16)");
+			}
+		});
+
+		it.each([
+			[WIN_UA, "Win32", "5.0 (Windows)"],
+			[LINUX_UA, "Linux x86_64", "5.0 (X11)"],
+		])("the user agent %s decides the OS", async (ua, platform, appVersion) => {
+			for (let i = 0; i < 4; i++) {
+				const config = await launchConfig({
+					os: undefined,
+					config: { "navigator.userAgent": ua },
+				});
+				expect(config["navigator.platform"]).toBe(platform);
+				expect(config["navigator.appVersion"]).toBe(appVersion);
+			}
+		});
+
+		it("a user agent and os disagreeing warns", async () => {
+			const { config, warned } = await launchWarning(
+				{
+					os: "windows",
+					executable_path: BUNDLE_EXE,
+					config: { "navigator.userAgent": ANDROID_UA },
+					i_know_what_im_doing: false,
+				},
+				"LeakWarning",
+				"names a different OS",
+			);
+			expect(warned).toBe(true);
+			expect(config["navigator.platform"]).toMatch(/^Linux arm/);
+		});
+
+		it("a user agent in the os list is quiet", async () => {
+			const { warned } = await launchWarning(
+				{
+					os: ["windows", "android"],
+					executable_path: BUNDLE_EXE,
+					config: { "navigator.userAgent": ANDROID_UA },
+					i_know_what_im_doing: false,
+				},
+				"LeakWarning",
+				"names a different OS",
+			);
+			expect(warned).toBe(false);
+		});
+
+		it("appVersion follows the caller's user agent", async () => {
+			const config = await launchConfig({
+				os: undefined,
+				config: {
+					"navigator.userAgent": ANDROID_UA.replace("Android 16", "Android 14"),
+				},
+			});
+			expect(config["navigator.appVersion"]).toBe("5.0 (Android 14)");
+		});
+
+		it("the caller's appVersion is kept", async () => {
+			const config = await launchConfig({
+				os: undefined,
+				config: {
+					"navigator.userAgent": ANDROID_UA,
+					"navigator.appVersion": "5.0 (X11)",
+				},
+			});
+			expect(config["navigator.appVersion"]).toBe("5.0 (X11)");
+		});
+
 		it("a Windows fr-FR identity has French voices", async () => {
 			for (let i = 0; i < 5; i++) {
 				const config = await launchConfig({ os: "windows", locale: "fr-FR" });

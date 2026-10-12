@@ -43,6 +43,7 @@ import {
 	POOL_KEYS,
 	raiseScreenToModernFloor,
 	Screen,
+	setAppVersion,
 	setMediaDevicesDefaults,
 	targetOsFromPlatform,
 	WINDOWS_11_MARKER_FONTS,
@@ -669,6 +670,12 @@ export function getTargetOs(config: Record<string, any>): TargetOS {
 	return utilsDeps.osName();
 }
 
+/** The `os` whose fingerprints describe the device sending `userAgent`. */
+export function osFromUserAgent(userAgent: string): string {
+	if (coherence.isMobileUserAgent(userAgent)) return "android";
+	return OS_NAMES[determineUaOs(userAgent)];
+}
+
 /**
  * Determines the OS from the user agent string.
  */
@@ -1230,7 +1237,9 @@ export interface LaunchOptions {
 	/** Operating system to use for the fingerprint generation. Can be
 	 * "windows", "macos", "linux", "android", or a list to randomly choose
 	 * from. "android" draws a Firefox for Android phone and runs the browser in
-	 * mobile mode (touch-only pointer, touch events, meta viewport). */
+	 * mobile mode (touch-only pointer, touch events, meta viewport). A
+	 * `navigator.userAgent` in `config` overrides it with the user agent's OS,
+	 * with a warning when the two disagree. */
 	os?: ListOrString;
 	/** Whether to block all images. */
 	block_images?: boolean;
@@ -1512,8 +1521,29 @@ export async function launchOptions({
 	// Assert the target OS is valid
 	if (pyTruthy(targetOsOption)) {
 		checkValidOs(targetOsOption as ListOrString);
-	} else if (pyTruthy(webgl_config) || defaultWebglConfig) {
-		// webgl_config requires OS to be set
+	}
+
+	// A user agent the caller chose decides which device the rest of the
+	// fingerprint describes. Drawn for another OS, the platform, oscpu, GPU and
+	// fonts contradict it ("Win32" behind an Android user agent).
+	const userUa = config["navigator.userAgent"];
+	const userSetAppVersion = "navigator.appVersion" in config;
+	if (pyTruthy(userUa)) {
+		const uaOs = osFromUserAgent(userUa);
+		const requested =
+			typeof targetOsOption === "string"
+				? [targetOsOption]
+				: (targetOsOption ?? []);
+		if (pyTruthy(targetOsOption) && !requested.includes(uaOs))
+			LeakWarning.warn("ua_os_mismatch", i_know_what_im_doing);
+		targetOsOption = uaOs;
+	}
+
+	// webgl_config requires OS to be set
+	if (
+		!pyTruthy(targetOsOption) &&
+		(pyTruthy(webgl_config) || defaultWebglConfig)
+	) {
 		throw new ValueError(
 			`OS must be set when using webgl_config or ${WEBGL_CONFIG_ENV}`,
 		);
@@ -1587,6 +1617,11 @@ export async function launchOptions({
 		// Inject the generated fingerprint into the config
 		mergeInto(config, utilsDeps.fromFpgen(fingerprint, ffVersionStr));
 	}
+
+	// The drawn appVersion came from the drawn user agent, whose OS version need
+	// not be the caller's ("Android 14" beside "Android 16"). Firefox derives it
+	// from the user agent it sends, so derive it from the caller's.
+	if (pyTruthy(userUa) && !userSetAppVersion) setAppVersion(config);
 
 	const targetOs = getTargetOs(config);
 
