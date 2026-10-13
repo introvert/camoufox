@@ -44,7 +44,8 @@
     "webgl.default-antialias": false,
     "dom.webmidi.enabled": false,
     "dom.disable_window_move_resize": true,
-    "browser.tabs.remote.coep.credentialless": false
+    "browser.tabs.remote.coep.credentialless": false,
+    "browser.link.open_newwindow.restriction": 0
   },
   "mobileFontPrefs": {
     "font.size.monospace.ar": 12,

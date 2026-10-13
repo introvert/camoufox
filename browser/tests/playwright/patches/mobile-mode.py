@@ -239,13 +239,15 @@ async def read_viewports(page, window_width: int, mobile: bool) -> Dict[str, Any
 
 # What a Firefox for Android page sees before any getUserMedia grant: one
 # device per input kind (a phone has cameras; no audiooutput without setSinkId),
-# no Web MIDI, no COEP credentialless on a release build, and Playwright's tap()
-# delivered as touch.
+# no Web MIDI, no COEP credentialless on a release build, Playwright's tap()
+# delivered as touch, and window.open() as a tab of the phone's size whatever
+# features it asks for.
 PHONE_SURFACE: Dict[str, Any] = {
     "enumerateDevices kinds": ["audioinput", "videoinput"],
     "'requestMIDIAccess' in navigator": False,
     "COEP credentialless isolates": False,
     "page.tap() fires touchstart": True,
+    "window.open() popup is the opener's size": True,
 }
 
 SURFACE_PAGE = (
@@ -253,6 +255,7 @@ SURFACE_PAGE = (
     b'<button id="b" style="width:200px;height:100px">tap</button>'
     b'<script>document.getElementById("b").addEventListener('
     b'"touchstart", () => { document.title = "touched"; });</script>'
+    b'<button id="p" onclick="window.open(\'about:blank\', \'\', \'width=300,height=300\')">open</button>'
 )
 
 
@@ -293,6 +296,12 @@ async def probe_phone_surface(page) -> Dict[str, Any]:
             got["page.tap() fires touchstart"] = await page.title() == "touched"
         except Exception as e:
             got["page.tap() fires touchstart"] = f"{type(e).__name__}: {str(e).splitlines()[0]}"
+        async with page.expect_popup() as info:
+            await page.tap("#p")
+        popup = await info.value
+        size = "() => [outerWidth, outerHeight]"
+        got["window.open() popup is the opener's size"] = await popup.evaluate(size) == await page.evaluate(size)
+        await popup.close()
         return got
     finally:
         srv.shutdown()

@@ -278,6 +278,7 @@ class TestLaunchOptions:
         assert prefs['dom.webmidi.enabled'] is False
         assert prefs['dom.disable_window_move_resize'] is True
         assert prefs['browser.tabs.remote.coep.credentialless'] is False
+        assert prefs['browser.link.open_newwindow.restriction'] == 0
 
     def test_android_launch_has_a_phones_media_devices(self):
         config, _ = launch(os='android')

@@ -64,6 +64,7 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 | `navigator.keyboard.lock` | absent | pref `dom.fullscreen.keyboard_lock.enabled` | auto (off) |
 | `HTMLInputElement.capture` | present (geckoview-prefs.js) | pref `dom.capture.enabled` | auto |
 | `<input type=month/week>` | real pickers | pref `dom.forms.datetime.others` | auto |
+| `window.open(url, name, "width=300,height=300")` | a new tab, the phone's size (GeckoView has no popup windows) | pref `browser.link.open_newwindow.restriction` (`0`: every new window is a tab) | auto |
 | `window.resizeTo` / `moveTo` on a popup | no-ops (`dom.disable_window_move_resize`, geckoview-prefs.js) | pref `dom.disable_window_move_resize` | auto |
 | `Cross-Origin-Embedder-Policy: credentialless` | not supported on release builds, so it does not make a page `crossOriginIsolated` (`browser.tabs.remote.coep.credentialless` is Nightly-only on Android) | pref `browser.tabs.remote.coep.credentialless` | auto (off) |
 | Scrollbar width | 0 (overlay) | pref `ui.useOverlayScrollbars` | auto |

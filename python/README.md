@@ -281,8 +281,9 @@ the browser answer like the phone:
   screen, is zoomed out to fit. Playwright's clicks and viewport screenshots
   follow the zoom; `config={"mobile:zoom": False}` turns zooming off
 - `window.orientation`, `onorientationchange` and a portrait `screen.orientation`
-- a window exactly as wide as the phone's screen, and new pages opened with
-  `has_touch`, so `page.tap()` and `page.touchscreen` work
+- a window exactly as wide as the phone's screen, `window.open()` opening a
+  tab of that size, and new pages opened with `has_touch`, so `page.tap()` and
+  `page.touchscreen` work
 - overlay scrollbars, Android's API surface (`navigator.share` present,
   WebCodecs and Web MIDI absent, ...), the phone's default microphone and its
   front and back cameras, and the phone's device pixel ratio when headless or
