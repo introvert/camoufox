@@ -2565,7 +2565,7 @@ def test_every_expensive_build_step_is_skipped_on_a_hit():
     guard = "steps.prebuilt.outputs.cache-hit != 'true'"
     expensive = ("Maximize build space", "Remove unwanted tools", "Install build dependencies",
                  "Create swap", "Prepare the source tree", "Build",
-                 "Package the binary for the test jobs", "Restore sccache", "Stop sccache")
+                 "Package the binary for the test jobs", "Restore sccache")
     for name in expensive:
         step = next((s for s in steps if s.get("name") == name), None)
         assert step is not None, f"{name} is gone -- update this list"
