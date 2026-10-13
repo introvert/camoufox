@@ -151,11 +151,6 @@ jobs:
         working-directory: browser
         run: python3 ./multibuild.py --target ${{ matrix.target }} --arch ${{ matrix.arch }}
 
-      # Stopping the server flushes the cache to disk before it is saved, and
-      # prints the hit rate.
-      - name: Stop sccache
-        run: ~/.mozbuild/sccache/sccache --stop-server
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
