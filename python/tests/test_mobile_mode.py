@@ -218,6 +218,19 @@ class TestLaunchOptions:
             assert config['navigator.platform'] == platform
             assert config['navigator.appVersion'] == app_version
 
+    def test_user_agent_alone_still_fixes_the_drawn_platform(self):
+        # A Linux draw can carry another OS's platform beside its Linux oscpu.
+        # The caller set only the user agent, so platform and oscpu follow it.
+        fp = generate_fingerprint(os='linux')
+        fp['navigator']['platform'] = 'Win32'
+        config, _ = launch(fingerprint=fp, config={'navigator.userAgent': LINUX_UA})
+        assert config['navigator.platform'] == 'Linux x86_64'
+        assert config['navigator.oscpu'] == 'Linux x86_64'
+
+    def test_callers_platform_is_kept(self):
+        config, _ = launch(config={'navigator.userAgent': LINUX_UA, 'navigator.platform': 'Linux i686'})
+        assert config['navigator.platform'] == 'Linux i686'
+
     def test_user_agent_and_os_disagreeing_warns(self):
         with pytest.warns(LeakWarning, match='names a different OS'):
             config, _ = launch(os='windows', config={'navigator.userAgent': ANDROID_UA},
