@@ -468,6 +468,20 @@ describe("test_launch_environment: stock media defaults", () => {
 		expect(none).toEqual([]);
 	});
 
+	it("a phone launch's pages get hasTouch, unless the caller says", () => {
+		const phone = { env: { CAMOU_CONFIG_1: JSON.stringify({ mobile: true }) } };
+		expect(utils.launchesMobile(phone)).toBe(true);
+		expect(utils.launchesMobile({ env: { CAMOU_CONFIG_1: "{}" } })).toBe(false);
+		expect(utils.launchesMobile({})).toBe(false);
+		const browser = utils.attachTouchDefault(new FakeBrowser());
+		browser.newPage();
+		browser.newContext({ hasTouch: false });
+		expect(browser.calls.map(([, opts]) => opts.hasTouch)).toEqual([
+			true,
+			false,
+		]);
+	});
+
 	it("isMobile beside a Firefox for Android UA is a phone, not a leak", async () => {
 		const browser = utils.attachDesktopOnlyWarning(new FakeBrowser());
 		const { warnings: none } = await warnings.recordWarnings(async () =>

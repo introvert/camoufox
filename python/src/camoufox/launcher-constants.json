@@ -41,7 +41,10 @@
     "media.setsinkid.enabled": false,
     "dom.documentpip.enabled": false,
     "dom.fullscreen.keyboard_lock.enabled": false,
-    "webgl.default-antialias": false
+    "webgl.default-antialias": false,
+    "dom.webmidi.enabled": false,
+    "dom.disable_window_move_resize": true,
+    "browser.tabs.remote.coep.credentialless": false
   },
   "mobileFontPrefs": {
     "font.size.monospace.ar": 12,

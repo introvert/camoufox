@@ -951,6 +951,9 @@ def set_media_devices_defaults(config: Dict[str, Any], salt: int = 0) -> None:
     """
     if any(k.startswith('mediaDevices:') for k in config):
         return
+    if is_mobile_config(config):
+        config.update(android_media_devices())
+        return
     # Before any getUserMedia grant Firefox exposes at most ONE device per
     # input kind and no audiooutput; after a grant it lists every device with
     # the OS's own labels ("Microphone Array (Realtek(R) Audio)", "MacBook Pro
@@ -981,6 +984,26 @@ def _load_media_devices() -> Dict[str, Any]:
         with open(path, 'rb') as f:
             _MEDIA_DEVICES_CACHE = json.loads(f.read())
     return _MEDIA_DEVICES_CACHE
+
+
+def android_media_devices() -> Dict[str, Any]:
+    """Firefox for Android's media devices (media-devices.json `android`): the
+    phone's default microphone and speaker, which share a group, and its
+    cameras, one group each."""
+    phone = _load_media_devices()['android']
+    cams = phone['cams']
+    return {
+        'mediaDevices:enabled': True,
+        'mediaDevices:micros': len(phone['mics']),
+        'mediaDevices:webcams': len(cams),
+        'mediaDevices:speakers': len(phone['outs']),
+        'mediaDevices:microphoneLabels': list(phone['mics']),
+        'mediaDevices:microphoneGroups': ['hw-1'] * len(phone['mics']),
+        'mediaDevices:webcamLabels': list(cams),
+        'mediaDevices:webcamGroups': [f'hw-{i + 2}' for i in range(len(cams))],
+        'mediaDevices:speakerLabels': list(phone['outs']),
+        'mediaDevices:speakerGroups': ['hw-1'] * len(phone['outs']),
+    }
 
 
 def _weighted_choice(rng: Random, items: List[Dict[str, Any]]) -> Dict[str, Any]:

@@ -1227,15 +1227,42 @@ export function drawMediaDevices(
 }
 
 /**
+ * Firefox for Android's media devices (media-devices.json `android`): the
+ * phone's default microphone and speaker, which share a group, and its
+ * cameras, one group each.
+ */
+export function androidMediaDevices(): Config {
+	const phone = loadMediaDevices().android;
+	const cams: string[] = phone.cams;
+	return {
+		"mediaDevices:enabled": true,
+		"mediaDevices:micros": phone.mics.length,
+		"mediaDevices:webcams": cams.length,
+		"mediaDevices:speakers": phone.outs.length,
+		"mediaDevices:microphoneLabels": [...phone.mics],
+		"mediaDevices:microphoneGroups": phone.mics.map(() => "hw-1"),
+		"mediaDevices:webcamLabels": [...cams],
+		"mediaDevices:webcamGroups": cams.map((_, i) => `hw-${i + 2}`),
+		"mediaDevices:speakerLabels": [...phone.outs],
+		"mediaDevices:speakerGroups": phone.outs.map(() => "hw-1"),
+	};
+}
+
+/**
  * Give the identity a plausible set of media devices, drawn from the common
- * desktop population for its OS and seeded by the identity. Nothing is drawn
- * when the caller already set any mediaDevices: key.
+ * desktop population for its OS and seeded by the identity; a phone gets
+ * Firefox for Android's. Nothing is drawn when the caller already set any
+ * mediaDevices: key.
  */
 export function setMediaDevicesDefaults(
 	config: Config,
 	salt: number | bigint = 0,
 ): void {
 	if (Object.keys(config).some((k) => k.startsWith("mediaDevices:"))) return;
+	if (isMobileConfig(config)) {
+		Object.assign(config, androidMediaDevices());
+		return;
+	}
 	const plat = pyStr(get(config, "navigator.platform", ""));
 	const osKey = plat.startsWith("Win")
 		? "win"

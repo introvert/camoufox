@@ -144,5 +144,11 @@
     "p_display": 0.55,
     "p_extra_camera": 0.10,
     "monitor_sources": true
+  },
+  "android": {
+    "_comment": "Firefox for Android's devices are not drawn: cubeb cannot enumerate audio on Android, so Gecko reports one default input and output (dom/media/webrtc/CubebDeviceEnumerator.cpp), and cameras are named 'Facing <front|back>:<Camera2 id>', front first (VideoCaptureDeviceInfoAndroid.java in dom/media/systemservices/android_video_capture).",
+    "mics": ["Default audio input device"],
+    "outs": ["Default audio output device"],
+    "cams": ["Facing front:1", "Facing back:0"]
   }
 }

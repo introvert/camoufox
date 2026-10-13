@@ -1039,6 +1039,27 @@ export function attachStockMediaDefaults<T>(target: T): T {
 	return target;
 }
 
+/** Whether the CAMOU_CONFIG in a set of launch options is a phone's. */
+export function launchesMobile(fromOptions: Record<string, any>): boolean {
+	const blob = camouConfigBlob(fromOptions);
+	return !!blob && coherence.isMobileConfig(JSON.parse(blob));
+}
+
+/**
+ * Default newPage()/newContext() to hasTouch. A phone's page gets touch events
+ * from mobile mode either way; Playwright's tap() and touchscreen also need the
+ * context to say so.
+ */
+export function attachTouchDefault<T>(target: T): T {
+	for (const name of ["newPage", "newContext"] as const) {
+		const original = (target as any)[name];
+		if (typeof original !== "function") continue;
+		(target as any)[name] = (options?: Record<string, any>, ...rest: any[]) =>
+			original.call(target, { hasTouch: true, ...options }, ...rest);
+	}
+	return target;
+}
+
 /**
  * Warn when newPage()/newContext() asks for isMobile without a Firefox for
  * Android user agent: Juggler ignores the option for any other

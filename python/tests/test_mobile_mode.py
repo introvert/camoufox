@@ -275,6 +275,70 @@ class TestLaunchOptions:
         assert prefs['dom.media.webcodecs.enabled'] is False
         assert prefs['media.setsinkid.enabled'] is False
         assert prefs['webgl.default-antialias'] is False
+        assert prefs['dom.webmidi.enabled'] is False
+        assert prefs['dom.disable_window_move_resize'] is True
+        assert prefs['browser.tabs.remote.coep.credentialless'] is False
+
+    def test_android_launch_has_a_phones_media_devices(self):
+        config, _ = launch(os='android')
+        assert config['mediaDevices:microphoneLabels'] == ['Default audio input device']
+        assert config['mediaDevices:speakerLabels'] == ['Default audio output device']
+        assert config['mediaDevices:webcamLabels'] == ['Facing front:1', 'Facing back:0']
+        assert config['mediaDevices:microphoneGroups'] == config['mediaDevices:speakerGroups']
+        assert len(set(config['mediaDevices:webcamGroups'])) == 2
+
+    @pytest.mark.parametrize('os_name', ['windows', 'macos', 'linux'])
+    def test_desktop_media_devices_are_drawn(self, os_name):
+        config, _ = launch(os=os_name)
+        assert 'Default audio input device' not in config['mediaDevices:microphoneLabels']
+
+
+class _FakeBrowser:
+    def __init__(self):
+        self.kwargs = None
+
+    def new_page(self, **kwargs):
+        self.kwargs = kwargs
+
+    def new_context(self, **kwargs):
+        self.kwargs = kwargs
+
+
+def _from_options(config):
+    return {'env': {'CAMOU_CONFIG_1': json.dumps(config)}}
+
+
+class TestTouchDefault:
+    """A mobile-mode launch's pages need has_touch for Playwright's tap()."""
+
+    def test_launches_mobile_reads_the_config(self):
+        assert utils.launches_mobile(_from_options({'mobile': True}))
+        assert utils.launches_mobile(_from_options({'navigator.userAgent': ANDROID_UA}))
+        assert not utils.launches_mobile(_from_options({'navigator.userAgent': LINUX_UA}))
+        assert not utils.launches_mobile({})
+
+    @pytest.mark.parametrize('factory', ['new_page', 'new_context'])
+    def test_phone_pages_get_has_touch(self, factory):
+        browser = _FakeBrowser()
+        utils.attach_context_defaults(browser, True, True)
+        getattr(browser, factory)()
+        assert browser.kwargs['has_touch'] is True
+
+    def test_caller_value_wins(self):
+        browser = _FakeBrowser()
+        utils.attach_context_defaults(browser, True, True)
+        browser.new_page(has_touch=False)
+        assert browser.kwargs['has_touch'] is False
+
+    def test_desktop_pages_are_untouched(self):
+        browser = _FakeBrowser()
+        utils.attach_context_defaults(browser, True, False)
+        browser.new_page()
+        assert 'has_touch' not in browser.kwargs
+
+    def test_persistent_phone_context_gets_has_touch(self):
+        assert utils.persistent_context_options(_from_options({'mobile': True}), True)['has_touch'] is True
+        assert 'has_touch' not in utils.persistent_context_options(_from_options({}), True)
 
 
 class TestAndroidFonts:

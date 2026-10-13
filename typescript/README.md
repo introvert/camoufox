@@ -250,8 +250,10 @@ lists alone, with a warning, since no real Firefox splits them.
 mobile mode (the `mobile` config key, also set by any Android user agent): a
 coarse, non-hovering pointer, touch events, an obeyed `<meta name="viewport">`
 with Android's zoom-to-fit (`config: { "mobile:zoom": false }` turns it off),
-`window.orientation`, overlay scrollbars, Android's API surface, and the
-phone's device pixel ratio when headless or on a virtual display.
+`window.orientation`, a window as wide as the phone's screen, new pages opened
+with `hasTouch` (so `page.tap()` works), overlay scrollbars, Android's API
+surface and media devices, and the phone's device pixel ratio when headless or
+on a virtual display.
 
 fpgen records no Firefox for Android, so the phone is drawn from
 `android-devices.json`, a handful of real devices recorded by BrowserForge.
@@ -264,7 +266,7 @@ kept and the rest of WebGL is the host's, with a warning.
 `NewContext(browser, { os: "android" })` gives one phone context in a desktop
 browser; `isMobile` on any other context is ignored, with a warning. Every
 field and how to set it:
-[docs/android-persona-fields.md](https://github.com/daijro/camoufox/blob/main/docs/android-persona-fields.md).
+[docs/android-persona-fields.md](https://github.com/introvert/camoufox/blob/main/docs/android-persona-fields.md).
 
 ## CLI
 

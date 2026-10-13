@@ -122,6 +122,15 @@ function applyWindowSize(win) {
   }
   const outerWidth = ChromeUtils.camouGetInt("window.outerWidth");
   const outerHeight = ChromeUtils.camouGetInt("window.outerHeight");
+  if (ChromeUtils.camouGetBool("mobile", false)) {
+    // Desktop chrome holds the window at least 500px wide (browser-shared.css),
+    // wider than most phones, and a phone's window is as wide as its screen.
+    const root = win.document.documentElement;
+    root.style.setProperty("--window-min-width", "0px");
+    // The widget takes its size constraints from a reflow, so flush one
+    // before resizing.
+    root.getBoundingClientRect();
+  }
   if (outerWidth || outerHeight) {
     win.resizeTo(outerWidth || win.outerWidth, outerHeight || win.outerHeight);
     // Hold that size through startup. mutter auto-maximizes a new window

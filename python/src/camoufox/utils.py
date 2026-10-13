@@ -666,6 +666,12 @@ def spoofs_window_dimensions(from_options: Dict[str, Any]) -> bool:
     return any(key in blob for key in _WINDOW_DIM_KEYS)
 
 
+def launches_mobile(from_options: Dict[str, Any]) -> bool:
+    """Whether the CAMOU_CONFIG in a set of launch options is a phone's."""
+    blob = _camou_config_blob(from_options)
+    return bool(blob) and is_mobile_config(orjson.loads(blob))
+
+
 # Playwright emulates four media features on every context it creates, whether
 # or not the caller asked: `colorScheme` defaults to "light" and reducedMotion /
 # forcedColors / contrast to their no-preference values. That is an override, not
@@ -752,21 +758,36 @@ def attach_no_viewport_default(target: Any) -> Any:
     return _wrap_context_factories(target, adjust)
 
 
+def attach_touch_default(target: Any) -> Any:
+    """Default new_page()/new_context() to has_touch=True. A phone's page gets
+    touch events from mobile mode either way; Playwright's tap() and
+    touchscreen also need the context to say so."""
+
+    def adjust(kwargs: Dict[str, Any]) -> None:
+        kwargs.setdefault('has_touch', True)
+
+    return _wrap_context_factories(target, adjust)
+
+
 def persistent_context_options(from_options: Dict[str, Any], no_viewport_default: bool) -> Dict[str, Any]:
     """Launch options for launch_persistent_context(). The launch itself creates
     the context, so the defaults new_context() would get go into the options."""
     if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
         from_options = {**from_options, 'no_viewport': True}
+    if launches_mobile(from_options):
+        from_options = {'has_touch': True, **from_options}
     return {
         **{k: v for k, v in STOCK_MEDIA_DEFAULTS.items() if k not in from_options},
         **from_options,
     }
 
 
-def attach_context_defaults(browser: Any, no_viewport_default: bool) -> None:
+def attach_context_defaults(browser: Any, no_viewport_default: bool, mobile: bool) -> None:
     """Give every new_page()/new_context() of `browser` Camoufox's defaults."""
     if no_viewport_default:
         attach_no_viewport_default(browser)
+    if mobile:
+        attach_touch_default(browser)
     attach_stock_media_defaults(browser)
     attach_desktop_only_warning(browser)
 
