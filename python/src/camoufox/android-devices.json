@@ -1,5 +1,5 @@
 {
-  "source": "BrowserForge 1.2.4 (apify_fingerprint_datapoints 0.15.0), browser=firefox os=android device=mobile. fpgen records no Firefox for Android. weight is each device's share of the recorded fingerprints.",
+  "source": "BrowserForge 1.2.4 (apify_fingerprint_datapoints 0.15.0), browser=firefox os=android device=mobile. fpgen records no Firefox for Android. weight is each entry's share of the recorded fingerprints. The GPU names are Gecko's sanitized ones (dom/canvas/SanitizeRenderer.cpp).",
   "navigator": {
     "userAgent": "Mozilla/5.0 (Android 16; Mobile; rv:150.0) Gecko/150.0 Firefox/150.0",
     "platform": "Linux armv81",
@@ -14,5 +14,10 @@
     {"weight": 1, "screen": {"width": 414, "height": 897, "colorDepth": 24}, "window": {"outerWidth": 414, "outerHeight": 817, "devicePixelRatio": 2.608695652173913}},
     {"weight": 1, "screen": {"width": 512, "height": 1142, "colorDepth": 24}, "window": {"outerWidth": 512, "outerHeight": 1032, "devicePixelRatio": 2.5}},
     {"weight": 1, "screen": {"width": 396, "height": 881, "colorDepth": 24}, "window": {"outerWidth": 396, "outerHeight": 780, "devicePixelRatio": 2.727272727272727}}
+  ],
+  "gpus": [
+    {"weight": 9, "vendor": "Qualcomm", "renderer": "Adreno (TM) 650, or similar"},
+    {"weight": 1, "vendor": "ARM", "renderer": "Mali-T760, or similar"},
+    {"weight": 1, "vendor": "Imagination Technologies", "renderer": "PowerVR SGX 540, or similar"}
   ]
 }

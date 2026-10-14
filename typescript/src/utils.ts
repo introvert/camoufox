@@ -21,6 +21,8 @@ import {
 } from "./exceptions.js";
 import {
 	androidFonts,
+	androidGpu,
+	androidGpus,
 	applyMobileMode,
 	audioSeedFromIdentity,
 	clampScreenToDisplay,
@@ -1419,7 +1421,8 @@ export function webglConfigFromEnv(): [string, string] | null {
  *
  * fpgen records no phone GPUs, so a phone's (Qualcomm, "Adreno (TM) 650, or
  * similar") could never be named. On a phone an unrecorded pair keeps its two
- * strings, with a warning: every other WebGL parameter is the host's.
+ * strings: every other WebGL parameter is the host's. mobile_resources says so
+ * for a recorded phone GPU (androidGpu); any other pair gets a warning.
  */
 async function webglForPair(
 	targetOs: TargetOS,
@@ -1435,7 +1438,8 @@ async function webglForPair(
 			([v, r]) => v === vendor && r === renderer,
 		)
 	) {
-		LeakWarning.warn("webgl_unknown_pair", iKnowWhatImDoing);
+		if (!androidGpus().some(([v, r]) => v === vendor && r === renderer))
+			LeakWarning.warn("webgl_unknown_pair", iKnowWhatImDoing);
 		return {
 			"webGl:vendor": vendor,
 			"webGl:renderer": renderer,
@@ -2035,6 +2039,20 @@ export async function launchOptions({
 		!(pyTruthy(config["webGl:vendor"]) && pyTruthy(config["webGl:renderer"]))
 	)
 		webgl_config = defaultWebglConfig;
+	if (
+		coherence.isMobileConfig(config) &&
+		!(
+			pyTruthy(webgl_config) ||
+			block_webgl ||
+			(pyTruthy(config["webGl:vendor"]) && pyTruthy(config["webGl:renderer"]))
+		)
+	) {
+		// A phone claims a phone's GPU, never the host's. The canvas still renders
+		// on the host, so planRendering covers it as for any GPU not the host's.
+		[config["webGl:vendor"], config["webGl:renderer"]] = androidGpu(
+			utilsDeps.identitySeed(config as Record<string, any>, salt),
+		);
+	}
 
 	const resolvedExecutable = executable_path
 		? String(executable_path)

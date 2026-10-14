@@ -259,10 +259,12 @@ fpgen records no Firefox for Android, so the phone is drawn from
 `android-devices.json`, a handful of real devices recorded by BrowserForge.
 Fonts are Android's (Roboto, the Noto families, Noto Color Emoji) as far as
 the bundle has them, with Firefox for Android's default fonts and a Roboto
-`system-ui`. Speech voices and the WebGL GPU come from the Linux pools, with a
-`LeakWarning`. A phone GPU can still be named
-(`webgl_config: ["Qualcomm", "Adreno (TM) 650, or similar"]`); its strings are
-kept and the rest of WebGL is the host's, with a warning.
+`system-ui`. The WebGL vendor and renderer are a recorded phone's (Adreno, Mali
+or PowerVR, by their share in BrowserForge's records), so the canvas is covered
+as for any GPU not the host's (`canvas_noise: false` keeps it stock). Speech
+voices come from the Linux pool and the rest of WebGL is the host's, with a
+`LeakWarning`. `webgl_config: ["Qualcomm", "Adreno (TM) 540, or similar"]` names
+another phone GPU; one outside `android-devices.json` gets a warning.
 `NewContext(browser, { os: "android" })` gives one phone context in a desktop
 browser; `isMobile` on any other context is ignored, with a warning. Every
 field and how to set it:

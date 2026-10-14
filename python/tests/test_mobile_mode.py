@@ -30,6 +30,8 @@ from camoufox.fingerprints import (
     ANDROID_FONTS,
     MOBILE_FIREFOX_PREFS,
     MOBILE_FONT_PREFS,
+    android_gpu,
+    android_gpus,
     apply_mobile_mode,
     generate_context_fingerprint,
     generate_fingerprint,
@@ -429,12 +431,37 @@ class TestReviewFixes:
         assert opts['is_mobile'] is True
 
     def test_android_context_warns_about_linux_resources(self):
-        with pytest.warns(Warning, match='Linux pools'):
+        with pytest.warns(Warning, match='Linux pool'):
             generate_context_fingerprint(os='android', ff_version='155')
 
 
 class TestPhoneGpu:
     ADRENO = ('Qualcomm', 'Adreno (TM) 650, or similar')
+    # A bucket Gecko's SanitizeRenderer.cpp reports that BrowserForge never recorded.
+    UNRECORDED = ('Qualcomm', 'Adreno (TM) 540, or similar')
+
+    def test_a_phone_claims_a_recorded_phone_gpu(self):
+        config, prefs = launch(os='android')
+        assert (config['webGl:vendor'], config['webGl:renderer']) in android_gpus()
+        # The canvas renders on the host, whose GPU the identity no longer claims.
+        assert utils.has_canvas_placeholder(prefs)
+
+    def test_the_draw_follows_the_identity(self):
+        assert len({android_gpu(seed) for seed in range(200)}) == len(android_gpus())
+        assert all(android_gpu(seed) == android_gpu(seed) for seed in range(20))
+
+    def test_blocked_webgl_claims_no_gpu(self):
+        config, prefs = launch(os='android', block_webgl=True)
+        assert 'webGl:renderer' not in config
+        assert not utils.has_canvas_placeholder(prefs)
+
+    def test_a_phone_context_claims_a_recorded_phone_gpu(self):
+        fp = generate_context_fingerprint(os='android', ff_version='155', i_know_what_im_doing=True)
+        assert (fp['config']['webGl:vendor'], fp['config']['webGl:renderer']) in android_gpus()
+
+    def test_a_recorded_phone_gpu_does_not_warn(self, recwarn):
+        launch(os='android', webgl_config=self.ADRENO, i_know_what_im_doing=False)
+        assert not [w for w in recwarn if 'no WebGL data' in str(w.message)]
 
     def test_config_pair_unknown_to_the_database_is_kept(self):
         config, _ = launch(
@@ -449,7 +476,7 @@ class TestPhoneGpu:
 
     def test_unknown_pair_warns(self):
         with pytest.warns(LeakWarning, match='no WebGL data'):
-            launch(os='android', webgl_config=self.ADRENO, i_know_what_im_doing=False)
+            launch(os='android', webgl_config=self.UNRECORDED, i_know_what_im_doing=False)
 
     def test_a_desktop_still_needs_a_recorded_gpu(self):
         with pytest.raises(ValueError, match='No recorded WebGL data'):
