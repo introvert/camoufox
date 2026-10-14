@@ -37,7 +37,7 @@ import sys
 from camoufox.async_api import AsyncCamoufox
 from helpers import launch_kwargs
 
-SPOOFED_OSES = ["windows", "macos", "linux"]
+SPOOFED_OSES = ["windows", "macos", "linux", "android"]
 FAKE_NAMES = ("Default Audio Device", "Default Video Device", "Fake Video Group", "Fake Audio Group")
 
 ENUM_JS = """async () => {
@@ -108,7 +108,8 @@ async def _check(spoofed_os, config=None) -> bool:
                     if not any(d["label"] == t["label"] and d["id"] == t["id"] and d["group"] == t["group"] for d in labelled):
                         print(f"  {label} FAIL: captured track {t} is not one of the enumerated devices")
                         return False
-        if has_mic and n("audiooutput", post) == 0:
+        # Firefox for Android lists no audiooutput: media.setsinkid.enabled is off there.
+        if has_mic and n("audiooutput", post) == 0 and spoofed_os != "android":
             print(f"  {label} FAIL: no audiooutput listed after a microphone grant")
             return False
         shape = ", ".join(f"{d['kind']}:{d['label']}" for d in labelled)

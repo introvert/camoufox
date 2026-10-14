@@ -30,6 +30,8 @@ from camoufox.fingerprints import (
     ANDROID_FONTS,
     MOBILE_FIREFOX_PREFS,
     MOBILE_FONT_PREFS,
+    android_gpu,
+    android_gpus,
     apply_mobile_mode,
     generate_context_fingerprint,
     generate_fingerprint,
@@ -275,6 +277,71 @@ class TestLaunchOptions:
         assert prefs['dom.media.webcodecs.enabled'] is False
         assert prefs['media.setsinkid.enabled'] is False
         assert prefs['webgl.default-antialias'] is False
+        assert prefs['dom.webmidi.enabled'] is False
+        assert prefs['dom.disable_window_move_resize'] is True
+        assert prefs['browser.tabs.remote.coep.credentialless'] is False
+        assert prefs['browser.link.open_newwindow.restriction'] == 0
+
+    def test_android_launch_has_a_phones_media_devices(self):
+        config, _ = launch(os='android')
+        assert config['mediaDevices:microphoneLabels'] == ['Default audio input device']
+        assert config['mediaDevices:speakerLabels'] == ['Default audio output device']
+        assert config['mediaDevices:webcamLabels'] == ['Facing front:1', 'Facing back:0']
+        assert config['mediaDevices:microphoneGroups'] == config['mediaDevices:speakerGroups']
+        assert len(set(config['mediaDevices:webcamGroups'])) == 2
+
+    @pytest.mark.parametrize('os_name', ['windows', 'macos', 'linux'])
+    def test_desktop_media_devices_are_drawn(self, os_name):
+        config, _ = launch(os=os_name)
+        assert 'Default audio input device' not in config['mediaDevices:microphoneLabels']
+
+
+class _FakeBrowser:
+    def __init__(self):
+        self.kwargs = None
+
+    def new_page(self, **kwargs):
+        self.kwargs = kwargs
+
+    def new_context(self, **kwargs):
+        self.kwargs = kwargs
+
+
+def _from_options(config):
+    return {'env': {'CAMOU_CONFIG_1': json.dumps(config)}}
+
+
+class TestTouchDefault:
+    """A mobile-mode launch's pages need has_touch for Playwright's tap()."""
+
+    def test_launches_mobile_reads_the_config(self):
+        assert utils.launches_mobile(_from_options({'mobile': True}))
+        assert utils.launches_mobile(_from_options({'navigator.userAgent': ANDROID_UA}))
+        assert not utils.launches_mobile(_from_options({'navigator.userAgent': LINUX_UA}))
+        assert not utils.launches_mobile({})
+
+    @pytest.mark.parametrize('factory', ['new_page', 'new_context'])
+    def test_phone_pages_get_has_touch(self, factory):
+        browser = _FakeBrowser()
+        utils.attach_context_defaults(browser, True, True)
+        getattr(browser, factory)()
+        assert browser.kwargs['has_touch'] is True
+
+    def test_caller_value_wins(self):
+        browser = _FakeBrowser()
+        utils.attach_context_defaults(browser, True, True)
+        browser.new_page(has_touch=False)
+        assert browser.kwargs['has_touch'] is False
+
+    def test_desktop_pages_are_untouched(self):
+        browser = _FakeBrowser()
+        utils.attach_context_defaults(browser, True, False)
+        browser.new_page()
+        assert 'has_touch' not in browser.kwargs
+
+    def test_persistent_phone_context_gets_has_touch(self):
+        assert utils.persistent_context_options(_from_options({'mobile': True}), True)['has_touch'] is True
+        assert 'has_touch' not in utils.persistent_context_options(_from_options({}), True)
 
 
 class TestAndroidFonts:
@@ -364,12 +431,37 @@ class TestReviewFixes:
         assert opts['is_mobile'] is True
 
     def test_android_context_warns_about_linux_resources(self):
-        with pytest.warns(Warning, match='Linux pools'):
+        with pytest.warns(Warning, match='Linux pool'):
             generate_context_fingerprint(os='android', ff_version='155')
 
 
 class TestPhoneGpu:
     ADRENO = ('Qualcomm', 'Adreno (TM) 650, or similar')
+    # A bucket Gecko's SanitizeRenderer.cpp reports that BrowserForge never recorded.
+    UNRECORDED = ('Qualcomm', 'Adreno (TM) 540, or similar')
+
+    def test_a_phone_claims_a_recorded_phone_gpu(self):
+        config, prefs = launch(os='android')
+        assert (config['webGl:vendor'], config['webGl:renderer']) in android_gpus()
+        # The canvas renders on the host, whose GPU the identity no longer claims.
+        assert utils.has_canvas_placeholder(prefs)
+
+    def test_the_draw_follows_the_identity(self):
+        assert len({android_gpu(seed) for seed in range(200)}) == len(android_gpus())
+        assert all(android_gpu(seed) == android_gpu(seed) for seed in range(20))
+
+    def test_blocked_webgl_claims_no_gpu(self):
+        config, prefs = launch(os='android', block_webgl=True)
+        assert 'webGl:renderer' not in config
+        assert not utils.has_canvas_placeholder(prefs)
+
+    def test_a_phone_context_claims_a_recorded_phone_gpu(self):
+        fp = generate_context_fingerprint(os='android', ff_version='155', i_know_what_im_doing=True)
+        assert (fp['config']['webGl:vendor'], fp['config']['webGl:renderer']) in android_gpus()
+
+    def test_a_recorded_phone_gpu_does_not_warn(self, recwarn):
+        launch(os='android', webgl_config=self.ADRENO, i_know_what_im_doing=False)
+        assert not [w for w in recwarn if 'no WebGL data' in str(w.message)]
 
     def test_config_pair_unknown_to_the_database_is_kept(self):
         config, _ = launch(
@@ -384,7 +476,7 @@ class TestPhoneGpu:
 
     def test_unknown_pair_warns(self):
         with pytest.warns(LeakWarning, match='no WebGL data'):
-            launch(os='android', webgl_config=self.ADRENO, i_know_what_im_doing=False)
+            launch(os='android', webgl_config=self.UNRECORDED, i_know_what_im_doing=False)
 
     def test_a_desktop_still_needs_a_recorded_gpu(self):
         with pytest.raises(ValueError, match='No recorded WebGL data'):

@@ -51,10 +51,13 @@ Which binary is tested, in order of precedence:
 
 import asyncio
 import base64
+import http.server
 import json
 import os
+import socketserver
 import struct
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import quote
@@ -234,6 +237,77 @@ async def read_viewports(page, window_width: int, mobile: bool) -> Dict[str, Any
     return results
 
 
+# What a Firefox for Android page sees before any getUserMedia grant: one
+# device per input kind (a phone has cameras; no audiooutput without setSinkId),
+# no Web MIDI, no COEP credentialless on a release build, Playwright's tap()
+# delivered as touch, and window.open() as a tab of the phone's size whatever
+# features it asks for.
+PHONE_SURFACE: Dict[str, Any] = {
+    "enumerateDevices kinds": ["audioinput", "videoinput"],
+    "'requestMIDIAccess' in navigator": False,
+    "COEP credentialless isolates": False,
+    "page.tap() fires touchstart": True,
+    "window.open() popup is the opener's size": True,
+}
+
+SURFACE_PAGE = (
+    b'<!doctype html><meta name="viewport" content="width=device-width">'
+    b'<button id="b" style="width:200px;height:100px">tap</button>'
+    b'<script>document.getElementById("b").addEventListener('
+    b'"touchstart", () => { document.title = "touched"; });</script>'
+    b'<button id="p" onclick="window.open(\'about:blank\', \'\', \'width=300,height=300\')">open</button>'
+)
+
+
+def serve() -> socketserver.TCPServer:
+    """mediaDevices needs a secure context and COEP needs headers, so the
+    surface page comes from a local server (127.0.0.1 is potentially trustworthy)."""
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            if self.path == "/coep":
+                self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+                self.send_header("Cross-Origin-Embedder-Policy", "credentialless")
+            self.end_headers()
+            self.wfile.write(SURFACE_PAGE)
+
+        def log_message(self, *args):
+            pass
+
+    srv = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+async def probe_phone_surface(page) -> Dict[str, Any]:
+    srv = serve()
+    origin = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        await page.goto(f"{origin}/coep")
+        got = {"COEP credentialless isolates": await page.evaluate("() => crossOriginIsolated")}
+        await page.goto(f"{origin}/")
+        got.update(await page.evaluate("""async () => ({
+          "enumerateDevices kinds": (await navigator.mediaDevices.enumerateDevices()).map(d => d.kind).sort(),
+          "'requestMIDIAccess' in navigator": 'requestMIDIAccess' in navigator,
+        })"""))
+        try:
+            await page.tap("#b", timeout=5000)
+            got["page.tap() fires touchstart"] = await page.title() == "touched"
+        except Exception as e:
+            got["page.tap() fires touchstart"] = f"{type(e).__name__}: {str(e).splitlines()[0]}"
+        async with page.expect_popup() as info:
+            await page.tap("#p")
+        popup = await info.value
+        size = "() => [outerWidth, outerHeight]"
+        got["window.open() popup is the opener's size"] = await popup.evaluate(size) == await page.evaluate(size)
+        await popup.close()
+        return got
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def compare(title: str, actual: Dict[str, Any], expected: Dict[str, Any]) -> bool:
     print(f"\n=== {title} ===")
     width = max(len(k) for k in expected)
@@ -389,6 +463,14 @@ async def run_package(binary: Path) -> bool:
         ok &= compare("package, os='android': user agent",
                       {"claims Firefox for Android": ua.startswith("Mozilla/5.0 (Android ")},
                       {"claims Firefox for Android": True})
+        # A phone's window is as wide as its screen; desktop chrome would hold
+        # it at 500px, wider than most phones.
+        width = await page.evaluate("() => [screen.width, outerWidth, innerWidth]")
+        ok &= compare("package, os='android': window width", {
+            "outerWidth": width[1], "innerWidth (width=device-width)": width[2],
+        }, {"outerWidth": width[0], "innerWidth (width=device-width)": width[0]})
+        ok &= compare("package, os='android': API surface and tap",
+                      await probe_phone_surface(page), PHONE_SURFACE)
 
     async with AsyncCamoufox(os="linux", headless=False, executable_path=str(binary),
                              i_know_what_im_doing=True) as browser:

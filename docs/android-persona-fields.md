@@ -35,9 +35,12 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 | `navigator.vibrate` | absent in Gecko 155 (`dom.vibrator.enabled` is false, GeckoView does not turn it on); check Fenix on a device | pref `dom.vibrator.enabled` | absent |
 | `navigator.getBattery` | absent (chrome-only) | nothing to set | absent |
 | `navigator.share` | present (`dom.webshare.enabled`, geckoview-prefs.js) | pref `dom.webshare.enabled` | auto |
+| `navigator.requestMIDIAccess` | absent (`dom.webmidi.enabled` is `@IS_NOT_MOBILE@`) | pref `dom.webmidi.enabled` | auto (off) |
+| `navigator.mediaDevices.enumerateDevices()` | one microphone, `Default audio input device` (cubeb cannot enumerate on Android, `CubebDeviceEnumerator.cpp`), and the cameras as `Facing front:1`, `Facing back:0`, front first (`VideoCaptureDeviceInfoAndroid.java`); no `audiooutput` (`media.setsinkid.enabled` is off) | `mediaDevices:*` | auto (`android` in `media-devices.json`) |
 | `navigator.standalone` | absent (Safari only) | nothing to set | absent |
 | `screen.width` × `height` | the device, portrait | `screen.width`, `screen.height` | auto (`android-devices.json`) |
 | `screen.availWidth` × `availHeight` | the same as the screen | `screen.availWidth`, `screen.availHeight` | auto (no taskbar carved out) |
+| `outerWidth`, and `innerWidth` under `width=device-width` | the screen's width | `window.outerWidth`. Mobile mode lifts desktop Firefox's 500px minimum window width (`--window-min-width` in browser-shared.css) | auto |
 | `screen.colorDepth` | `24` | `screen.colorDepth` | auto |
 | `devicePixelRatio` | the device, e.g. `2.625`, `3` | pref `layout.css.devPixelsPerPx` (real: media queries and canvas agree), or `window.devicePixelRatio` (the JS value only) | auto, when headless or on a virtual display |
 | `screen.orientation.type` / `angle` | `portrait-primary` / `0` held upright | `screen.orientation` (`portrait-primary`, `landscape-primary`, ...), applied by Juggler | auto, from the screen's shape |
@@ -45,12 +48,13 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 | `(pointer: coarse)`, `(hover: none)` | true, for the primary pointer and the any- set | `mobile`, or a `has_touch` context | auto |
 | `'ontouchstart' in window`, `document.createTouch` | true (legacy touch APIs are on only on Android) | `mobile`, or a `has_touch` context | auto |
 | `TouchEvent` | `function` | `mobile`, `has_touch`, or `navigator.maxTouchPoints` > 0 | auto |
+| Playwright `page.tap()`, `page.touchscreen` | n/a | `has_touch` on the context | auto: pages of a mobile-mode browser open with `has_touch` |
 | `ondevicemotion`, `ondeviceorientation` | present | present on desktop too | present |
 | `<meta name="viewport">` | obeyed | `mobile`, or an `is_mobile` context | auto |
 | Pages without a meta viewport, or wider than the screen | laid out 980px wide and zoomed out to fit | zoom is on in mobile mode; Juggler maps clicks and viewport screenshots to the zoomed screen. `mobile:zoom: false` turns it off | zoomed out, like Android |
 | `navigator.doNotTrack` + `DNT` header | `unspecified`, no header | `navigator.doNotTrack` (`"1"`, `"0"`, `"unspecified"`); the header is sent only for `"1"` | Firefox default |
 | `navigator.globalPrivacyControl` + `Sec-GPC` header | `false`, no header, outside private browsing | `navigator.globalPrivacyControl`; window, workers and header move together | Firefox default |
-| WebGL vendor / renderer | the device GPU, sanitized, e.g. `Qualcomm` / `Adreno (TM) 650, or similar` | `webGl:vendor` / `webGl:renderer`, or `webgl_config=`. fpgen records no phone GPUs: the strings are set and the rest of WebGL is the host's, with a warning, and naming a GPU turns on the canvas placeholder | a Linux GPU (the host's on a Linux host), with a warning |
+| WebGL vendor / renderer | the device GPU, sanitized (`SanitizeRenderer.cpp`), e.g. `Qualcomm` / `Adreno (TM) 650, or similar` | `webGl:vendor` / `webGl:renderer`, or `webgl_config=`. fpgen records no phone GPUs: the strings are set and the rest of WebGL is the host's. A pair outside `android-devices.json` warns | auto: a recorded phone GPU from `android-devices.json` by weight (Adreno 650, Mali-T760, PowerVR SGX 540), with the canvas placeholder, as for any GPU not the host's |
 | WebGL default antialias | off (`webgl.default-antialias`) | pref `webgl.default-antialias` | auto |
 | `AudioContext().sampleRate` | the device, usually `48000` | `AudioContext:sampleRate` | host |
 | `Intl` time zone | the device | `timezone`, or `geoip` | from `geoip` |
@@ -60,6 +64,9 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 | `navigator.keyboard.lock` | absent | pref `dom.fullscreen.keyboard_lock.enabled` | auto (off) |
 | `HTMLInputElement.capture` | present (geckoview-prefs.js) | pref `dom.capture.enabled` | auto |
 | `<input type=month/week>` | real pickers | pref `dom.forms.datetime.others` | auto |
+| `window.open(url, name, "width=300,height=300")` | a new tab, the phone's size (GeckoView has no popup windows) | pref `browser.link.open_newwindow.restriction` (`0`: every new window is a tab) | auto |
+| `window.resizeTo` / `moveTo` on a popup | no-ops (`dom.disable_window_move_resize`, geckoview-prefs.js) | pref `dom.disable_window_move_resize` | auto |
+| `Cross-Origin-Embedder-Policy: credentialless` | not supported on release builds, so it does not make a page `crossOriginIsolated` (`browser.tabs.remote.coep.credentialless` is Nightly-only on Android) | pref `browser.tabs.remote.coep.credentialless` | auto (off) |
 | Scrollbar width | 0 (overlay) | pref `ui.useOverlayScrollbars` | auto |
 | Fonts | Android's (Roboto, Noto, Noto Color Emoji, ...) | `fonts` | Android's set as far as the Linux bundle has it (`androidFonts` in `launcher-constants.json`); Droid Sans Mono, Cutive Mono, Coming Soon, Dancing Script and Carrois Gothic SC are missing, and DejaVu Sans Mono backs `monospace` |
 | Default font, generic families | sans-serif, Roboto; serif Noto Serif; monospace 12px | prefs `font.default.*`, `font.name-list.*`, `font.size.monospace.*` (Firefox for Android's `all.js`) | `mobileFontPrefs` in `launcher-constants.json` |
@@ -77,3 +84,24 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
   default. If a real device reports `false` and `0`, set
   `config={"pdfViewerEnabled": False}`: the flag, both lists and the viewer
   itself move together.
+
+## What still reads as desktop
+
+These need data recorded on real phones, or browser work, before they can be
+set; until then they are the host's:
+
+- **WebGL beyond the two strings.** Limits, extensions and shader precision are
+  the host GPU's, so a desktop list (with `WEBGL_compressed_texture_s3tc`) sits
+  behind a phone renderer. Adreno and Mali parameter sets have to be recorded.
+- **Speech voices.** `urn:moz-tts:speechd:` voices from the Linux pool, where
+  Firefox for Android lists the system TTS voices (`urn:moz-tts:android:`).
+- **Motion sensors.** `devicemotion` and `deviceorientation` never fire; a
+  phone fires them continuously without a permission prompt. Feeding them
+  needs a sensor backend in the browser.
+- **EME and HLS.** Firefox for Android has Widevine through MediaDrm
+  (`media.eme.enabled` is on there) and plays HLS (`media.hls.enabled`).
+  Neither backend exists in a desktop build, so turning the prefs on changes
+  only the error a page sees: EME stays off and `canPlayType` for HLS is `""`.
+- **The device pool.** `android-devices.json` has six recorded devices, all
+  with the user agent's `Android 16`. Gecko sends the device's own major
+  version (10 and up), so more recorded devices widen the spread.

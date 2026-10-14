@@ -24,11 +24,13 @@ import {
 	attachDesktopOnlyWarning,
 	attachNoViewportDefault,
 	attachStockMediaDefaults,
+	attachTouchDefault,
 	attachVirtualDisplay,
 	contextIdentity,
 	driverPid,
 	hostIdentity,
 	type LaunchOptions,
+	launchesMobile,
 	launchOptions,
 	pinnedCoreCount,
 	STOCK_MEDIA_DEFAULTS,
@@ -192,6 +194,9 @@ async function launchWith(
 		for (const [key, value] of Object.entries(STOCK_MEDIA_DEFAULTS)) {
 			if (!(key in options)) options[key] = value;
 		}
+		if (launchesMobile(options) && !("hasTouch" in options)) {
+			options.hasTouch = true;
+		}
 		const context = await playwright.launchPersistentContext(
 			userDataDir ?? "",
 			options,
@@ -204,6 +209,9 @@ async function launchWith(
 	const browser = await playwright.launch(fromOptions);
 	if (noViewportDefault) {
 		attachNoViewportDefault(browser);
+	}
+	if (launchesMobile(fromOptions)) {
+		attachTouchDefault(browser);
 	}
 	attachStockMediaDefaults(browser);
 	attachDesktopOnlyWarning(browser);

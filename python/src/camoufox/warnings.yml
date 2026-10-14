@@ -55,11 +55,14 @@ is_mobile: >-
     or has_touch, device_scale_factor and viewport for the parts you need.
 
 mobile_resources: >-
-    A Firefox for Android identity takes its speech voices and WebGL GPU from the Linux
-    pools, because fpgen records no phone voices or GPUs. Its fonts are Android's
-    (Roboto, Noto, Noto Color Emoji) as far as the bundle has them; Android-only families
-    such as Droid Sans Mono, Cutive Mono and Dancing Script are missing. Pages that
-    fingerprint the GPU or voices will not see an Android device. The layout-facing
+    A Firefox for Android identity takes its speech voices from the Linux pool, because
+    fpgen records no phone voices. Its WebGL vendor and renderer are a recorded phone's
+    (Adreno, Mali or PowerVR), but every other WebGL parameter (limits, extensions,
+    precision formats) is the host's, and the canvas is covered as for any GPU not the
+    host's. Its fonts are Android's (Roboto, Noto, Noto Color Emoji) as far as the bundle
+    has them; Android-only families such as Droid Sans Mono, Cutive Mono and Dancing
+    Script are missing. Pages that fingerprint WebGL beyond its two strings, or the
+    voices, will not see an Android device. The layout-facing
     signals (user agent, pointer, touch, viewport, screen, system font) do match Firefox
     for Android.
 

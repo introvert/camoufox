@@ -281,8 +281,12 @@ the browser answer like the phone:
   screen, is zoomed out to fit. Playwright's clicks and viewport screenshots
   follow the zoom; `config={"mobile:zoom": False}` turns zooming off
 - `window.orientation`, `onorientationchange` and a portrait `screen.orientation`
+- a window exactly as wide as the phone's screen, `window.open()` opening a
+  tab of that size, and new pages opened with `has_touch`, so `page.tap()` and
+  `page.touchscreen` work
 - overlay scrollbars, Android's API surface (`navigator.share` present,
-  WebCodecs absent, ...), and the phone's device pixel ratio when headless or
+  WebCodecs and Web MIDI absent, ...), the phone's default microphone and its
+  front and back cameras, and the phone's device pixel ratio when headless or
   on a virtual display
 
 A user agent passed in `config` picks the OS the rest of the identity is drawn
@@ -294,17 +298,19 @@ fpgen records no Firefox for Android, so the phone (screen, window, device
 pixel ratio, user agent, platform) is drawn from `android-devices.json`, a
 handful of real devices recorded by BrowserForge. Fonts are Android's (Roboto,
 the Noto families, Noto Color Emoji) as far as the bundle has them, with
-Firefox for Android's default fonts and a Roboto `system-ui`. Speech voices and
-the WebGL GPU come from the Linux pools, with a `LeakWarning`: fpgen records no
-phone voices or GPUs. A phone GPU can still be named
-(`webgl_config=("Qualcomm", "Adreno (TM) 650, or similar")`); its strings are
-kept and the rest of WebGL is the host's, with a warning.
+Firefox for Android's default fonts and a Roboto `system-ui`. The WebGL vendor
+and renderer are a recorded phone's (Adreno, Mali or PowerVR, by their share in
+BrowserForge's records), so the canvas is covered as for any GPU not the host's
+(`canvas_noise=False` keeps it stock). Speech voices come from the Linux pool
+and the rest of WebGL is the host's, with a `LeakWarning`: fpgen records no
+phone voices or GPUs. `webgl_config=("Qualcomm", "Adreno (TM) 540, or similar")`
+names another phone GPU; one outside `android-devices.json` gets a warning.
 
 `NewContext(browser, os="android")` gives one phone context in a desktop
 browser, through Playwright's `is_mobile` and `has_touch`. `is_mobile` on any
 other context is ignored, with a warning. Every field a Firefox for Android
 check can read, and how to set each one:
-[docs/android-persona-fields.md](https://github.com/daijro/camoufox/blob/main/docs/android-persona-fields.md).
+[docs/android-persona-fields.md](https://github.com/introvert/camoufox/blob/main/docs/android-persona-fields.md).
 
 ## CLI
 

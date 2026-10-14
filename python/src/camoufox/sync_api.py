@@ -17,6 +17,7 @@ from .utils import (
     context_identity,
     host_identity,
     launch_options,
+    launches_mobile,
     new_context_options,
     persistent_context_options,
     spoofs_window_dimensions,
@@ -145,7 +146,7 @@ def NewBrowser(
 
         identity = host_identity(from_options, canvas_noise)
         browser = playwright.firefox.launch(**from_options)
-        attach_context_defaults(browser, no_viewport_default)
+        attach_context_defaults(browser, no_viewport_default, launches_mobile(from_options))
         browser._camoufox_host_identity = identity
         return sync_attach_vd(browser, virtual_display)
     finally:

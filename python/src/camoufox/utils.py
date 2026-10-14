@@ -21,7 +21,7 @@ from .exceptions import (
     InvalidPropertyType,
     NonFirefoxFingerprint,
 )
-from .fingerprints import Screen, platform_to_os, _set_app_version, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts
+from .fingerprints import Screen, platform_to_os, _set_app_version, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts, android_gpu, android_gpus
 from . import coherence
 from .coherence import is_mobile_config, is_mobile_user_agent
 from .geolocation import geoip_allowed, get_geolocation
@@ -666,6 +666,12 @@ def spoofs_window_dimensions(from_options: Dict[str, Any]) -> bool:
     return any(key in blob for key in _WINDOW_DIM_KEYS)
 
 
+def launches_mobile(from_options: Dict[str, Any]) -> bool:
+    """Whether the CAMOU_CONFIG in a set of launch options is a phone's."""
+    blob = _camou_config_blob(from_options)
+    return bool(blob) and is_mobile_config(orjson.loads(blob))
+
+
 # Playwright emulates four media features on every context it creates, whether
 # or not the caller asked: `colorScheme` defaults to "light" and reducedMotion /
 # forcedColors / contrast to their no-preference values. That is an override, not
@@ -752,21 +758,36 @@ def attach_no_viewport_default(target: Any) -> Any:
     return _wrap_context_factories(target, adjust)
 
 
+def attach_touch_default(target: Any) -> Any:
+    """Default new_page()/new_context() to has_touch=True. A phone's page gets
+    touch events from mobile mode either way; Playwright's tap() and
+    touchscreen also need the context to say so."""
+
+    def adjust(kwargs: Dict[str, Any]) -> None:
+        kwargs.setdefault('has_touch', True)
+
+    return _wrap_context_factories(target, adjust)
+
+
 def persistent_context_options(from_options: Dict[str, Any], no_viewport_default: bool) -> Dict[str, Any]:
     """Launch options for launch_persistent_context(). The launch itself creates
     the context, so the defaults new_context() would get go into the options."""
     if no_viewport_default and not ('viewport' in from_options or 'no_viewport' in from_options):
         from_options = {**from_options, 'no_viewport': True}
+    if launches_mobile(from_options):
+        from_options = {'has_touch': True, **from_options}
     return {
         **{k: v for k, v in STOCK_MEDIA_DEFAULTS.items() if k not in from_options},
         **from_options,
     }
 
 
-def attach_context_defaults(browser: Any, no_viewport_default: bool) -> None:
+def attach_context_defaults(browser: Any, no_viewport_default: bool, mobile: bool) -> None:
     """Give every new_page()/new_context() of `browser` Camoufox's defaults."""
     if no_viewport_default:
         attach_no_viewport_default(browser)
+    if mobile:
+        attach_touch_default(browser)
     attach_stock_media_defaults(browser)
     attach_desktop_only_warning(browser)
 
@@ -933,10 +954,12 @@ def _webgl_for_pair(
 
     fpgen records no phone GPUs, so a phone's (Qualcomm, "Adreno (TM) 650, or
     similar") could never be named. On a phone an unrecorded pair keeps its two
-    strings, with a warning: every other WebGL parameter is the host's.
+    strings: every other WebGL parameter is the host's. mobile_resources says
+    so for a recorded phone GPU (android_gpu); any other pair gets a warning.
     """
     if mobile and (vendor, renderer) not in firefox_gpus(target_os):
-        LeakWarning.warn('webgl_unknown_pair', i_know_what_im_doing)
+        if (vendor, renderer) not in android_gpus():
+            LeakWarning.warn('webgl_unknown_pair', i_know_what_im_doing)
         return {'webGl:vendor': vendor, 'webGl:renderer': renderer, 'webGl2Enabled': True}
     return webgl_for_gpu(target_os, vendor, renderer, seed=seed)
 
@@ -1646,6 +1669,11 @@ def launch_options(
     coherence.drop_incoherent_source_values(config, target_os)
     if _default_webgl_config and not (config.get('webGl:vendor') and config.get('webGl:renderer')):
         webgl_config = _default_webgl_config
+    _named_gpu = webgl_config or (config.get('webGl:vendor') and config.get('webGl:renderer'))
+    if is_mobile_config(config) and not (_named_gpu or block_webgl):
+        # A phone claims a phone's GPU, never the host's. The canvas still renders
+        # on the host, so plan_rendering covers it as for any GPU not the host's.
+        config['webGl:vendor'], config['webGl:renderer'] = android_gpu(identity_seed(config, _identity_salt))
 
     cover_canvas, host = plan_rendering(
         target_os,

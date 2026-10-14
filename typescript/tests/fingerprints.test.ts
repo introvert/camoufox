@@ -10,6 +10,7 @@ import { Generator } from "fpgen-js";
 import { describe, expect, it, vi } from "vitest";
 import { InvalidIP } from "../src/exceptions.js";
 import {
+	androidGpus,
 	appVersionFromUserAgent,
 	audioSeedFromIdentity,
 	buildInitScript,
@@ -931,6 +932,17 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		// Juggler derives screen.orientation from it.
 		expect(opts.screen.width).toBeLessThan(opts.screen.height);
 		expect(init_script).toContain('setNavigatorPlatform("Linux armv81")');
+	});
+
+	it("an Android context claims a recorded phone GPU", () => {
+		const { config } = generateContextFingerprint({
+			os: "android",
+			i_know_what_im_doing: true,
+		});
+		expect(androidGpus()).toContainEqual([
+			config["webGl:vendor"],
+			config["webGl:renderer"],
+		]);
 	});
 
 	it("a desktop context is no phone", () => {

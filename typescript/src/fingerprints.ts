@@ -1227,15 +1227,42 @@ export function drawMediaDevices(
 }
 
 /**
+ * Firefox for Android's media devices (media-devices.json `android`): the
+ * phone's default microphone and speaker, which share a group, and its
+ * cameras, one group each.
+ */
+export function androidMediaDevices(): Config {
+	const phone = loadMediaDevices().android;
+	const cams: string[] = phone.cams;
+	return {
+		"mediaDevices:enabled": true,
+		"mediaDevices:micros": phone.mics.length,
+		"mediaDevices:webcams": cams.length,
+		"mediaDevices:speakers": phone.outs.length,
+		"mediaDevices:microphoneLabels": [...phone.mics],
+		"mediaDevices:microphoneGroups": phone.mics.map(() => "hw-1"),
+		"mediaDevices:webcamLabels": [...cams],
+		"mediaDevices:webcamGroups": cams.map((_, i) => `hw-${i + 2}`),
+		"mediaDevices:speakerLabels": [...phone.outs],
+		"mediaDevices:speakerGroups": phone.outs.map(() => "hw-1"),
+	};
+}
+
+/**
  * Give the identity a plausible set of media devices, drawn from the common
- * desktop population for its OS and seeded by the identity. Nothing is drawn
- * when the caller already set any mediaDevices: key.
+ * desktop population for its OS and seeded by the identity; a phone gets
+ * Firefox for Android's. Nothing is drawn when the caller already set any
+ * mediaDevices: key.
  */
 export function setMediaDevicesDefaults(
 	config: Config,
 	salt: number | bigint = 0,
 ): void {
 	if (Object.keys(config).some((k) => k.startsWith("mediaDevices:"))) return;
+	if (isMobileConfig(config)) {
+		Object.assign(config, androidMediaDevices());
+		return;
+	}
 	const plat = pyStr(get(config, "navigator.platform", ""));
 	const osKey = plat.startsWith("Win")
 		? "win"
@@ -1816,15 +1843,25 @@ export function generateContextFingerprint({
 			// Same coherence treatment launchOptions applies (#729): lift netbook
 			// geometry, then keep the GPU consistent with the resulting screen.
 			raiseScreenToModernFloor(config);
-			const webglFp = webgl_config
-				? webglForGpu(targetOs, ...webgl_config)
-				: sampleWebglForScreen(
-						targetOs,
-						config["screen.width"],
-						config["screen.height"],
-						undefined,
-						config["navigator.hardwareConcurrency"],
-					);
+			let webglFp: Record<string, any>;
+			if (webgl_config) {
+				webglFp = webglForGpu(targetOs, ...webgl_config);
+			} else if (isMobileConfig(config)) {
+				const [vendor, renderer] = androidGpu();
+				webglFp = {
+					"webGl:vendor": vendor,
+					"webGl:renderer": renderer,
+					webGl2Enabled: true,
+				};
+			} else {
+				webglFp = sampleWebglForScreen(
+					targetOs,
+					config["screen.width"],
+					config["screen.height"],
+					undefined,
+					config["navigator.hardwareConcurrency"],
+				);
+			}
 			delete webglFp.webGl2Enabled;
 			Object.assign(config, webglFp);
 		}
@@ -2057,20 +2094,45 @@ export interface GenerateFingerprintOptions {
 
 let androidDevices: Record<string, any> | null = null;
 
+function loadAndroidDevices(): Record<string, any> {
+	androidDevices ??= loadDataFile<Record<string, any>>("android-devices.json");
+	return androidDevices;
+}
+
+/**
+ * A recorded Firefox for Android GPU (android-devices.json `gpus`), drawn by
+ * its weight. fpgen records no phone GPUs, so only the two strings are a
+ * phone's: every other WebGL parameter is the host's.
+ */
+export function androidGpu(seed?: number | bigint | null): [string, string] {
+	const gpus: Record<string, any>[] = loadAndroidDevices().gpus;
+	const gpu = rng(seed).choices(gpus, {
+		weights: gpus.map((g) => g.weight),
+	})[0];
+	return [gpu.vendor, gpu.renderer];
+}
+
+export function androidGpus(): [string, string][] {
+	return loadAndroidDevices().gpus.map((g: Record<string, any>) => [
+		g.vendor,
+		g.renderer,
+	]);
+}
+
 /**
  * A Firefox for Android phone, in fpgen's fingerprint shape. The screen and
  * window are one recorded device's, drawn by its weight. The whole screen is
  * available, as Firefox for Android reports it.
  */
 function generateAndroidFingerprint(): Record<string, any> {
-	androidDevices ??= loadDataFile<Record<string, any>>("android-devices.json");
-	const devices: Record<string, any>[] = androidDevices.devices;
+	const android = loadAndroidDevices();
+	const devices: Record<string, any>[] = android.devices;
 	const device = random.choices(devices, {
 		weights: devices.map((d) => d.weight),
 	})[0];
 	const screen = device.screen;
 	return {
-		navigator: { ...androidDevices.navigator },
+		navigator: { ...android.navigator },
 		screen: {
 			...screen,
 			pixelDepth: screen.colorDepth,

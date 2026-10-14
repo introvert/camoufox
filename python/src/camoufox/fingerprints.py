@@ -951,6 +951,9 @@ def set_media_devices_defaults(config: Dict[str, Any], salt: int = 0) -> None:
     """
     if any(k.startswith('mediaDevices:') for k in config):
         return
+    if is_mobile_config(config):
+        config.update(android_media_devices())
+        return
     # Before any getUserMedia grant Firefox exposes at most ONE device per
     # input kind and no audiooutput; after a grant it lists every device with
     # the OS's own labels ("Microphone Array (Realtek(R) Audio)", "MacBook Pro
@@ -981,6 +984,26 @@ def _load_media_devices() -> Dict[str, Any]:
         with open(path, 'rb') as f:
             _MEDIA_DEVICES_CACHE = json.loads(f.read())
     return _MEDIA_DEVICES_CACHE
+
+
+def android_media_devices() -> Dict[str, Any]:
+    """Firefox for Android's media devices (media-devices.json `android`): the
+    phone's default microphone and speaker, which share a group, and its
+    cameras, one group each."""
+    phone = _load_media_devices()['android']
+    cams = phone['cams']
+    return {
+        'mediaDevices:enabled': True,
+        'mediaDevices:micros': len(phone['mics']),
+        'mediaDevices:webcams': len(cams),
+        'mediaDevices:speakers': len(phone['outs']),
+        'mediaDevices:microphoneLabels': list(phone['mics']),
+        'mediaDevices:microphoneGroups': ['hw-1'] * len(phone['mics']),
+        'mediaDevices:webcamLabels': list(cams),
+        'mediaDevices:webcamGroups': [f'hw-{i + 2}' for i in range(len(cams))],
+        'mediaDevices:speakerLabels': list(phone['outs']),
+        'mediaDevices:speakerGroups': ['hw-1'] * len(phone['outs']),
+    }
 
 
 def _weighted_choice(rng: Random, items: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1597,6 +1620,9 @@ def generate_context_fingerprint(
             raise_screen_to_modern_floor(config)
             if webgl_config:
                 webgl_fp = webgl_for_gpu(_target_os, *webgl_config)
+            elif is_mobile_config(config):
+                vendor, renderer = android_gpu()
+                webgl_fp = {'webGl:vendor': vendor, 'webGl:renderer': renderer, 'webGl2Enabled': True}
             else:
                 webgl_fp = sample_webgl_for_screen(
                     _target_os, config.get('screen.width'), config.get('screen.height'),
@@ -1824,21 +1850,39 @@ def handle_window_size(fp: Dict[str, Any], outer_width: int, outer_height: int) 
 _ANDROID_DEVICES: Optional[Dict[str, Any]] = None
 
 
+def _android_devices() -> Dict[str, Any]:
+    global _ANDROID_DEVICES
+    if _ANDROID_DEVICES is None:
+        with open(Path(__file__).parent / 'android-devices.json', 'rb') as f:
+            _ANDROID_DEVICES = json.load(f)
+    return _ANDROID_DEVICES
+
+
+def android_gpu(seed: Optional[int] = None) -> Tuple[str, str]:
+    """A recorded Firefox for Android GPU (android-devices.json `gpus`), drawn
+    by its weight. fpgen records no phone GPUs, so only the two strings are a
+    phone's: every other WebGL parameter is the host's."""
+    gpus = _android_devices()['gpus']
+    gpu = Random(seed).choices(gpus, weights=[g['weight'] for g in gpus])[0]
+    return gpu['vendor'], gpu['renderer']
+
+
+def android_gpus() -> FrozenSet[Tuple[str, str]]:
+    return frozenset((g['vendor'], g['renderer']) for g in _android_devices()['gpus'])
+
+
 def _generate_android_fingerprint() -> Dict[str, Any]:
     """A Firefox for Android phone, in fpgen's fingerprint shape.
 
     The screen and window are one recorded device's, drawn by its weight. The
     whole screen is available, as Firefox for Android reports it.
     """
-    global _ANDROID_DEVICES
-    if _ANDROID_DEVICES is None:
-        with open(Path(__file__).parent / 'android-devices.json', 'rb') as f:
-            _ANDROID_DEVICES = json.load(f)
-    devices = _ANDROID_DEVICES['devices']
+    android = _android_devices()
+    devices = android['devices']
     device = choices(devices, weights=[d['weight'] for d in devices])[0]  # nosec
     screen = device['screen']
     return {
-        'navigator': dict(_ANDROID_DEVICES['navigator']),
+        'navigator': dict(android['navigator']),
         'screen': {
             **screen,
             'pixelDepth': screen['colorDepth'],
