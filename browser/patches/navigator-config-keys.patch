@@ -206,7 +206,7 @@ diff --git a/dom/workers/WorkerNavigator.h b/dom/workers/WorkerNavigator.h
      aLanguages = mProperties.mLanguages.Clone();
    }
  
-   void GetUserAgent(nsString& aUserAgent, CallerType aCallerType,
+   void GetUserAgent(nsCString& aUserAgent, CallerType aCallerType,
                      ErrorResult& aRv) const;
  
 -  bool OnLine() const { return mOnline; }

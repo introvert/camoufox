@@ -191,19 +191,18 @@ index cb146517aa..f2fa8a3543 100644
  # in unified builds (it includes RoverfoxStorageManager.h which can affect
  # alphabetically-later files like BarProps.cpp)
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index e1281931d5..f7006744e5 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -331,6 +331,8 @@
+@@ -332,6 +332,8 @@
  #include "xpcprivate.h"
  #include "xpcpublic.h"
  
 +#include "WebRTCIPManager.h"
 +
- #ifdef NS_PRINTING
- #  include "nsIPrintSettings.h"
+ #ifdef MOZ_WEBSPEECH
+ #  include "mozilla/dom/SpeechSynthesis.h"
  #endif
-@@ -7789,6 +7791,18 @@ void nsGlobalWindowInner::SetTimezone(const nsAString& timezone, ErrorResult& aR
+@@ -7785,6 +7787,18 @@ void nsGlobalWindowInner::SetTimezone(const nsAString& timezone, ErrorResult& aR
    RoverfoxStorageManager::RemoveSetter("setTimezone");
  }
  

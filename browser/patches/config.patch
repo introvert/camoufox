@@ -32,12 +32,11 @@ index e69de29bb2..484d7bf134 100644
 +  "local-settings.js",
 +]
 diff --git a/moz.build b/moz.build
-index 2eb5922b24..fe667fc5f6 100644
 --- a/moz.build
 +++ b/moz.build
-@@ -362,3 +362,5 @@ SPHINX_TREES["jsloader"] = "docs/jsloader"
- SPHINX_TREES["ai-agent-tools"] = "docs/ai-agent-tools"
- 
- include("build/templates.mozbuild")
+@@ -381,3 +381,5 @@ if CONFIG["MOZ_GENERATE_SBOM"]:
+         ],
+         force=True,
+     )
 +
 +DIRS += ["lw"]

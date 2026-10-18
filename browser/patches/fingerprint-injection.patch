@@ -114,7 +114,6 @@ index 3b48a7f1e2..4b989dd48a 100644
    if (ShouldResistFingerprinting(RFPTarget::ScreenAvailRect)) {
      return GetTopWindowInnerRectForRFP();
 diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
-index 519668019e..f12ea64bc0 100644
 --- a/dom/workers/WorkerNavigator.cpp
 +++ b/dom/workers/WorkerNavigator.cpp
 @@ -3,6 +3,7 @@
@@ -135,7 +134,7 @@ index 519668019e..f12ea64bc0 100644
    bool gpcStatus = StaticPrefs::privacy_globalprivacycontrol_enabled();
    if (!gpcStatus) {
      JSObject* jso = GetWrapper();
-@@ -134,6 +138,8 @@ void WorkerNavigator::SetLanguages(const nsTArray<nsString>& aLanguages) {
+@@ -133,6 +137,8 @@ void WorkerNavigator::SetLanguages(const nsTArray<nsString>& aLanguages) {
  void WorkerNavigator::GetAppVersion(nsString& aAppVersion,
                                      CallerType aCallerType,
                                      ErrorResult& aRv) const {
@@ -144,7 +143,7 @@ index 519668019e..f12ea64bc0 100644
    WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
    MOZ_ASSERT(workerPrivate);
  
-@@ -156,6 +162,8 @@ void WorkerNavigator::GetAppVersion(nsString& aAppVersion,
+@@ -155,6 +161,8 @@ void WorkerNavigator::GetAppVersion(nsString& aAppVersion,
  
  void WorkerNavigator::GetPlatform(nsString& aPlatform, CallerType aCallerType,
                                    ErrorResult& aRv) const {
@@ -154,15 +153,15 @@ index 519668019e..f12ea64bc0 100644
    MOZ_ASSERT(workerPrivate);
  
 @@ -216,6 +224,8 @@ class GetUserAgentRunnable final : public WorkerMainThreadRunnable {
- 
- void WorkerNavigator::GetUserAgent(nsString& aUserAgent, CallerType aCallerType,
+ void WorkerNavigator::GetUserAgent(nsCString& aUserAgent,
+                                    CallerType aCallerType,
                                     ErrorResult& aRv) const {
 +  if (auto value = MaskConfig::GetString("navigator.userAgent"))
-+    return aUserAgent.Assign(NS_ConvertUTF8toUTF16(value.value()));
++    return aUserAgent.Assign(value.value().c_str());
    WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
    MOZ_ASSERT(workerPrivate);
  
-@@ -227,6 +237,8 @@ void WorkerNavigator::GetUserAgent(nsString& aUserAgent, CallerType aCallerType,
+@@ -227,6 +237,8 @@ void WorkerNavigator::GetUserAgent(nsCString& aUserAgent,
  }
  
  uint64_t WorkerNavigator::HardwareConcurrency() const {
