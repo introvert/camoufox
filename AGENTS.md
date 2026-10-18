@@ -231,7 +231,7 @@ this section in step with the launcher options.
 - **Leave the viewport alone.** When the window size is spoofed, new pages default to `no_viewport=True`; forcing a `viewport` asks the window to resize to something the identity does not claim.
 - **`is_mobile` warns on a desktop identity** and stays out of Responsive Design Mode. Only an Android identity (`os="android"`, this fork's mobile mode) is a phone.
 - **Persistent contexts** need `persistent_context=True` and `user_data_dir`, and cannot be served by `launch_server`.
-- **`headless="virtual"`** needs Linux and `Xvfb` (`CannotFindXvfb`, `VirtualDisplayNotSupported` otherwise).
+- **`headless="virtual"`** needs Linux, `Xvfb` and `setpriv` from util-linux (`CannotFindXvfb`, `VirtualDisplayNotSupported` otherwise).
 - **`os` values are lowercase** `windows`, `macos`, `linux`, `android` (this fork); anything else raises `InvalidOS`.
 - **`geoip` in Python needs the extra**: `pip install "camoufox[geoip]"`, else `NotInstalledGeoIPExtra`.
 - **`InvalidIP`** is raised when the public-IP or proxy exit-IP lookup fails, or when `webrtc_ip` is not a valid IPv4/IPv6 address. Pass `webrtc_ip` and `timezone_id` to `NewContext` to skip the lookup.

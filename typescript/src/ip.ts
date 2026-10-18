@@ -3,6 +3,7 @@
  *
  * TypeScript twin of python/src/camoufox/ip.py.
  */
+import { isIPv4, isIPv6 } from "node:net";
 import { Impit } from "impit";
 import { InvalidIP, InvalidProxy } from "./exceptions.js";
 
@@ -58,14 +59,14 @@ export function validIPv4(ip: string | false): boolean {
 	if (!ip) {
 		return false;
 	}
-	return /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(ip);
+	return isIPv4(ip);
 }
 
 export function validIPv6(ip: string | false): boolean {
 	if (!ip) {
 		return false;
 	}
-	return /^(([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4})$/.test(ip);
+	return isIPv6(ip);
 }
 
 export function validateIP(ip: string): void {
@@ -154,6 +155,36 @@ const PUBLIC_IP_URLS = [
 // The Python twin memoizes public_ip() with lru_cache; mirror that so repeated
 // launches through the same proxy don't re-hit the API endpoints.
 const publicIPCache = new Map<string, Promise<string>>();
+
+let publicIPv6Pending: Promise<string | null> | undefined;
+
+/**
+ * This host's public IPv6 address, or null when it has none it can reach the
+ * internet from. The hosts have AAAA records only, so an answer proves the route.
+ */
+export function publicIPv6(): Promise<string | null> {
+	publicIPv6Pending ??= resolvePublicIPv6();
+	return publicIPv6Pending;
+}
+
+async function resolvePublicIPv6(): Promise<string | null> {
+	for (const url of ["https://api6.ipify.org", "https://v6.ident.me"]) {
+		let ip: string;
+		try {
+			const response = await getImpit().fetch(url);
+			if (!response.ok) {
+				continue;
+			}
+			ip = (await response.text()).trim();
+		} catch {
+			continue;
+		}
+		if (validIPv6(ip)) {
+			return ip;
+		}
+	}
+	return null;
+}
 
 /**
  * Sends a request to a public IP api.

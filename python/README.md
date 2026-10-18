@@ -80,6 +80,10 @@ with Camoufox(
 locale, geolocation and the WebRTC IP from it. Pass an IP string instead to
 skip the lookup.
 
+Without a proxy, sites can reach this machine over IPv6. IPv6 stays on when the
+machine's IPv6 address geolocates where the IPv4 identity does. Otherwise, the
+browser behaves as on an IPv4-only network, and a `LeakWarning` says why.
+
 ### Persistent profile
 
 ```python
@@ -163,7 +167,7 @@ host's only when the identity claims the host's GPU. Otherwise
 |---|---|---|
 | `False` (default) | A normal window | Needs a display. |
 | `True` | Firefox headless | Camoufox patches the headless tells it knows about. |
-| `"virtual"` | A headed browser on a private Xvfb display | Linux only, needs `Xvfb`. Handled by `Camoufox`, `AsyncCamoufox`, `NewBrowser` and `launch_server`. The display is 1x1 unless `CAMOUFOX_VIRTUAL_DISPLAY_SIZE` (e.g. `1920x1080x24`) says otherwise. |
+| `"virtual"` | A headed browser on a private Xvfb display | Linux only, needs `Xvfb` and `setpriv` (util-linux). Handled by `Camoufox`, `AsyncCamoufox`, `NewBrowser` and `launch_server`. The display is 1x1 unless `CAMOUFOX_VIRTUAL_DISPLAY_SIZE` (e.g. `1920x1080x24`) says otherwise. |
 
 ### Remote server
 
@@ -214,7 +218,7 @@ passed to Playwright's `firefox.launch()` (or `launch_persistent_context()`).
 | `os` | `str` or `list[str]` | fpgen's real-world mix | `"windows"`, `"macos"`, `"linux"`, `"android"`, or a list to pick from. See [Firefox for Android](#firefox-for-android). |
 | `headless` | `bool` or `"virtual"` | `False` | See [Headless modes](#headless-modes). |
 | `proxy` | `dict` | none | Playwright proxy: `server`, `username`, `password`, `bypass`. |
-| `geoip` | `bool` or `str` | none | `True` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Needs the `geoip` extra. |
+| `geoip` | `bool` or `str` | none | `True` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. Needs the `geoip` extra. |
 | `geoip_db` | `str` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
 | `locale` | `str` or `list[str]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"` or `["fr-FR", "en-US"]`. The first is used for `Intl`. |
 | `humanize` | `bool` or `float` | off | Human cursor movement. A number caps one movement at that many seconds (default cap 1.5). |
