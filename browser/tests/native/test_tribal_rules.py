@@ -683,7 +683,7 @@ def test_webgl_browser_owned_values_follow_firefox():
         assert config["webGl:parameters"]["33902"] == [1, 1], why
         assert ("EXT_depth_clamp" in config["webGl:supportedExtensions"]) == (target_os == "win"), why
     ts = (REPO_ROOT / "typescript" / "src" / "webgl.ts").read_text(encoding="utf-8")
-    for line in ('win: ["EXT_depth_clamp"]', 'ALIASED_LINE_WIDTH_RANGE = "33902"'):
+    for line in ('win: ["EXT_depth_clamp", "EXT_polygon_offset_clamp"]', 'lin: ["EXT_polygon_offset_clamp"]', 'ALIASED_LINE_WIDTH_RANGE = "33902"'):
         assert line in ts, why
 
     assert (BROWSER / "tests" / "playwright" / "patches" / "stock-gpu-parity.py").exists(), why

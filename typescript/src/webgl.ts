@@ -53,11 +53,21 @@ const HOST_DEPENDENT_EXTENSIONS: ReadonlySet<string> = new Set([
 	"OVR_multiview2",
 ]);
 
-// Extensions the claimed OS's backend exposes on every GPU in Firefox 156,
-// which fpgen's Firefox 146 records lack. ANGLE sets depthClampEXT
-// unconditionally on D3D11 (renderer11_utils.cpp); 146's ANGLE did not.
+// Extensions the claimed OS's backend exposes on every GPU in the running
+// Firefox, which fpgen's Firefox 146 records lack. ANGLE's D3D11 backend sets
+// depthClampEXT unconditionally and polygonOffsetClampEXT from feature level
+// 10_0, which every WebGL2 GPU has (renderer11_utils.cpp); Firefox exposes
+// them from 156 and 158.
 const BACKEND_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
-	win: ["EXT_depth_clamp"],
+	win: ["EXT_depth_clamp", "EXT_polygon_offset_clamp"],
+};
+
+// Firefox 158 exposes EXT_polygon_offset_clamp where the driver has GL 4.6 or
+// ARB/EXT_polygon_offset_clamp (GLContextFeatures.cpp): Linux's desktop GL
+// drivers, Mesa's and NVIDIA's, but not Apple's GL 4.1. A Linux record with
+// EXT_depth_clamp came from a desktop GL driver; one without, from GLES.
+const DESKTOP_GL_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
+	lin: ["EXT_polygon_offset_clamp"],
 };
 
 const ALIASED_LINE_WIDTH_RANGE = "33902";
@@ -142,7 +152,10 @@ function contextConfig(
 	const extensions = (webgl.supportedExtensions as string[]).filter(
 		(extension) => !blocked.has(extension),
 	);
-	for (const extension of BACKEND_EXTENSIONS[targetOs] ?? []) {
+	const added = [...(BACKEND_EXTENSIONS[targetOs] ?? [])];
+	if (extensions.includes("EXT_depth_clamp"))
+		added.push(...(DESKTOP_GL_EXTENSIONS[targetOs] ?? []));
+	for (const extension of added) {
 		if (extensions.includes(extension)) continue;
 		// Firefox lists them in WebGLExtensionID order: alphabetical, ignoring case.
 		const at = extensions.findIndex(
