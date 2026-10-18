@@ -231,7 +231,7 @@ diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/H
      return NS_OK;
    }
  
-   nsAutoString customUserAgent;
+   nsAutoCString customUserAgent;
    bc->GetCustomUserAgent(customUserAgent);
    if (customUserAgent.IsEmpty() || customUserAgent.IsVoid()) {
 diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp

@@ -71,6 +71,10 @@ const browser = await Camoufox({
 locale, geolocation and the WebRTC IP from it. Pass an IP string instead to
 skip the lookup.
 
+Without a proxy, sites can reach this machine over IPv6. IPv6 stays on when the
+machine's IPv6 address geolocates where the IPv4 identity does. Otherwise, the
+browser behaves as on an IPv4-only network, and a `LeakWarning` says why.
+
 ### Persistent profile
 
 ```javascript
@@ -150,7 +154,7 @@ host's only when the identity claims the host's GPU. Otherwise
 |---|---|---|
 | `false` (default) | A normal window | Needs a display. |
 | `true` | Firefox headless | Camoufox patches the headless tells it knows about. |
-| `"virtual"` | A headed browser on a private Xvfb display | Linux only, needs `Xvfb`. Handled by `Camoufox()`, `NewBrowser()` and `launchServer()`. The display is 1x1 unless `CAMOUFOX_VIRTUAL_DISPLAY_SIZE` (e.g. `1920x1080x24`) says otherwise. |
+| `"virtual"` | A headed browser on a private Xvfb display | Linux only, needs `Xvfb` and `setpriv` (util-linux). Handled by `Camoufox()`, `NewBrowser()` and `launchServer()`. The display is 1x1 unless `CAMOUFOX_VIRTUAL_DISPLAY_SIZE` (e.g. `1920x1080x24`) says otherwise. |
 
 ### Remote server
 
@@ -199,7 +203,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `os` | `string \| string[]` | fpgen's real-world mix | `"windows"`, `"macos"`, `"linux"`, `"android"`, or a list to pick from. A `navigator.userAgent` in `config` overrides it with the user agent's OS (a `LeakWarning` when they disagree). See [Firefox for Android](#firefox-for-android). |
 | `headless` | `boolean \| "virtual"` | `false` | See [Headless modes](#headless-modes). |
 | `proxy` | `{ server, username?, password?, bypass? }` | none | Playwright proxy. |
-| `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. |
+| `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. |
 | `geoip_db` | `string` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
 | `locale` | `string \| string[]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"`. The first is used for `Intl`. |
 | `humanize` | `boolean \| number` | off | Human cursor movement. A number caps one movement at that many seconds (default cap 1.5). |

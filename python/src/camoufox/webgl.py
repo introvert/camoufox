@@ -46,10 +46,18 @@ _NEVER_EXPOSED_EXTENSIONS = frozenset(
 # extension the GPU cannot back; it stays filtered off Windows.
 _HOST_DEPENDENT_EXTENSIONS = frozenset({'OVR_multiview2'})
 
-# Extensions the claimed OS's backend exposes on every GPU in Firefox 156,
-# which fpgen's Firefox 146 records lack. ANGLE sets depthClampEXT
-# unconditionally on D3D11 (renderer11_utils.cpp); 146's ANGLE did not.
-_BACKEND_EXTENSIONS = {'win': ('EXT_depth_clamp',)}
+# Extensions the claimed OS's backend exposes on every GPU in the running
+# Firefox, which fpgen's Firefox 146 records lack. ANGLE's D3D11 backend sets
+# depthClampEXT unconditionally and polygonOffsetClampEXT from feature level
+# 10_0, which every WebGL2 GPU has (renderer11_utils.cpp); Firefox exposes
+# them from 156 and 158.
+_BACKEND_EXTENSIONS = {'win': ('EXT_depth_clamp', 'EXT_polygon_offset_clamp')}
+
+# Firefox 158 exposes EXT_polygon_offset_clamp where the driver has GL 4.6 or
+# ARB/EXT_polygon_offset_clamp (GLContextFeatures.cpp): Linux's desktop GL
+# drivers, Mesa's and NVIDIA's, but not Apple's GL 4.1. A Linux record with
+# EXT_depth_clamp came from a desktop GL driver; one without, from GLES.
+_DESKTOP_GL_EXTENSIONS = {'lin': ('EXT_polygon_offset_clamp',)}
 
 _ALIASED_LINE_WIDTH_RANGE = '33902'
 
@@ -114,7 +122,10 @@ def firefox_gpus(target_os: str) -> FrozenSet[Tuple[str, str]]:
 def _context_config(prefix: str, webgl: Dict[str, Any], target_os: str) -> Dict[str, Any]:
     blocked = _filtered_extensions(target_os)
     extensions = [extension for extension in webgl['supportedExtensions'] if extension not in blocked]
-    for extension in _BACKEND_EXTENSIONS.get(target_os, ()):
+    added = _BACKEND_EXTENSIONS.get(target_os, ())
+    if 'EXT_depth_clamp' in extensions:
+        added += _DESKTOP_GL_EXTENSIONS.get(target_os, ())
+    for extension in added:
         if extension not in extensions:
             # Firefox lists them in WebGLExtensionID order: alphabetical, ignoring case.
             at = next((i for i, other in enumerate(extensions) if other.casefold() > extension.casefold()), None)

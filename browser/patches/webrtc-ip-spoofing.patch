@@ -191,19 +191,18 @@ index cb146517aa..f2fa8a3543 100644
  # in unified builds (it includes RoverfoxStorageManager.h which can affect
  # alphabetically-later files like BarProps.cpp)
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index e1281931d5..f7006744e5 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -331,6 +331,8 @@
+@@ -332,6 +332,8 @@
  #include "xpcprivate.h"
  #include "xpcpublic.h"
  
 +#include "WebRTCIPManager.h"
 +
- #ifdef NS_PRINTING
- #  include "nsIPrintSettings.h"
+ #ifdef MOZ_WEBSPEECH
+ #  include "mozilla/dom/SpeechSynthesis.h"
  #endif
-@@ -7789,6 +7791,18 @@ void nsGlobalWindowInner::SetTimezone(const nsAString& timezone, ErrorResult& aR
+@@ -7785,6 +7787,18 @@ void nsGlobalWindowInner::SetTimezone(const nsAString& timezone, ErrorResult& aR
    RoverfoxStorageManager::RemoveSetter("setTimezone");
  }
  
@@ -1117,6 +1116,35 @@ index f15df437c8..824c40de63 100644
    if (r) ABORT(r);
  
    _status = 0;
+diff --git a/dom/media/webrtc/transport/nricectx.cpp b/dom/media/webrtc/transport/nricectx.cpp
+index 0288b6fc29..1ec530940e 100644
+--- a/dom/media/webrtc/transport/nricectx.cpp
++++ b/dom/media/webrtc/transport/nricectx.cpp
+@@ -75,6 +75,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+ // Local includes
+ #include "mozilla/Base64.h"
++#include "mozilla/net/DNS.h"
+ #include "nr_socket_prsock.h"
+ #include "nricectx.h"
+ #include "nricemediastream.h"
+@@ -679,6 +680,16 @@ nsTArray<NrIceStunAddr> NrIceCtx::GetStunAddrs() {
+     MOZ_MTLOG(ML_INFO, "Error finding local stun addresses");
+   } else {
+     for (int i = 0; i < addr_ct; ++i) {
++      // Camoufox: a host on an IPv4-only network has no routable IPv6
++      // address to gather candidates from.
++      char ip[INET6_ADDRSTRLEN];
++      net::NetAddr netAddr;
++      if (!nr_transport_addr_get_addrstring(&local_addrs[i].addr, ip,
++                                            sizeof(ip)) &&
++          NS_SUCCEEDED(netAddr.InitFromString(nsDependentCString(ip))) &&
++          netAddr.IsUnreachableOnIPv4OnlyNetwork()) {
++        continue;
++      }
+       NrIceStunAddr addr(&local_addrs[i]);
+       addrs.AppendElement(addr);
+     }
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
 index 6cf202d17a..6a5b50744d 100644
 --- a/dom/webidl/Window.webidl

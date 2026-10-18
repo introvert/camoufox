@@ -170,7 +170,7 @@ diff --git a/dom/base/nsPIDOMWindow.h b/dom/base/nsPIDOMWindow.h
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -486,16 +486,14 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -488,16 +488,14 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
    virtual nsresult DispatchSyncPopState() override;
  
    // Inner windows only.
@@ -187,9 +187,9 @@ diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
    void CollectDOMSizesForDataDocuments(nsWindowSizes&) const;
    void RegisterDataDocumentForMemoryReporting(Document*);
    void UnregisterDataDocumentForMemoryReporting(Document*);
-@@ -654,12 +652,13 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
-   mozilla::dom::Element* GetFrameElement(nsIPrincipal& aSubjectPrincipal,
+@@ -657,12 +655,13 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
                                           mozilla::ErrorResult& aError);
+   MOZ_CAN_RUN_SCRIPT
    mozilla::dom::Nullable<mozilla::dom::WindowProxyHolder> Open(
        const nsAString& aUrl, const nsAString& aName, const nsAString& aOptions,
        mozilla::ErrorResult& aError);
@@ -286,9 +286,9 @@ diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
      screenAngle = nsRFPService::ViewportSizeToAngle(size.width, size.height);
    }
    int16_t angle = AssertedCast<int16_t>(screenAngle);
-diff --git a/widget/EventMessageList.h b/widget/EventMessageList.h
---- a/widget/EventMessageList.h
-+++ b/widget/EventMessageList.h
+diff --git a/widget/EventMessageList.inc b/widget/EventMessageList.inc
+--- a/widget/EventMessageList.inc
++++ b/widget/EventMessageList.inc
 @@ -407,15 +407,15 @@ NS_EVENT_MESSAGE(eOpen)
  // Device motion and orientation
  NS_EVENT_MESSAGE(eDeviceOrientation)

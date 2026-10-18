@@ -180,10 +180,9 @@ index ec540bce58..5da611e913 100644
      mGeolocationServiceOverride->Update(aGeolocationOverride.Value());
    } else if (RefPtr<GeolocationService> serviceOverride =
 diff --git a/docshell/base/BrowsingContext.h b/docshell/base/BrowsingContext.h
-index c1100f1503..ab3f514b7e 100644
 --- a/docshell/base/BrowsingContext.h
 +++ b/docshell/base/BrowsingContext.h
-@@ -206,11 +206,11 @@
+@@ -204,11 +204,11 @@ struct EmbedderColorSchemes {
    FIELD(HasScreenAreaOverride, bool)                                          \
    /* ScreenOrientation-related APIs */                                        \
    FIELD(CurrentOrientationAngle, float)                                       \
@@ -191,13 +190,13 @@ index c1100f1503..ab3f514b7e 100644
 +  FIELD(CurrentOrientationType, dom::OrientationType)                \
    FIELD(OrientationLock, mozilla::hal::ScreenOrientation)                     \
    FIELD(HasOrientationOverride, bool)                                         \
-   FIELD(UserAgentOverride, nsString)                                          \
+   FIELD(UserAgentOverride, nsCString)                                         \
 -  FIELD(TouchEventsOverrideInternal, mozilla::dom::TouchEventsOverride)       \
 +  FIELD(TouchEventsOverrideInternal, dom::TouchEventsOverride)       \
    FIELD(EmbedderElementType, Maybe<nsString>)                                 \
    FIELD(MessageManagerGroup, nsString)                                        \
    FIELD(MaxTouchPointsOverride, uint8_t)                                      \
-@@ -260,6 +260,8 @@
+@@ -258,6 +258,8 @@ struct EmbedderColorSchemes {
     * scrollbars clear the rounded content-area corners. */                    \
    FIELD(EmbedderScrollbarInset, LayoutDeviceIntMargin)                        \
    FIELD(DisplayMode, dom::DisplayMode)                                        \
@@ -206,7 +205,7 @@ index c1100f1503..ab3f514b7e 100644
    /* The number of entries added to the session history because of this       \
     * browsing context. */                                                     \
    FIELD(HistoryEntryCount, uint32_t)                                          \
-@@ -1122,6 +1124,10 @@
+@@ -1127,6 +1129,10 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
      return Top()->GetAnimationsPlayBackRateMultiplier();
    }
  
@@ -217,7 +216,7 @@ index c1100f1503..ab3f514b7e 100644
    bool IsInBFCache() const;
    bool IsEnteringBFCache() const { return mIsEnteringBFCache; }
    void DeactivateDocuments();
-@@ -1347,6 +1353,11 @@
+@@ -1352,6 +1358,11 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
      return IsTop();
    }
  
@@ -229,7 +228,7 @@ index c1100f1503..ab3f514b7e 100644
    bool CanSet(FieldIndex<IDX_ForcedColorsOverride>, dom::ForcedColorsOverride,
                ContentParent*) {
      return IsTop();
-@@ -1390,6 +1401,9 @@
+@@ -1395,6 +1406,9 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
    void DidSet(FieldIndex<IDX_AnimationsPlayBackRateMultiplier>,
                double aOldValue);
  
@@ -865,10 +864,9 @@ index 818005d2cf..ccf2153d03 100644
  
  AutoplayPolicy Navigator::GetAutoplayPolicy(AutoplayPolicyMediaType aType) {
 diff --git a/dom/base/nsContentUtils.cpp b/dom/base/nsContentUtils.cpp
-index ea54b38955..67eb1287f3 100644
 --- a/dom/base/nsContentUtils.cpp
 +++ b/dom/base/nsContentUtils.cpp
-@@ -10414,6 +10414,8 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
+@@ -10431,6 +10431,8 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
    EventMessage msg;
    Maybe<WidgetMouseEvent::ExitFrom> exitFrom;
    bool contextMenuKey = false;
@@ -877,7 +875,7 @@ index ea54b38955..67eb1287f3 100644
    if (aType.EqualsLiteral("mousedown")) {
      msg = eMouseDown;
    } else if (aType.EqualsLiteral("mouseup")) {
-@@ -10440,13 +10442,26 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
+@@ -10457,6 +10459,12 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
      msg = eMouseHitTest;
    } else if (aType.EqualsLiteral("MozMouseExploreByTouch")) {
      msg = eMouseExploreByTouch;
@@ -890,6 +888,7 @@ index ea54b38955..67eb1287f3 100644
    } else {
      return Err(NS_ERROR_FAILURE);
    }
+@@ -10468,7 +10476,14 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
  
    Maybe<WidgetPointerEvent> pointerEvent;
    Maybe<WidgetMouseEvent> mouseEvent;
@@ -905,7 +904,7 @@ index ea54b38955..67eb1287f3 100644
      if (MOZ_UNLIKELY(aOptions.mIsWidgetEventSynthesized)) {
        MOZ_ASSERT_UNREACHABLE(
            "The event shouldn't be dispatched as a synthesized event");
-@@ -10474,6 +10489,7 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
+@@ -10496,6 +10511,7 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
    mozilla::widget::AutoSynthesizedEventCallbackNotifier notifier(callback);
  
    WidgetMouseEvent& mouseOrPointerEvent =
@@ -913,7 +912,7 @@ index ea54b38955..67eb1287f3 100644
        pointerEvent.isSome() ? pointerEvent.ref() : mouseEvent.ref();
    mouseOrPointerEvent.pointerId = aMouseEventData.mIdentifier;
    mouseOrPointerEvent.mModifiers =
-@@ -10498,6 +10514,8 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
+@@ -10520,6 +10536,8 @@ Result<bool, nsresult> nsContentUtils::SynthesizeMouseEvent(
    mouseOrPointerEvent.mFlags.mIsSynthesizedForTests =
        aOptions.mIsDOMEventSynthesized;
    mouseOrPointerEvent.mExitFrom = std::move(exitFrom);
@@ -1399,13 +1398,12 @@ index 36ec79dc9e..5867a82022 100644
  
  mozilla::ipc::IPCResult BrowserChild::RecvNormalPriorityRealMouseButtonEvent(
 diff --git a/dom/ipc/CoalescedMouseData.cpp b/dom/ipc/CoalescedMouseData.cpp
-index a1a902e6db..54870890e2 100644
 --- a/dom/ipc/CoalescedMouseData.cpp
 +++ b/dom/ipc/CoalescedMouseData.cpp
-@@ -93,6 +93,9 @@ bool CoalescedMouseData::CanCoalesce(const WidgetMouseEvent& aMouseMoveEvent,
-       mCoalescedInputEvent->mButton != aMouseMoveEvent.mButton ||
+@@ -94,6 +94,9 @@ bool CoalescedMouseData::CanCoalesce(const WidgetMouseEvent& aMouseMoveEvent,
        mCoalescedInputEvent->mButtons != aMouseMoveEvent.mButtons ||
-       mCoalescedInputEvent->mMovement != aMouseMoveEvent.mMovement ||
+       mCoalescedInputEvent->mMovement.isSome() !=
+           aMouseMoveEvent.mMovement.isSome() ||
 +      // `mJugglerEventId` is 0 for non-juggler events and a unique number for
 +      // juggler-emitted events.
 +      mCoalescedInputEvent->mJugglerEventId != aMouseMoveEvent.mJugglerEventId ||
@@ -1736,19 +1734,18 @@ index 584d39da5f..65eb701435 100644
     * returned quads are further translated relative to the window
     * origin -- which is not the layout origin. Further translation
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
-index c419101584..a25ad800a0 100644
 --- a/dom/webidl/Window.webidl
 +++ b/dom/webidl/Window.webidl
-@@ -396,6 +396,8 @@ dictionary SynthesizeMouseEventData : SynthesizeEventData {
-   short inputSource = 1;
-   // Modifiers pressed, using constants defined as MODIFIER_* in nsIDOMWindowUtils.
-   long modifiers = 0;
+@@ -400,6 +400,8 @@ dictionary SynthesizeMouseEventData : SynthesizeEventData {
+   // reports while the native pointer is locked. Must be specified together.
+   long movementX;
+   long movementY;
 +  // Juggler event identifier for tracking events across processes.
 +  unsigned long jugglerEventId = 0;
  };
  
  // Mozilla-specific stuff
-@@ -434,6 +436,8 @@ dictionary SynthesizeEventOptions {
+@@ -438,6 +440,8 @@ dictionary SynthesizeEventOptions {
    // Set this to true to ensure that the event is dispatched to this DOM window
    // or one of its children.
    boolean toWindow = false;
@@ -2769,18 +2766,15 @@ index 0000000000..040cbc972b
 +
 +#endif  // API_LOCATION_H_
 diff --git a/toolkit/components/browser/nsIWebBrowserChrome.idl b/toolkit/components/browser/nsIWebBrowserChrome.idl
-index c5c10b0e20..9f36ca5334 100644
 --- a/toolkit/components/browser/nsIWebBrowserChrome.idl
 +++ b/toolkit/components/browser/nsIWebBrowserChrome.idl
-@@ -94,7 +94,10 @@ interface nsIWebBrowserChrome : nsISupports
-     // ignored for Linux.
-     const unsigned long CHROME_SUPPRESS_ANIMATION     = 1 << 24;
+@@ -100,7 +100,8 @@ interface nsIWebBrowserChrome : nsISupports
+     // matching on a combination of ordinary window features.
+     const unsigned long CHROME_MEDIA_PIP              = 1 << 25;
  
--    // Two bits are free here.
+-    // One bit is free here.
 +    // Whether this window has "width" or "height" defined in features
 +    const unsigned long JUGGLER_WINDOW_EXPLICIT_SIZE  = 1 << 26;
-+
-+    // One bit is free here.
  
      const unsigned long CHROME_CENTER_SCREEN          = 1 << 27;
  
@@ -3352,7 +3346,6 @@ index 8484851f67..2804831ec7 100644
  
  LayoutDeviceIntSize HeadlessCompositorWidget::GetClientSize() {
 diff --git a/widget/headless/HeadlessCompositorWidget.h b/widget/headless/HeadlessCompositorWidget.h
-index f9454a79f3..68e7b94c3a 100644
 --- a/widget/headless/HeadlessCompositorWidget.h
 +++ b/widget/headless/HeadlessCompositorWidget.h
 @@ -5,6 +5,7 @@
@@ -3360,13 +3353,13 @@ index f9454a79f3..68e7b94c3a 100644
  #define widget_headless_HeadlessCompositorWidget_h
  
 +#include "mozilla/ReentrantMonitor.h"
- #include "HeadlessWidget.h"
  #include "mozilla/widget/CompositorWidget.h"
+ #include "mozilla/widget/HeadlessWidget.h"
  
-@@ -21,8 +22,11 @@ class HeadlessCompositorWidget final : public CompositorWidget,
+@@ -21,8 +22,11 @@ class HeadlessCompositorWidget : public CompositorWidget,
                             HeadlessWidget* aWindow);
  
-   void NotifyClientSizeChanged(const LayoutDeviceIntSize& aClientSize);
+   void NotifyClientSizeChanged(const LayoutDeviceIntSize& aClientSize) override;
 +  void SetSnapshotListener(HeadlessWidget::SnapshotListener&& listener);
  
    // CompositorWidget Overrides
@@ -3375,7 +3368,7 @@ index f9454a79f3..68e7b94c3a 100644
  
    uintptr_t GetWidgetKey() override;
  
-@@ -40,10 +44,18 @@ class HeadlessCompositorWidget final : public CompositorWidget,
+@@ -40,10 +44,18 @@ class HeadlessCompositorWidget : public CompositorWidget,
    }
  
   private:
@@ -3395,7 +3388,6 @@ index f9454a79f3..68e7b94c3a 100644
  
  }  // namespace widget
 diff --git a/widget/headless/HeadlessWidget.cpp b/widget/headless/HeadlessWidget.cpp
-index 0c28540ee6..23458a37b6 100644
 --- a/widget/headless/HeadlessWidget.cpp
 +++ b/widget/headless/HeadlessWidget.cpp
 @@ -113,6 +113,8 @@ void HeadlessWidget::Destroy() {
@@ -3407,17 +3399,21 @@ index 0c28540ee6..23458a37b6 100644
    nsIWidget::OnDestroy();
  
    nsIWidget::Destroy();
-@@ -574,5 +576,14 @@ nsresult HeadlessWidget::SynthesizeNativeTouchpadPan(
+@@ -567,5 +569,18 @@ nsresult HeadlessWidget::SynthesizeNativeTouchpadPan(
    return NS_OK;
  }
  
 +void HeadlessWidget::SetSnapshotListener(SnapshotListener&& listener) {
-+  if (!mCompositorWidget) {
++  HeadlessCompositorWidget* compositorWidget =
++      mCompositorWidgetDelegate
++          ? mCompositorWidgetDelegate->AsHeadlessCompositorWidget()
++          : nullptr;
++  if (!compositorWidget) {
 +    if (listener)
 +      fprintf(stderr, "Trying to set SnapshotListener without compositor widget\n");
 +    return;
 +  }
-+  mCompositorWidget->SetSnapshotListener(std::move(listener));
++  compositorWidget->SetSnapshotListener(std::move(listener));
 +}
 +
  }  // namespace widget

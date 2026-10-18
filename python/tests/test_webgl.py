@@ -42,7 +42,9 @@ def test_converter_reproduces_the_recorded_device():
     value, less the UNMASKED_* strings, which the browser takes from
     webGl:vendor/renderer rather than the table. Keys since marked removed
     (contextAttributes) are no longer sent. WebGL1's line width range is
-    WebGL2's since Firefox 156 (test_webgl1_line_width_range_is_webgl2s)."""
+    WebGL2's since Firefox 156 (test_webgl1_line_width_range_is_webgl2s), and
+    Firefox 158 adds EXT_polygon_offset_clamp
+    (test_polygon_offset_clamp_follows_the_gl_backend)."""
     removed = {
         entry["property"]
         for entry in json.loads(PROPERTIES.read_text())
@@ -51,6 +53,8 @@ def test_converter_reproduces_the_recorded_device():
     old = json.loads((Path(__file__).parent / "data" / "webgl-gtx980-linux.json").read_text())
     old = {key: value for key, value in old.items() if key not in removed}
     old["webGl:parameters"]["33902"] = old["webGl2:parameters"]["33902"]
+    for key in ("webGl:supportedExtensions", "webGl2:supportedExtensions"):
+        old[key] = sorted([*old[key], "EXT_polygon_offset_clamp"], key=str.casefold)
     new = webgl_for_gpu("lin", *_GTX_980_LINUX, seed=0)
 
     assert new.keys() == old.keys()
@@ -196,7 +200,7 @@ def test_draft_extensions_filtered_on_every_os():
     webgl2 = {**recorded, "supportedExtensions": ["EXT_texture_norm16", "WEBGL_clip_cull_distance", "OVR_multiview2"]}
     for target_os in OSES:
         config = webgl.to_config(recorded, webgl2, target_os)
-        backend = ["EXT_depth_clamp"] if target_os == "win" else []
+        backend = ["EXT_depth_clamp", "EXT_polygon_offset_clamp"] if target_os == "win" else []
         assert config["webGl:supportedExtensions"] == ["ANGLE_instanced_arrays", *backend]
         assert config["webGl2:supportedExtensions"] == (backend + ["OVR_multiview2"] if target_os == "win" else [])
 
@@ -206,6 +210,18 @@ def test_windows_exposes_ext_depth_clamp_on_every_device():
     fpgen's Windows records come from Firefox 146, which did not."""
     for key in ("webGl:supportedExtensions", "webGl2:supportedExtensions"):
         assert all("EXT_depth_clamp" in exts for exts in _extensions("win", key) if exts), key
+
+
+def test_polygon_offset_clamp_follows_the_gl_backend():
+    """Firefox 158 exposes EXT_polygon_offset_clamp through ANGLE on Windows and
+    through a desktop GL driver on Linux; fpgen's Firefox 146 records never
+    have it. Apple's GL 4.1 lacks it, and a Linux GLES record (no
+    EXT_depth_clamp) is not given it."""
+    for key in ("webGl:supportedExtensions", "webGl2:supportedExtensions"):
+        assert all("EXT_polygon_offset_clamp" in exts for exts in _extensions("win", key) if exts), key
+        assert not any("EXT_polygon_offset_clamp" in exts for exts in _extensions("mac", key)), key
+        for exts in _extensions("lin", key):
+            assert ("EXT_polygon_offset_clamp" in exts) == ("EXT_depth_clamp" in exts), key
 
 
 def test_extensions_are_in_firefoxs_order():
@@ -223,6 +239,7 @@ def test_extensions_are_in_firefoxs_order():
         "EXT_color_buffer_half_float",
         "EXT_depth_clamp",
         "EXT_disjoint_timer_query",
+        "EXT_polygon_offset_clamp",
     ]
     for target_os in OSES:
         for s in range(100):

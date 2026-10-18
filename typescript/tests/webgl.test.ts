@@ -81,8 +81,16 @@ describe.skipIf(!MODEL.ok)("webgl (test_webgl.py)", () => {
 				JSON.parse(fs.readFileSync(GTX_980_FIXTURE, "utf-8")),
 			).filter(([key]) => !removed.has(key)),
 		);
-		// WebGL1's line width range is WebGL2's since Firefox 156.
+		// WebGL1's line width range is WebGL2's since Firefox 156, and Firefox
+		// 158 adds EXT_polygon_offset_clamp.
 		old["webGl:parameters"]["33902"] = old["webGl2:parameters"]["33902"];
+		for (const key of [
+			"webGl:supportedExtensions",
+			"webGl2:supportedExtensions",
+		])
+			old[key] = [...old[key], "EXT_polygon_offset_clamp"].sort((a, b) =>
+				a.toLowerCase() < b.toLowerCase() ? -1 : 1,
+			);
 		const fresh = JSON.parse(
 			orjsonDumps(webglForGpu("lin", ...GTX_980_LINUX, 0), false),
 		);
@@ -254,6 +262,27 @@ describe.skipIf(!MODEL.ok)("webgl (test_webgl.py)", () => {
 		}
 	});
 
+	it("EXT_polygon_offset_clamp follows the GL backend", () => {
+		// Firefox 158 exposes it through ANGLE on Windows and through a desktop
+		// GL driver on Linux; Apple's GL 4.1 lacks it, and a Linux GLES record
+		// (no EXT_depth_clamp) is not given it.
+		for (const key of [
+			"webGl:supportedExtensions",
+			"webGl2:supportedExtensions",
+		]) {
+			for (const exts of extensions("win", key)) {
+				if (exts.size)
+					expect(exts.has("EXT_polygon_offset_clamp"), key).toBe(true);
+			}
+			for (const exts of extensions("mac", key))
+				expect(exts.has("EXT_polygon_offset_clamp"), key).toBe(false);
+			for (const exts of extensions("lin", key))
+				expect(exts.has("EXT_polygon_offset_clamp"), key).toBe(
+					exts.has("EXT_depth_clamp"),
+				);
+		}
+	});
+
 	it("extensions are in Firefox's order", () => {
 		// WebGLExtensionID order: alphabetical, ignoring case.
 		const firefoxOrder = (exts: string[]) =>
@@ -305,6 +334,7 @@ it("an extension the backend adds takes Firefox's position", () => {
 		"EXT_color_buffer_half_float",
 		"EXT_depth_clamp",
 		"EXT_disjoint_timer_query",
+		"EXT_polygon_offset_clamp",
 	]);
 });
 
@@ -331,7 +361,8 @@ it("draft extensions are filtered on every OS", () => {
 	};
 	for (const os of OSES) {
 		const config = toConfig(recorded, webgl2, os);
-		const backend = os === "win" ? ["EXT_depth_clamp"] : [];
+		const backend =
+			os === "win" ? ["EXT_depth_clamp", "EXT_polygon_offset_clamp"] : [];
 		expect(config["webGl:supportedExtensions"]).toEqual([
 			"ANGLE_instanced_arrays",
 			...backend,

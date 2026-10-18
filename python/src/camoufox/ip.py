@@ -1,3 +1,4 @@
+import ipaddress
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -65,12 +66,18 @@ class Proxy:
 
 @lru_cache(128, typed=True)
 def valid_ipv4(ip: str) -> bool:
-    return bool(re.match(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$', ip))
+    try:
+        return isinstance(ipaddress.ip_address(ip), ipaddress.IPv4Address)
+    except ValueError:
+        return False
 
 
 @lru_cache(128, typed=True)
 def valid_ipv6(ip: str) -> bool:
-    return bool(re.match(r'^(([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4})$', ip))
+    try:
+        return isinstance(ipaddress.ip_address(ip), ipaddress.IPv6Address)
+    except ValueError:
+        return False
 
 
 def validate_ip(ip: str) -> None:
@@ -104,6 +111,24 @@ PROXY_LOOKUP_FAILED = (
     "Could not look up the proxy's exit IP and timezone. Pass webrtc_ip and "
     "timezone_id explicitly to skip the lookup"
 )
+
+
+@lru_cache(maxsize=None)
+def public_ipv6() -> Optional[str]:
+    """
+    This host's public IPv6 address, or None when it has none it can reach the
+    internet from. The hosts have AAAA records only, so an answer proves the route.
+    """
+    for url in ("https://api6.ipify.org", "https://v6.ident.me"):
+        try:
+            resp = requests.get(url, timeout=5, verify=True)
+            resp.raise_for_status()
+        except requests.RequestException:
+            continue
+        ip = resp.text.strip()
+        if valid_ipv6(ip):
+            return ip
+    return None
 
 
 @lru_cache(maxsize=None)

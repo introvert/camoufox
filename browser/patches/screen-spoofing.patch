@@ -362,7 +362,6 @@ index 0a628c93d2..cf8de1839e 100644
  }
  
 diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
-index 1587fcffd8..4b1952bc5d 100644
 --- a/layout/style/nsMediaFeatures.cpp
 +++ b/layout/style/nsMediaFeatures.cpp
 @@ -4,6 +4,7 @@
@@ -393,8 +392,8 @@ index 1587fcffd8..4b1952bc5d 100644
 +  // Camoufox: per-context size first, for the same internal-consistency reason
 +  // as the global override below -- CSS device-width has to agree with
 +  // screen.width or the disagreement is itself the fingerprint.
-+  if (uint32_t w = 0, h = 0; ScreenDimensionManager::GetDimensions(
-+          RoverfoxStorageManager::UserContextId(&aDocument), w, h)) {
++  if (uint32_t w = 0, h = 0; dom::ScreenDimensionManager::GetDimensions(
++          dom::RoverfoxStorageManager::UserContextId(&aDocument), w, h)) {
 +    return CSSPixel::ToAppUnits(
 +        CSSIntSize(static_cast<int32_t>(w), static_cast<int32_t>(h)));
 +  }
@@ -427,8 +426,8 @@ index 1587fcffd8..4b1952bc5d 100644
 +  // override wins over the global config, then colorDepth, then pixelDepth --
 +  // the order nsScreen::PixelDepth uses. Runs before the RFP early-return
 +  // below, since Camoufox runs with ResistFingerprinting enabled.
-+  if (uint32_t d = 0; ScreenDimensionManager::GetColorDepth(
-+          RoverfoxStorageManager::UserContextId(aDocument), d)) {
++  if (uint32_t d = 0; dom::ScreenDimensionManager::GetColorDepth(
++          dom::RoverfoxStorageManager::UserContextId(aDocument), d)) {
 +    return static_cast<int32_t>(d) / 3;
 +  }
 +  if (auto value = MaskConfig::GetUint32("screen.colorDepth")) {
