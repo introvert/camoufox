@@ -158,7 +158,6 @@ index a9d8fb50ba..f3fbefbbfd 100644
    void Alert(nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aError);
    void Alert(const nsAString& aMessage, nsIPrincipal& aSubjectPrincipal,
 diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.cpp
-index 5aaa4279fd..03163036ee 100644
 --- a/dom/canvas/ClientWebGLContext.cpp
 +++ b/dom/canvas/ClientWebGLContext.cpp
 @@ -3,6 +3,12 @@
@@ -180,15 +179,15 @@ index 5aaa4279fd..03163036ee 100644
  
 +uint32_t ClientWebGLContext::GetUserContextId() const {
 +  if (mCanvasElement) {
-+    return RoverfoxStorageManager::UserContextId(mCanvasElement);
++    return dom::RoverfoxStorageManager::UserContextId(mCanvasElement);
 +  }
 +  if (mOffscreenCanvas) {
 +    nsCOMPtr<nsPIDOMWindowInner> win =
 +        do_QueryInterface(mOffscreenCanvas->GetParentObject());
 +    if (win) {
-+      return RoverfoxStorageManager::UserContextId(win);
++      return dom::RoverfoxStorageManager::UserContextId(win);
 +    }
-+    if (WorkerPrivate* wp = GetCurrentThreadWorkerPrivate()) {
++    if (dom::WorkerPrivate* wp = dom::GetCurrentThreadWorkerPrivate()) {
 +      return wp->GetOriginAttributes().mUserContextId;
 +    }
 +  }
@@ -362,7 +361,7 @@ index 5aaa4279fd..03163036ee 100644
 +    // so RENDERER and the UNMASKED_* strings always name the same GPU.
 +    const auto GetSpoofedRenderer = [&]() -> Maybe<std::string> {
 +      nsAutoString stored;
-+      if (WebGLParamsManager::GetRenderer(GetUserContextId(), stored)) {
++      if (dom::WebGLParamsManager::GetRenderer(GetUserContextId(), stored)) {
 +        return Some(std::string(NS_ConvertUTF16toUTF8(stored).get()));
 +      }
 +      if (auto value = MaskConfig::GetString("webGl:renderer")) {
@@ -373,7 +372,7 @@ index 5aaa4279fd..03163036ee 100644
 +
 +    const auto GetSpoofedVendor = [&]() -> Maybe<std::string> {
 +      nsAutoString stored;
-+      if (WebGLParamsManager::GetVendor(GetUserContextId(), stored)) {
++      if (dom::WebGLParamsManager::GetVendor(GetUserContextId(), stored)) {
 +        return Some(std::string(NS_ConvertUTF16toUTF8(stored).get()));
 +      }
 +      if (auto value = MaskConfig::GetString("webGl:vendor")) {
@@ -460,7 +459,7 @@ index 5aaa4279fd..03163036ee 100644
    const auto& shaderPrecisions = *notLost->info.shaderPrecisions;
    const auto args =
        webgl::GetShaderPrecisionFormatArgs{shadertype, precisiontype};
-@@ -6392,6 +6581,17 @@ bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
+@@ -6390,6 +6579,17 @@ bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
      return false;
    }
  
@@ -478,7 +477,7 @@ index 5aaa4279fd..03163036ee 100644
    const auto& limits = Limits();
    return limits.supportedExtensions[ext];
  }
-@@ -6406,6 +6606,18 @@ void ClientWebGLContext::GetSupportedExtensions(
+@@ -6404,6 +6604,18 @@ void ClientWebGLContext::GetSupportedExtensions(
    }
  
    auto& retarr = retval.SetValue();
