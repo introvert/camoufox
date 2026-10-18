@@ -304,7 +304,9 @@ class Runtime {
     // DevTools open as far as content-visible behaviour is concerned (async
     // stack capture, throw-site stack capture, deoptimized asm.js/wasm).
     this._debugger.invisibleToContent = true;
-    this._pendingPromises = new Map();
+    // Firefox 158 removed Debugger.Object.promiseID, so a pending await is
+    // tracked by its own entry rather than keyed by the promise's id.
+    this._pendingPromises = new Set();
     this._executionContexts = new Map();
     this._windowToExecutionContext = new Map();
     this._eventListeners = [];
@@ -543,7 +545,8 @@ class Runtime {
       resolve = a;
       reject = b;
     });
-    this._pendingPromises.set(obj.promiseID, {resolve, reject, executionContext, exceptionDetails, promiseObj: obj});
+    const pending = {resolve, reject, executionContext, exceptionDetails, promiseObj: obj};
+    this._pendingPromises.add(pending);
     // Firefox 155 removed the Debugger.onPromiseSettled hook (Bug 2044167), and
     // assigning it silently creates a plain expando that nothing ever calls --
     // every Promise-returning evaluate used to hang here forever. Instead,
@@ -566,7 +569,7 @@ class Runtime {
     const attached = executionContext._debuggee.executeInGlobalWithBindings(
         'p.then(() => { debugger; }, () => { debugger; })', {p: obj}, {useInnerBindings: true});
     if (!attached || 'throw' in attached) {
-      this._pendingPromises.delete(obj.promiseID);
+      this._pendingPromises.delete(pending);
       if (!this._pendingPromises.size)
         this._debugger.onDebuggerStatement = undefined;
       reject(new Error('Cannot await promise: failed to observe when it settles'));
@@ -578,11 +581,11 @@ class Runtime {
   // pending set and resolve everything that is no longer pending. Content can
   // run `debugger;` of its own, which lands here too; the sweep is a no-op then.
   _onDebuggerStatement() {
-    for (const [promiseID, pendingPromise] of this._pendingPromises) {
+    for (const pendingPromise of this._pendingPromises) {
       const obj = pendingPromise.promiseObj;
       if (obj.promiseState === 'pending')
         continue;
-      this._pendingPromises.delete(promiseID);
+      this._pendingPromises.delete(pendingPromise);
       if (obj.promiseState === 'fulfilled') {
         pendingPromise.resolve({success: true, obj: obj.promiseValue});
         continue;
@@ -619,10 +622,10 @@ class Runtime {
   // destroyed event -- announcing the death of a context the client never saw
   // would be worse than saying nothing.
   _destroyMainWorldContext(context) {
-    for (const [promiseID, {reject, executionContext}] of this._pendingPromises) {
-      if (executionContext === context) {
-        reject(new Error('Execution context was destroyed!'));
-        this._pendingPromises.delete(promiseID);
+    for (const pending of this._pendingPromises) {
+      if (pending.executionContext === context) {
+        pending.reject(new Error('Execution context was destroyed!'));
+        this._pendingPromises.delete(pending);
       }
     }
     if (!this._pendingPromises.size)
@@ -635,10 +638,10 @@ class Runtime {
       this._destroyMainWorldContext(destroyedContext._mainWorldContext);
       destroyedContext._mainWorldContext = null;
     }
-    for (const [promiseID, {reject, executionContext}] of this._pendingPromises) {
-      if (executionContext === destroyedContext) {
-        reject(new Error('Execution context was destroyed!'));
-        this._pendingPromises.delete(promiseID);
+    for (const pending of this._pendingPromises) {
+      if (pending.executionContext === destroyedContext) {
+        pending.reject(new Error('Execution context was destroyed!'));
+        this._pendingPromises.delete(pending);
       }
     }
     if (!this._pendingPromises.size)
