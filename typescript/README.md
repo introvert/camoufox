@@ -156,6 +156,14 @@ host's only when the identity claims the host's GPU. Otherwise
 | `true` | Firefox headless | Camoufox patches the headless tells it knows about. |
 | `"virtual"` | A headed browser on a private Xvfb display | Linux only, needs `Xvfb` and `setpriv` (util-linux). Handled by `Camoufox()`, `NewBrowser()` and `launchServer()`. The display is 1x1 unless `CAMOUFOX_VIRTUAL_DISPLAY_SIZE` (e.g. `1920x1080x24`) says otherwise. |
 
+Every page is its own window, and headed windows stack, so all but the newest
+page's window are covered. Camoufox keeps covered windows rendering, as headless
+does, so nothing that waits for a frame (`mouse.wheel`, for one) hangs on them.
+With many animated pages open that is several times the CPU of rendering only
+the top one. `firefox_user_prefs: { "camoufox.windows.forceActive": false }` lets covered
+windows throttle as stock Firefox does,
+and a frame-waiting call on one can then hang.
+
 ### Remote server
 
 ```javascript
