@@ -471,6 +471,22 @@ rules:
       unbounded await for an ack that never arrives wedges input for every tab
       in the process, permanently, at 0% CPU.
 
+  - id: covered-windows-keep-rendering
+    title: Juggler keeps covered windows active by default, and camoufox.windows.forceActive turns that off
+    check: manual
+    evidence:
+      - "#804: a covered headed window drops onto nsRefreshDriver's InactiveRefreshDriverTimer, which doubles its interval each tick and stops after DEFAULT_INACTIVE_TIMER_DISABLE_SECONDS (600), so mouse.wheel's frame wait hangs"
+      - "browser/tests/playwright/patches/occluded-window-active.py guards the default"
+      - "measured 2026-10-21 on Xvfb, six pages of one browser each running a CSS animation: v157.0.1-beta.37 rendered 1 of 6 pages at about 28% CPU, v158.0-beta.38 rendered 6 of 6 at 105-120%; 158 with the pref off rendered 1 of 6 at 24-27%. Headless and idle headed CPU and memory were the same on both builds"
+    rationale: >-
+      Each Playwright page is its own window, and headed windows stack, so
+      without forceAppWindowActive every page but the newest stops rendering:
+      cheap, and what stock Firefox does to a covered window, but any frame
+      wait on those pages hangs. Forcing them active renders every page, as
+      headless always has, and that was the whole of the CPU rise people saw
+      moving to the 158 build. Both behaviours are stock-shaped, so the choice
+      is the user's; the default is the one that never hangs.
+
   # -------------------------------------------------------------------------
   # Config schema
   # -------------------------------------------------------------------------

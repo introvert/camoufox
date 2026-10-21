@@ -260,7 +260,9 @@ export class TargetRegistry {
       // Firefox deactivates a fully occluded or minimized window, which drops its
       // pages onto a refresh timer that doubles each tick and stops after 600s, so
       // anything awaiting a frame, such as Playwright's mouse.wheel, hangs (#804).
-      domWindow.browsingContext.forceAppWindowActive = true;
+      // Turning the pref off trades that for stock Firefox's throttling of covered
+      // windows, which costs far less CPU when many headful pages are open.
+      domWindow.browsingContext.forceAppWindowActive = Services.prefs.getBoolPref('camoufox.windows.forceActive');
       // In persistent mode, window might be opened long ago and might be
       // already initialized.
       //
