@@ -36,7 +36,7 @@ Supporting patches, with no setter of their own:
 |---|---|
 | `anti-font-fingerprinting.patch` | The context id on each font group |
 | `cross-process-storage.patch` | `RoverfoxStorageManager`, the per-context store, with the IPC that makes a value set in one process readable in every other, and the guard and removal every setter uses |
-| `per-context-consistency.patch` | What follows from a context's own values: `navigator.appVersion` derived from its user agent (windows and workers), that user agent on worker and service worker requests, which have no browsing context to carry Playwright's override, and a per-context locale ("de-DE") expanded to the list a Firefox set to it reports ("de-DE, de") in `Accept-Language` and `navigator.languages` |
+| `per-context-consistency.patch` | What follows from a context's own values: `navigator.appVersion` derived from its user agent (windows and workers), that user agent on worker and service worker requests, which have no browsing context to carry Playwright's override, and a per-context locale ("de-DE") expanded to the list a Firefox set to it reports ("de-DE, de") in `Accept-Language` and `navigator.languages`. That locale is also stored per context, for what has no browsing context to carry it (service workers, worker scripts, shared and service worker requests), and becomes the default locale of the context's content processes, which isolated worlds, worklets and form widgets read |
 
 There is no canvas pixel noise and no glyph-spacing noise: both produce output
 no real machine does ([`ci/tribal-rules.yml`](../ci/tribal-rules.yml)). A
@@ -170,7 +170,7 @@ Global-only patches (no setter) read `CAMOU_CONFIG` at startup:
 | Patch | Config keys | Effect |
 |---|---|---|
 | `geolocation-spoofing.patch` | `geolocation:latitude`, `geolocation:longitude`, `geolocation:accuracy` | Returns these coordinates and grants the permission. Per context, use Playwright's `geolocation` option. |
-| `locale-spoofing.patch` | `locale:*`, `navigator.language` | `navigator.language`, `Accept-Language`, `Intl`, the OS locale. |
+| `locale-spoofing.patch` | `locale:*`, `navigator.language` | `navigator.language`, `Accept-Language`, `Intl`, the OS locale. Per context, use Playwright's `locale` (`per-context-consistency.patch`). |
 | `force-default-pointer.patch` | `navigator.maxTouchPoints` | CSS `pointer` reports a fine pointer on desktop. |
 
 Every patch that reads `CAMOU_CONFIG` is listed in
@@ -206,9 +206,10 @@ The User-Agent's version is rewritten to the running browser's.
 | Fonts | `_generate_random_font_subset()`: one OS-version base plus measured additions ([FONTS.md](FONTS.md)); never from presets |
 | Voices | `_generate_random_voice_subset()`, from `voice-manifests.json`, seeded by the identity; never from presets |
 | Audio seed | Derived from the identity (`NewBrowser`) or random (`NewContext`), never 0 |
-| Timezone | The preset, or `timezone` in `CAMOU_CONFIG` (from geoip); with a proxy, `NewContext` looks it up from the exit IP |
+| Timezone | The preset, or `timezone` in `CAMOU_CONFIG` (from geoip); with a proxy, `NewContext` takes the exit IP's |
+| Locale | Playwright's `locale`; with a proxy, `NewContext` draws one for the exit IP's country, as geoip does at launch |
 | WebRTC IP | `NewContext`'s `webrtc_ip` or the proxy's exit IP, to the IPv4 or IPv6 setter; an invalid address raises `InvalidIP` |
-| Geolocation | The `geolocation` argument, via Playwright |
+| Geolocation | The `geolocation` argument, via Playwright; with a proxy, the exit IP's position |
 
 ## Known limitations
 
@@ -221,6 +222,7 @@ renders, so some signals still show the real OS:
 | GPU rasterization | Canvas and WebGL output carry the host GPU driver's rasterization |
 | System colors | `AccentColor` and system colors differ by OS and desktop |
 | Shader precision behaviour | Actual precision follows the real driver even when the reported formats are spoofed |
+| Browser language | `input.validationMessage`, XML parse errors and other built-in strings use the launch locale's language (`intl.locale.requested`), which the parent process sets for every content process. A context whose `locale` names another language formats with its own locale but words those strings in the launch's |
 | Fonts of another OS | A context's font list only chooses among the fonts the process can reach. On Linux that is the fontconfig written at launch for the launch identity's OS, so a context whose list names another OS's fonts cannot render them, and the missing names fall back like an absent font |
 
 Run each identity on the OS it claims. The per-context patches make each
