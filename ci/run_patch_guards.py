@@ -45,6 +45,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "context-locale-follows",
         "context-os-system-font",
         "fingerprint-setter-seal",
+        "geolocation-accuracy",
         "ipv4-only-network",
         "locale-explicit-names",
         "media-devices-coherence",
