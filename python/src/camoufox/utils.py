@@ -26,8 +26,8 @@ from .fingerprints import Screen, platform_to_os, _set_app_version, apply_mobile
 from . import coherence
 from .coherence import is_mobile_config, is_mobile_user_agent
 from .geolocation import geoip_allowed, get_geolocation
-from .ip import Proxy, public_ip, public_ipv6, valid_ipv4, valid_ipv6
-from .locales import handle_locales
+from .ip import ExitGeo, Proxy, public_ip, public_ipv6, valid_ipv4, valid_ipv6
+from .locales import SELECTOR, handle_locales
 import warnings
 
 from .pkgman import (
@@ -881,6 +881,32 @@ def context_identity(
             'a context another OS or GPU.'
         )
     return os or host_name, gpu
+
+
+def needs_exit_geo(
+    webrtc_ip: Optional[str],
+    geolocation: Optional[Dict[str, float]],
+    context_kwargs: Dict[str, Any],
+) -> bool:
+    """Whether a context behind a proxy needs to look up where the proxy exits:
+    unless the caller gave every value place_at_exit() would fill."""
+    return not (webrtc_ip and geolocation and 'timezone_id' in context_kwargs and 'locale' in context_kwargs)
+
+
+def place_at_exit(
+    geo: ExitGeo,
+    webrtc_ip: Optional[str],
+    geolocation: Optional[Dict[str, float]],
+    context_kwargs: Dict[str, Any],
+) -> Tuple[str, Dict[str, float]]:
+    """Put a context behind a proxy where the proxy exits, as geoip places a
+    launch: its WebRTC IP, clock, locale and position. A clock that moved
+    without the locale and position named two places at once. A value the
+    caller gave is kept. Returns the WebRTC IP and geolocation."""
+    context_kwargs.setdefault('timezone_id', geo.timezone)
+    if 'locale' not in context_kwargs:
+        context_kwargs['locale'] = SELECTOR.from_region(geo.country).as_string
+    return webrtc_ip or geo.ip, geolocation or {'latitude': geo.latitude, 'longitude': geo.longitude}
 
 
 def new_context_options(

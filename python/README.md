@@ -123,7 +123,7 @@ with Camoufox(headless=True, canvas_noise=True) as browser:
 | `os` | `"windows"`, `"macos"`, `"linux"` or `"android"` for the drawn identity. On a browser without canvas noise, the host's OS, and anything else raises `ValueError`; `"android"` draws from the Linux pools, so a Linux host can render it. `"android"` also opens the context with `is_mobile` and `has_touch` ([Firefox for Android](#firefox-for-android)). |
 | `ff_version` | Firefox major version claimed in the User-Agent. Defaults to the browser's own. |
 | `webrtc_ip` | IPv4 or IPv6 address WebRTC reports. |
-| `proxy` | Per-context proxy, in Playwright's format. Unless `webrtc_ip` and `timezone_id` are both given, they are looked up from the proxy's exit IP, and `InvalidIP` is raised if the lookup fails. |
+| `proxy` | Per-context proxy, in Playwright's format. The context is placed where the proxy exits: `webrtc_ip`, `timezone_id`, `locale` and `geolocation` each default to the exit IP's, looked up through the proxy unless all four are given, and `InvalidIP` is raised if the lookup fails. |
 | `geolocation` | `{"latitude": ..., "longitude": ...}`; also grants the `geolocation` permission. |
 | anything else | Passed to Playwright's `new_context()`, overriding the generated value. |
 
