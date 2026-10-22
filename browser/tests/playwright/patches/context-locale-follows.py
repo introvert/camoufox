@@ -1,6 +1,7 @@
 """
-Verify a context's locale and timezone reach every scope of its pages, and its
-locale every request they send (per-context-consistency.patch).
+Verify a context's locale and timezone reach every scope of its pages, its
+locale every request they send, and its language the strings Firefox shows them
+(per-context-consistency.patch).
 
 With a launch locale of en-US and a context created with locale "de-DE", a page
 read de-DE in its own realm but en-US where a realm has no override of its own
@@ -12,9 +13,14 @@ or no browsing context to take one from:
   service    a service worker's navigator.languages and Intl
   wire       Accept-Language on a worker's script and on the requests of shared
              and service workers, which have no browsing context
+  ui         validation messages and XML parse errors, worded in the launch's
+             language by every content process
 
 What PASS means: every scope reports de-DE and Asia/Tokyo (the launch says
-America/New_York), and every request sends the de-DE language list.
+America/New_York), every request sends the de-DE language list, and the
+context's built-in strings are a de-DE launch's, both in a page whose process
+started before the context's locale was known (about:blank) and in one started
+after.
 
     python browser/tests/playwright/patches/context-locale-follows.py
 """
@@ -80,6 +86,18 @@ PROBE = f"""mw:(async () => {{
   return out;
 }})()"""
 
+# Strings Firefox words in the app locale's language, not the page's.
+UI = """() => {
+  const input = document.createElement('input');
+  input.required = true;
+  const email = document.createElement('input');
+  email.type = 'email';
+  email.value = 'x';
+  const xml = new DOMParser().parseFromString('<a>', 'text/xml');
+  return {required: input.validationMessage, email: email.validationMessage,
+          xml: xml.querySelector('parsererror').firstChild.textContent.split('\\n')[0]};
+}"""
+
 SEEN = {}
 
 
@@ -108,10 +126,14 @@ def main() -> int:
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
     try:
+        with Camoufox(**launch_kwargs(locale=LOCALE, i_know_what_im_doing=True)) as browser:
+            expected_ui = browser.new_page().evaluate(UI)
         with Camoufox(**launch_kwargs(locale="en-US", config={"timezone": "America/New_York"},
                                       main_world_eval=True, i_know_what_im_doing=True)) as browser:
             page = browser.new_context(locale=LOCALE, timezone_id=TIMEZONE).new_page()
+            ui = {"about:blank": page.evaluate(UI)}
             page.goto(f"http://127.0.0.1:{srv.server_address[1]}/p.html")
+            ui["page"] = page.evaluate(UI)
             out = page.evaluate(PROBE)
             out["isolated"] = page.evaluate(f"({READ})()")
     finally:
@@ -130,13 +152,18 @@ def main() -> int:
             failures.append(f"wire: {path} sent Accept-Language {accept!r}")
     if not {"/w.js", "/from-dedicated", "/from-shared", "/from-service"} <= SEEN.keys():
         failures.append(f"a request never arrived -- check is vacuous: {sorted(SEEN)}")
+    print(f"  {LOCALE} launch: {expected_ui}")
+    for where, got in ui.items():
+        print(f"  {where:15}: {got}")
+        if got != expected_ui:
+            failures.append(f"ui: {where} words its strings as {got}, a {LOCALE} launch as {expected_ui}")
 
     print()
     if failures:
         for f in failures:
             print(f"FAIL: {f}")
         return 1
-    print("PASS: every scope and every request follows the context's locale and timezone.")
+    print("PASS: every scope, request and built-in string follows the context's locale and timezone.")
     return 0
 
 
