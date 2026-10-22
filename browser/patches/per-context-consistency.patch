@@ -613,7 +613,24 @@ diff --git a/dom/ipc/ContentParent.h b/dom/ipc/ContentParent.h
 diff --git a/dom/ipc/ContentChild.cpp b/dom/ipc/ContentChild.cpp
 --- a/dom/ipc/ContentChild.cpp
 +++ b/dom/ipc/ContentChild.cpp
-@@ -2475,12 +2475,13 @@ mozilla::ipc::IPCResult ContentChild::RecvFontListShmBlockAdded(
+@@ -98,13 +98,16 @@
+ #include "mozilla/gfx/Logging.h"
+ #include "mozilla/gfx/gfxVars.h"
+ #include "mozilla/glean/FOGTransportChild.h"
+ #include "mozilla/hal_sandbox/PHalChild.h"
+ #include "mozilla/image/FetchDecodedImage.h"
+ #include "mozilla/image/RemoteImageProtocolHandler.h"
++#include "js/Context.h"
++#include "js/LocaleSensitive.h"
+ #include "mozilla/intl/L10nRegistry.h"
++#include "mozilla/intl/Locale.h"
+ #include "mozilla/intl/LocaleService.h"
+ #include "mozilla/intl/OSPreferences.h"
+ #include "mozilla/ipc/BackgroundChild.h"
+ #include "mozilla/ipc/Endpoint.h"
+ #include "mozilla/ipc/FileDescriptorUtils.h"
+ #include "mozilla/ipc/GeckoChildProcessHost.h"
+@@ -2475,12 +2478,20 @@ mozilla::ipc::IPCResult ContentChild::RecvFontListShmBlockAdded(
    return IPC_OK();
  }
  
@@ -621,6 +638,13 @@ diff --git a/dom/ipc/ContentChild.cpp b/dom/ipc/ContentChild.cpp
      nsTArray<nsCString>&& aAppLocales) {
    LocaleService::GetInstance()->AssignAppLocales(aAppLocales);
 +  nsContentUtils::FlushStringBundles();
++  // Camoufox: that made the regional locale the default (xpc_LocalizeRuntime);
++  // a context's locale (Locale::SetContextLocale) stays the default instead.
++  if (mozilla::intl::Locale::HasContextLocale()) {
++    AutoJSAPI jsapi;
++    jsapi.Init();
++    JS_ResetDefaultLocale(JS_GetRuntime(jsapi.cx()));
++  }
    return IPC_OK();
  }
  

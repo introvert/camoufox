@@ -20,13 +20,16 @@ What PASS means: every scope reports de-DE and Asia/Tokyo (the launch says
 America/New_York), every request sends the de-DE language list, and the
 context's built-in strings are a de-DE launch's, both in a page whose process
 started before the context's locale was known (about:blank) and in one started
-after.
+after. Those strings need a build with packaged locales (browser/scripts/
+package.py); on one without, a de-DE launch words them in English too and the
+check fails, unless CAMOUFOX_TEST_ALLOW_MISSING lists "packaged-locales".
 
     python browser/tests/playwright/patches/context-locale-follows.py
 """
 
 import functools
 import http.server
+import os
 import sys
 import tempfile
 import threading
@@ -130,6 +133,7 @@ def main() -> int:
             expected_ui = browser.new_page().evaluate(UI)
         with Camoufox(**launch_kwargs(locale="en-US", config={"timezone": "America/New_York"},
                                       main_world_eval=True, i_know_what_im_doing=True)) as browser:
+            launch_ui = browser.new_page().evaluate(UI)
             page = browser.new_context(locale=LOCALE, timezone_id=TIMEZONE).new_page()
             ui = {"about:blank": page.evaluate(UI)}
             page.goto(f"http://127.0.0.1:{srv.server_address[1]}/p.html")
@@ -153,6 +157,14 @@ def main() -> int:
     if not {"/w.js", "/from-dedicated", "/from-shared", "/from-service"} <= SEEN.keys():
         failures.append(f"a request never arrived -- check is vacuous: {sorted(SEEN)}")
     print(f"  {LOCALE} launch: {expected_ui}")
+    if expected_ui == launch_ui:
+        allowed = os.environ.get("CAMOUFOX_TEST_ALLOW_MISSING", "").split(",")
+        if "packaged-locales" in allowed:
+            ui = {}
+            print("  ui: not checked, this build has no packaged locales (allowed: packaged-locales)")
+        else:
+            failures.append("ui: a de-DE launch words its strings as an en-US one, so this "
+                            "build has no packaged locales and the check would prove nothing")
     for where, got in ui.items():
         print(f"  {where:15}: {got}")
         if got != expected_ui:

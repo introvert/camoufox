@@ -859,6 +859,11 @@ jobs:
       contents: read
       # The getter-cost report downloads the last tag build's artifact.
       actions: read
+    env:
+      # The browser under test is the build job's unpackaged dist/bin, which has
+      # no packaged locales (see typescript-browser), so context-locale-follows
+      # cannot compare a context's built-in strings with a de-DE launch's.
+      CAMOUFOX_TEST_ALLOW_MISSING: packaged-locales
     steps:
       - uses: actions/checkout@v4
         with:

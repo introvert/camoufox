@@ -13,7 +13,7 @@ diff --git a/intl/components/moz.build b/intl/components/moz.build
 diff --git a/intl/components/src/Locale.cpp b/intl/components/src/Locale.cpp
 --- a/intl/components/src/Locale.cpp
 +++ b/intl/components/src/Locale.cpp
-@@ -9,25 +9,75 @@
+@@ -9,25 +9,77 @@
  #include "mozilla/TextUtils.h"
  #include "mozilla/Variant.h"
  
@@ -51,6 +51,8 @@ diff --git a/intl/components/src/Locale.cpp b/intl/components/src/Locale.cpp
 +    sContextLocale = (new std::string(aLocale))->c_str();
 +  }
 +}
++
++bool Locale::HasContextLocale() { return sContextLocale != nullptr; }
 +
 +const char* Locale::GetCamouLocale() {
 +  if (const char* context = sContextLocale) {
@@ -92,7 +94,7 @@ diff --git a/intl/components/src/Locale.cpp b/intl/components/src/Locale.cpp
 diff --git a/intl/components/src/Locale.h b/intl/components/src/Locale.h
 --- a/intl/components/src/Locale.h
 +++ b/intl/components/src/Locale.h
-@@ -509,13 +509,28 @@ class MOZ_STACK_CLASS Locale final {
+@@ -509,13 +509,29 @@ class MOZ_STACK_CLASS Locale final {
    /**
     * Returns the default locale as an ICU locale identifier. The returned string
     * is NOT a valid BCP 47 locale!
@@ -116,6 +118,7 @@ diff --git a/intl/components/src/Locale.h b/intl/components/src/Locale.h
 +  // reads the default instead: isolated worlds, worklets, the widgets of form
 +  // controls. Null restores the launch's.
 +  static void SetContextLocale(const char* aLocale);
++  static bool HasContextLocale();
  
    /**
     * Returns an iterator over all supported locales.
