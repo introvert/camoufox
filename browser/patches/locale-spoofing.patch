@@ -13,7 +13,16 @@ diff --git a/intl/components/moz.build b/intl/components/moz.build
 diff --git a/intl/components/src/Locale.cpp b/intl/components/src/Locale.cpp
 --- a/intl/components/src/Locale.cpp
 +++ b/intl/components/src/Locale.cpp
-@@ -17,17 +17,48 @@
+@@ -9,25 +9,77 @@
+ #include "mozilla/TextUtils.h"
+ #include "mozilla/Variant.h"
+ 
+ #include "ICU4CGlue.h"
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <iterator>
+ #include <stddef.h>
  #include <stdint.h>
  #include <string.h>
  #include <utility>
@@ -28,7 +37,27 @@ diff --git a/intl/components/src/Locale.cpp b/intl/components/src/Locale.cpp
  
 +// Camoufox: default-locale hooks (see Locale.h).
 +
++// Each value is leaked: ICU and worker threads may still be reading the
++// previous one, and a process is given a handful at most.
++static std::atomic<const char*> sContextLocale{nullptr};
++
++void Locale::SetContextLocale(const char* aLocale) {
++  if (!aLocale || !*aLocale) {
++    sContextLocale = nullptr;
++    return;
++  }
++  const char* current = sContextLocale;
++  if (!current || strcmp(current, aLocale)) {
++    sContextLocale = (new std::string(aLocale))->c_str();
++  }
++}
++
++bool Locale::HasContextLocale() { return sContextLocale != nullptr; }
++
 +const char* Locale::GetCamouLocale() {
++  if (const char* context = sContextLocale) {
++    return context;
++  }
 +  // The config never changes within a process, so the value is computed once
 +  // into a function-local static (thread-safe to initialise) and the returned
 +  // pointer stays valid. Rewriting a shared std::string on every call raced
@@ -65,7 +94,7 @@ diff --git a/intl/components/src/Locale.cpp b/intl/components/src/Locale.cpp
 diff --git a/intl/components/src/Locale.h b/intl/components/src/Locale.h
 --- a/intl/components/src/Locale.h
 +++ b/intl/components/src/Locale.h
-@@ -511,13 +511,21 @@ class MOZ_STACK_CLASS Locale final {
+@@ -509,13 +509,29 @@ class MOZ_STACK_CLASS Locale final {
    /**
     * Returns the default locale as an ICU locale identifier. The returned string
     * is NOT a valid BCP 47 locale!
@@ -82,6 +111,14 @@ diff --git a/intl/components/src/Locale.h b/intl/components/src/Locale.h
 +  static const char* GetDefaultLocale();
 +
 +  static const char* GetCamouLocale();
++
++  // A context's own locale (Playwright's `locale`, the languageOverride of its
++  // top browsing context) stands in for the launch's in the content processes
++  // its pages run in. Page realms get it per realm already; this covers what
++  // reads the default instead: isolated worlds, worklets, the widgets of form
++  // controls. Null restores the launch's.
++  static void SetContextLocale(const char* aLocale);
++  static bool HasContextLocale();
  
    /**
     * Returns an iterator over all supported locales.

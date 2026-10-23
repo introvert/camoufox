@@ -15,7 +15,8 @@ pages spread across content processes, and each reports which of the
 launch-level fonts and voices it can see.
 
 What PASS means: every page of the context sees the same fonts and voices as
-the first, and fewer than the launch level does.
+the first, and fewer than the launch level does, and a worker of each page sees
+the page's fonts.
 
     python browser/tests/playwright/patches/context-lists-across-processes.py
 """
@@ -39,17 +40,23 @@ PROBE = """async (fonts) => {
   // document.fonts.check() is true for any font that needs no download,
   // installed or not, so measure: a font is there if it changes the width of
   // the text against both fallbacks.
-  const ctx = document.createElement('canvas').getContext('2d');
-  const width = font => { ctx.font = font; return ctx.measureText('mmmmmmmmmmlli10OQ@#').width; };
-  const base = ['monospace', 'serif'].map(g => [g, width(`72px ${g}`)]);
-  const visible = fonts.filter(f => base.some(([g, w]) => width(`72px "${f}", ${g}`) !== w));
+  const visibleFonts = (fonts, ctx) => {
+    const width = font => { ctx.font = font; return ctx.measureText('mmmmmmmmmmlli10OQ@#').width; };
+    const base = ['monospace', 'serif'].map(g => [g, width(`72px ${g}`)]);
+    return fonts.filter(f => base.some(([g, w]) => width(`72px "${f}", ${g}`) !== w));
+  };
+  const visible = visibleFonts(fonts, document.createElement('canvas').getContext('2d'));
+  // A worker, which has no document, draws on an OffscreenCanvas.
+  const code = `onmessage = e => postMessage((${visibleFonts})(e.data, new OffscreenCanvas(1, 1).getContext('2d')));`;
+  const worker = new Worker(URL.createObjectURL(new Blob([code])));
+  const workerFonts = await new Promise(r => { worker.onmessage = e => r(e.data); worker.postMessage(fonts); });
   let voices = speechSynthesis.getVoices();
   if (!voices.length)
     voices = await new Promise(r => {
       speechSynthesis.onvoiceschanged = () => r(speechSynthesis.getVoices());
       setTimeout(() => r(speechSynthesis.getVoices()), 2000);
     });
-  return {fonts: visible, voices: voices.map(v => v.name).sort()};
+  return {fonts: visible, workerFonts, voices: voices.map(v => v.name).sort()};
 }"""
 
 
@@ -98,6 +105,11 @@ async def main() -> int:
     # listed font's aliases (Helvetica for Arial) show there as on Windows.
     passed = True
     first = seen[HOSTS[0]]
+    for host, got in [("launch", launch), *seen.items()]:
+        if got["workerFonts"] != got["fonts"]:
+            passed = False
+            print(f"  FAIL worker fonts on {host}: {len(got['workerFonts'])} visible, "
+                  f"{len(got['fonts'])} in its page")
     for kind in ("fonts", "voices"):
         if len(first[kind]) >= len(launch[kind]):
             passed = False
@@ -110,9 +122,9 @@ async def main() -> int:
                 print(f"  FAIL {kind} on {host}: {len(seen[host][kind])} visible, "
                       f"{len(first[kind])} on {HOSTS[0]}; extra: {extra[:5]}")
     if passed:
-        print(f"  PASS: {len(HOSTS)} sites all see the context's {len(first['fonts'])} fonts "
-              f"and {len(first['voices'])} voice, of {len(launch['fonts'])} and "
-              f"{len(launch['voices'])}")
+        print(f"  PASS: {len(HOSTS)} sites and their workers all see the context's "
+              f"{len(first['fonts'])} fonts and {len(first['voices'])} voice, of "
+              f"{len(launch['fonts'])} and {len(launch['voices'])}")
     return 0 if passed else 1
 
 

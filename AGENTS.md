@@ -234,7 +234,7 @@ this section in step with the launcher options.
 - **`headless="virtual"`** needs Linux, `Xvfb` and `setpriv` from util-linux (`CannotFindXvfb`, `VirtualDisplayNotSupported` otherwise).
 - **`os` values are lowercase** `windows`, `macos`, `linux`, `android` (this fork); anything else raises `InvalidOS`.
 - **`geoip` in Python needs the extra**: `pip install "camoufox[geoip]"`, else `NotInstalledGeoIPExtra`.
-- **`InvalidIP`** is raised when the public-IP or proxy exit-IP lookup fails, or when `webrtc_ip` is not a valid IPv4/IPv6 address. Pass `webrtc_ip` and `timezone_id` to `NewContext` to skip the lookup.
+- **`InvalidIP`** is raised when the public-IP or proxy exit-IP lookup fails, or when `webrtc_ip` is not a valid IPv4/IPv6 address. Pass `webrtc_ip`, `timezone_id`, `locale` and `geolocation` to `NewContext` to skip the lookup.
 - **`InvalidProxy`** means the proxy `server` string could not be parsed.
 - **`UnknownIPLocation`**: the IP is not in the GeoIP database; pass `locale` and set coordinates another way.
 - **Version ceilings:** Playwright below 1.63; Node.js 22.15 or newer.

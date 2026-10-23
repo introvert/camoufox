@@ -112,6 +112,8 @@ async def _browse(browser, proxy: EchoProxy, index: int, start_delay: float) -> 
         # Skip the exit-IP lookup NewContext would otherwise make through the proxy.
         webrtc_ip="203.0.113.1",
         timezone_id="UTC",
+        locale="en-US",
+        geolocation={"latitude": 40.7128, "longitude": -74.006},
     )
     page = await context.new_page()
     seen = []
