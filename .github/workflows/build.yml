@@ -108,7 +108,7 @@ jobs:
 
       - name: Read the browser version
         id: upstream
-        run: grep '^version=' browser/upstream.sh >> "$GITHUB_OUTPUT"
+        run: grep -E '^(version|release)=' browser/upstream.sh >> "$GITHUB_OUTPUT"
 
       - name: Restore sccache
         uses: actions/cache@v4
@@ -116,11 +116,11 @@ jobs:
           path: ${{ env.SCCACHE_DIR }}
           # The same prefix tests.yml uses for linux x86_64, so either workflow
           # can start from the other's cache. A pull request reads caches saved
-          # on its own branch and on main.
-          key: sccache-${{ matrix.target }}-${{ matrix.arch }}-${{ steps.upstream.outputs.version }}-${{ hashFiles('browser/patches/**', 'browser/additions/**', 'browser/assets/*.mozconfig') }}
+          # on its own branch and on main. Never restored across source
+          # directories: sccache hands back dependency files naming the old one.
+          key: sccache-${{ matrix.target }}-${{ matrix.arch }}-${{ steps.upstream.outputs.version }}-${{ steps.upstream.outputs.release }}-${{ hashFiles('browser/patches/**', 'browser/additions/**', 'browser/assets/*.mozconfig') }}
           restore-keys: |
-            sccache-${{ matrix.target }}-${{ matrix.arch }}-${{ steps.upstream.outputs.version }}-
-            sccache-${{ matrix.target }}-${{ matrix.arch }}-
+            sccache-${{ matrix.target }}-${{ matrix.arch }}-${{ steps.upstream.outputs.version }}-${{ steps.upstream.outputs.release }}-
 
       - name: Fetch source
         working-directory: browser

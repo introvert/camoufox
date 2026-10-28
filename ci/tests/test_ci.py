@@ -2601,6 +2601,23 @@ def test_the_compiler_cache_saved_is_the_one_the_build_fills(workflow):
     assert restore["with"]["path"] in (cache_dir, "${{ env.SCCACHE_DIR }}")
 
 
+@pytest.mark.parametrize("workflow", ["tests.yml", "build.yml"])
+def test_the_compiler_cache_never_crosses_source_directories(workflow):
+    """The source directory is camoufox-<version>-<release>.
+
+    sccache returns a hit's dependency file as it was recorded, naming the old
+    directory, and make then has no rule for a source that no longer exists:
+    the beta.40 bump failed that way restoring beta.38's cache.
+    """
+    import yaml
+
+    job = yaml.safe_load((WORKFLOW.parent / workflow).read_text(encoding="utf-8"))["jobs"]["build"]
+    restore = next(s for s in job["steps"] if s.get("name") == "Restore sccache")
+    keys = [restore["with"]["key"], *restore["with"]["restore-keys"].splitlines()]
+    for key in keys:
+        assert re.search(r"version \}\}-\$\{\{ [\w.]*release \}\}-", key), key
+
+
 # ---------------------------------------------------------------------------
 # declared isolation hangs
 # ---------------------------------------------------------------------------

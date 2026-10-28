@@ -554,12 +554,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.SCCACHE_DIR }}
-          # Keyed on the browser version and the patch set, so a pull request
+          # Keyed on the source directory and the patch set, so a pull request
           # that does not touch browser/patches/ starts from a fully warm cache.
-          key: sccache-linux-x86_64-${{ needs.resolve.outputs.browser_version }}-${{ hashFiles('browser/patches/**', 'browser/additions/**', 'browser/assets/*.mozconfig') }}
+          # Never restored across source directories: sccache hands back
+          # dependency files naming the old one.
+          key: sccache-linux-x86_64-${{ needs.resolve.outputs.browser_version }}-${{ needs.resolve.outputs.browser_release }}-${{ hashFiles('browser/patches/**', 'browser/additions/**', 'browser/assets/*.mozconfig') }}
           restore-keys: |
-            sccache-linux-x86_64-${{ needs.resolve.outputs.browser_version }}-
-            sccache-linux-x86_64-
+            sccache-linux-x86_64-${{ needs.resolve.outputs.browser_version }}-${{ needs.resolve.outputs.browser_release }}-
 
       - name: Create swap
         if: steps.prebuilt.outputs.cache-hit != 'true'
