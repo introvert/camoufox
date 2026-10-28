@@ -1,5 +1,4 @@
 diff --git a/dom/base/ChromeUtils.cpp b/dom/base/ChromeUtils.cpp
-index c921614484..516a13d7c7 100644
 --- a/dom/base/ChromeUtils.cpp
 +++ b/dom/base/ChromeUtils.cpp
 @@ -5,6 +5,10 @@
@@ -13,7 +12,7 @@ index c921614484..516a13d7c7 100644
  #include "JSOracleParent.h"
  #include "NonSharedGlobalSyncModuleLoaderScope.h"
  #include "ThirdPartyUtil.h"
-@@ -2814,6 +2818,74 @@ void ChromeUtils::CamouGetStringList(GlobalObject& aGlobal,
+@@ -2827,6 +2831,74 @@ void ChromeUtils::CamouGetStringList(GlobalObject& aGlobal,
    }
  }
  
@@ -24,7 +23,7 @@ index c921614484..516a13d7c7 100644
 +    "setNavigatorPlatform", "setNavigatorOscpu",
 +    "setNavigatorHardwareConcurrency", "setNavigatorUserAgent",
 +    "setScreenDimensions", "setScreenColorDepth",
-+    "setWebGLVendor", "setWebGLRenderer",
++    "setWebGLVendor", "setWebGLRenderer", "setWebGLConfig",
 +    "setWebRTCIPv4", "setWebRTCIPv6",
 +    "setFontList",
 +    "setAudioFingerprintSeed", "setSpeechVoices",
@@ -89,10 +88,9 @@ index c921614484..516a13d7c7 100644
  bool ChromeUtils::ShouldResistFingerprinting(
      GlobalObject& aGlobal, JSRFPTarget aTarget,
 diff --git a/dom/base/ChromeUtils.h b/dom/base/ChromeUtils.h
-index 11b1a5dcdc..677194cf17 100644
 --- a/dom/base/ChromeUtils.h
 +++ b/dom/base/ChromeUtils.h
-@@ -369,6 +369,12 @@ class ChromeUtils {
+@@ -371,6 +371,12 @@ class ChromeUtils {
    static void CamouGetStringList(GlobalObject& aGlobal, const nsAString& aVarName,
                                   nsTArray<nsString>& aRetVal);
  
@@ -108,10 +106,7 @@ index 11b1a5dcdc..677194cf17 100644
 diff --git a/dom/base/RoverfoxStorageManager.cpp b/dom/base/RoverfoxStorageManager.cpp
 --- a/dom/base/RoverfoxStorageManager.cpp
 +++ b/dom/base/RoverfoxStorageManager.cpp
-@@ -280,12 +280,15 @@ static nsString SetterUsedKey(const char* aName, uint32_t aUserContextId) {
- }
- 
- /* static */ bool RoverfoxStorageManager::IsSetterOffered(JSObject* aObj,
+@@ -283,6 +283,9 @@ static nsString SetterUsedKey(const char* aName, uint32_t aUserContextId) {
                                                            const char* aName) {
    nsGlobalWindowInner* win = xpc::WindowOrNull(aObj);
    if (!win) return false;
@@ -121,14 +116,10 @@ diff --git a/dom/base/RoverfoxStorageManager.cpp b/dom/base/RoverfoxStorageManag
    bool used = false;
    GetBool(SetterUsedKey(aName, UserContextId(win)), used);
    return !used;
- }
- 
- /* static */ void RoverfoxStorageManager::RemoveSetter(const char* aName) {
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index 2b581e729a..f33dda3f8d 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -687,6 +687,17 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -688,6 +688,17 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
  
    void SetTimezone(const nsAString& timezone, mozilla::ErrorResult& aRv);
  
@@ -147,10 +138,9 @@ index 2b581e729a..f33dda3f8d 100644
    void SetWebRTCIPv4(const nsAString& ipv4, mozilla::ErrorResult& aRv);
    void SetWebRTCIPv6(const nsAString& ipv6, mozilla::ErrorResult& aRv);
 diff --git a/dom/chrome-webidl/ChromeUtils.webidl b/dom/chrome-webidl/ChromeUtils.webidl
-index abe36d4451..86eb9c77f1 100644
 --- a/dom/chrome-webidl/ChromeUtils.webidl
 +++ b/dom/chrome-webidl/ChromeUtils.webidl
-@@ -969,6 +969,13 @@ partial namespace ChromeUtils {
+@@ -977,6 +977,13 @@ partial namespace ChromeUtils {
     */
    sequence<DOMString> camouGetStringList(DOMString varName);
  

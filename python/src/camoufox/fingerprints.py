@@ -9,6 +9,8 @@ from pathlib import Path
 from random import Random, choice, choices, randint, randrange
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
+import orjson
+
 from camoufox._warnings import FallbackWarning, LeakWarning
 from camoufox.coherence import is_mobile_config
 from camoufox.ip import valid_ipv4, validate_ip
@@ -1466,6 +1468,15 @@ def _build_init_script(values: Dict[str, Any]) -> str:
                 f'  if (typeof w.{fn_name} === "function") w.{fn_name}({js_val});'
             )
 
+    # The GPU's parameters, extensions and shader precisions, as one JSON
+    # string. Empty for a GPU without recorded ones (a phone's), which then
+    # reports the host's, as at launch, not the launch identity's.
+    webgl_config = values.get('webglConfig')
+    if webgl_config is not None:
+        lines.append(
+            f'  if (typeof w.setWebGLConfig === "function") w.setWebGLConfig({_json.dumps(orjson.dumps(webgl_config, option=orjson.OPT_SORT_KEYS).decode())});'
+        )
+
     # Screen dimensions (requires width + height together)
     sw = values.get('screenWidth')
     sh = values.get('screenHeight')
@@ -1565,6 +1576,17 @@ def generate_context_fingerprint(
         nav = preset.get('navigator', {})
         screen = preset.get('screen', {})
         webgl = preset.get('webgl', {})
+        # The preset names its GPU; the context also needs that GPU's recorded
+        # parameters, or it reports the launch GPU's limits beside it.
+        if config.get('webGl:vendor') and config.get('webGl:renderer'):
+            from .webgl import webgl_for_gpu
+
+            tables = webgl_for_gpu(
+                OS_KEYS[platform_to_os(nav.get('platform', ''))],
+                config['webGl:vendor'], config['webGl:renderer'],
+            )
+            tables.pop('webGl2Enabled')
+            config.update(tables)
     else:
         # Fall back to synthetic generation
         fp = generate_fingerprint(os=os)
@@ -1682,6 +1704,10 @@ def generate_context_fingerprint(
         'fontList': config.get('fonts'),
         'speechVoices': config.get('voices'),
         'webrtcIP': webrtc_ip or '',
+        'webglConfig': {
+            k: v for k, v in config.items()
+            if k.startswith(('webGl:', 'webGl2:')) and k not in ('webGl:vendor', 'webGl:renderer')
+        },
     }
 
     init_script = _build_init_script(init_values)

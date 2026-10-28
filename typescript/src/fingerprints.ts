@@ -1594,6 +1594,7 @@ export interface InitValues {
 	fontList?: string[];
 	speechVoices?: Array<string | VoiceObject>;
 	webrtcIP?: string;
+	webglConfig?: Config;
 }
 
 /**
@@ -1620,6 +1621,16 @@ export function buildInitScript(values: InitValues): string {
 				`  if (typeof w.${fnName} === "function") w.${fnName}(${pyJsonDumps(val)});`,
 			);
 		}
+	}
+
+	// The GPU's parameters, extensions and shader precisions, as one JSON
+	// string. Empty for a GPU without recorded ones (a phone's), which then
+	// reports the host's, as at launch, not the launch identity's.
+	const webglConfig = values.webglConfig;
+	if (!isNone(webglConfig)) {
+		lines.push(
+			`  if (typeof w.setWebGLConfig === "function") w.setWebGLConfig(${pyJsonDumps(orjsonDumps(webglConfig))});`,
+		);
 	}
 
 	// Screen dimensions (requires width + height together)
@@ -1714,6 +1725,13 @@ export function targetOsFromPlatform(plat: string): SupportedOS {
 	return "macos";
 }
 
+/** The fpgen pool of the OS a navigator.platform value presents. */
+function poolKeyFromPlatform(plat: string): TargetOS {
+	return ({ windows: "win", linux: "lin", macos: "mac" } as const)[
+		targetOsFromPlatform(plat)
+	];
+}
+
 /**
  * Fingerprint values for a single per-context identity: the init script plus
  * the Playwright context options (camelCase, for playwright-core).
@@ -1764,6 +1782,20 @@ export function generateContextFingerprint({
 		screen = p.screen ?? {};
 		webgl = p.webgl ?? {};
 		resolvedPreset = p;
+		// The preset names its GPU; the context also needs that GPU's recorded
+		// parameters, or it reports the launch GPU's limits beside it.
+		if (
+			pyTruthy(config["webGl:vendor"]) &&
+			pyTruthy(config["webGl:renderer"])
+		) {
+			const tables = webglForGpu(
+				poolKeyFromPlatform(pyStr(nav.platform ?? "")),
+				config["webGl:vendor"],
+				config["webGl:renderer"],
+			);
+			delete tables.webGl2Enabled;
+			Object.assign(config, tables);
+		}
 	} else {
 		const fp = generateFingerprint({ os: os ?? undefined });
 		config = fromFpgen(fp, ff_version);
@@ -1830,16 +1862,9 @@ export function generateContextFingerprint({
 			!pyTruthy(config["webGl:vendor"]) ||
 			!pyTruthy(config["webGl:renderer"])
 		) {
-			let targetOs: TargetOS | undefined = POOL_KEYS[os ?? ""];
-			if (!targetOs) {
-				const plat = pyStr(get(config, "navigator.platform", ""));
-				targetOs =
-					plat === "Win32"
-						? "win"
-						: plat.includes("Linux") || plat.includes("linux")
-							? "lin"
-							: "mac";
-			}
+			const targetOs: TargetOS =
+				POOL_KEYS[os ?? ""] ??
+				poolKeyFromPlatform(pyStr(get(config, "navigator.platform", "")));
 			// Same coherence treatment launchOptions applies (#729): lift netbook
 			// geometry, then keep the GPU consistent with the resulting screen.
 			raiseScreenToModernFloor(config);
@@ -1918,6 +1943,14 @@ export function generateContextFingerprint({
 		fontList: config.fonts,
 		speechVoices: config.voices,
 		webrtcIP: webrtc_ip || "",
+		webglConfig: Object.fromEntries(
+			Object.entries(config).filter(
+				([k]) =>
+					(k.startsWith("webGl:") || k.startsWith("webGl2:")) &&
+					k !== "webGl:vendor" &&
+					k !== "webGl:renderer",
+			),
+		),
 	};
 	const initScript = buildInitScript(initValues);
 

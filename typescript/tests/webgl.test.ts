@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { gpuFitsOs } from "../src/coherence.js";
 import {
 	generateContextFingerprint,
+	getRandomPreset,
 	gpuScreenIsPlausible,
 	isSoftwareRenderer,
 	MODERN_SCREEN_FLOOR,
@@ -510,5 +511,51 @@ describe("WebGL <-> screen coherence (test_webgl_screen_consistency.py)", () => 
 				expect(w * h).toBeGreaterThan(1024 * 600);
 			}
 		}
+	});
+});
+
+/** The tables a context's init script hands setWebGLConfig(). */
+function contextWebglConfig(script: string): Record<string, any> {
+	const literal = /w\.setWebGLConfig\(("(?:[^"\\]|\\.)*")\);/.exec(script);
+	expect(literal).not.toBeNull();
+	return JSON.parse(JSON.parse((literal as RegExpExecArray)[1]));
+}
+
+describe("a context's own WebGL tables", () => {
+	// Only its vendor and renderer used to reach the browser: the parameters,
+	// extensions and shader precisions stayed the launch GPU's.
+	it.skipIf(!MODEL.ok)("a drawn context carries its GPU's tables", () => {
+		for (const os of ["windows", "macos", "linux"]) {
+			const { config, init_script } = generateContextFingerprint({ os });
+			const tables = contextWebglConfig(init_script);
+			for (const key of [
+				"webGl:parameters",
+				"webGl:supportedExtensions",
+				"webGl:shaderPrecisionFormats",
+			]) {
+				expect(tables[key], `${os} ${key}`).toEqual(config[key]);
+			}
+			expect(tables).not.toHaveProperty(["webGl:vendor"]);
+			expect(tables).not.toHaveProperty(["webGl:renderer"]);
+		}
+	});
+
+	it.skipIf(!MODEL.ok)(
+		"a preset context carries its GPU's recorded tables",
+		() => {
+			const preset = getRandomPreset("windows") as Record<string, any>;
+			const tables = contextWebglConfig(
+				generateContextFingerprint({ preset }).init_script,
+			);
+			expect(Object.keys(tables["webGl:parameters"]).length).toBeGreaterThan(0);
+		},
+	);
+
+	it.skipIf(!MODEL.ok)("a phone context reports the host's tables", () => {
+		const { init_script } = generateContextFingerprint({
+			os: "android",
+			i_know_what_im_doing: true,
+		});
+		expect(contextWebglConfig(init_script)).toEqual({});
 	});
 });

@@ -1,6 +1,7 @@
 """WebGL identities drawn from fpgen's recorded Firefox devices (camoufox.webgl)."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -258,3 +259,41 @@ def test_webgl1_line_width_range_is_webgl2s():
             config = sample_webgl_for_screen(target_os, 1920, 1080, s)
             if config["webGl2Enabled"]:
                 assert config["webGl:parameters"]["33902"] == config["webGl2:parameters"]["33902"], (target_os, s)
+
+
+def _context_webgl_config(fingerprint):
+    """The tables a context's init script hands setWebGLConfig()."""
+    script = fingerprint['init_script']
+    literal = re.search(r'w\.setWebGLConfig\(("(?:[^"\\]|\\.)*")\);', script).group(1)
+    return json.loads(json.loads(literal))
+
+
+@pytest.mark.parametrize('target_os', ['windows', 'macos', 'linux'])
+def test_a_context_carries_its_own_gpus_tables(target_os):
+    # Only its vendor and renderer used to reach the browser: the parameters,
+    # extensions and shader precisions stayed the launch GPU's.
+    context = fp.generate_context_fingerprint(os=target_os)
+    config = context['config']
+    tables = _context_webgl_config(context)
+    assert tables['webGl:parameters'] == config['webGl:parameters']
+    assert tables['webGl:supportedExtensions'] == config['webGl:supportedExtensions']
+    assert tables['webGl:shaderPrecisionFormats'] == config['webGl:shaderPrecisionFormats']
+    assert 'webGl:vendor' not in tables and 'webGl:renderer' not in tables
+
+
+def test_a_preset_context_carries_its_gpus_recorded_tables():
+    preset = fp.get_random_preset('windows')
+    tables = _context_webgl_config(fp.generate_context_fingerprint(preset=preset))
+    vendor, renderer = preset['webgl']['unmaskedVendor'], preset['webgl']['unmaskedRenderer']
+    recorded = [
+        {k: v for k, v in device.items() if k not in ('webGl:vendor', 'webGl:renderer', 'webGl2Enabled')}
+        for device in webgl.recorded_devices('win', vendor, renderer)
+    ]
+    assert tables in recorded
+
+
+def test_a_phone_context_reports_the_hosts_tables_not_the_launchs():
+    # fpgen records no phone GPU, so a phone has no tables; an empty set keeps
+    # the launch identity's desktop GPU from answering beside its own name.
+    context = fp.generate_context_fingerprint(os='android', i_know_what_im_doing=True)
+    assert _context_webgl_config(context) == {}

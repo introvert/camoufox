@@ -126,9 +126,9 @@ inline std::optional<std::string> GetString(std::string_view key) {
   return value->get<std::string>();
 }
 
-inline std::vector<std::string> GetStringList(const std::string& key) {
+inline std::vector<std::string> GetStringList(
+    const std::string& key, const nlohmann::json& data = GetJson()) {
   std::vector<std::string> result;
-  const auto& data = GetJson();
   if (!HasKey(key, data)) return {};
   for (const auto& item : data[key]) {
     result.push_back(item.get<std::string>());
@@ -287,13 +287,14 @@ inline std::optional<std::array<uint32_t, 4>> GetRect(
   return result;
 }
 
-// Helpers for WebGL
+// Helpers for WebGL. `data` holds the webGl:* / webGl2:* tables: the launch's
+// config, or a context's own (WebGLParamsManager::GetConfig).
 
-inline std::optional<nlohmann::json> GetNested(const std::string& domain,
-                                               std::string keyStr) {
+inline std::optional<nlohmann::json> GetNested(
+    const std::string& domain, std::string keyStr,
+    const nlohmann::json& data = GetJson()) {
   // By reference: a copy duplicated the whole config on every call, and every
   // WebGL getParameter() comes through GLParam -> GetNested.
-  const auto& data = GetJson();
   if (!data.contains(domain)) return std::nullopt;
 
   if (!data[domain].contains(keyStr)) return std::nullopt;
@@ -303,25 +304,26 @@ inline std::optional<nlohmann::json> GetNested(const std::string& domain,
 
 inline std::optional<
     std::variant<int64_t, bool, double, std::string, std::nullptr_t>>
-GLParam(uint32_t pname, bool isWebGL2) {
+GLParam(uint32_t pname, bool isWebGL2, const nlohmann::json& data = GetJson()) {
   auto value =
       MaskConfig::GetNested(isWebGL2 ? "webGl2:parameters" : "webGl:parameters",
-                            std::to_string(pname));
+                            std::to_string(pname), data);
   if (!value) return std::nullopt;
-  auto data = value.value();
-  if (data.is_null()) return std::nullptr_t();
-  if (data.is_number_integer()) return data.get<int64_t>();
-  if (data.is_boolean()) return data.get<bool>();
-  if (data.is_number_float()) return data.get<double>();
-  if (data.is_string()) return data.get<std::string>();
+  const auto& entry = value.value();
+  if (entry.is_null()) return std::nullptr_t();
+  if (entry.is_number_integer()) return entry.get<int64_t>();
+  if (entry.is_boolean()) return entry.get<bool>();
+  if (entry.is_number_float()) return entry.get<double>();
+  if (entry.is_string()) return entry.get<std::string>();
   return std::nullopt;
 }
 
 template <typename T>
-inline T MParamGL(uint32_t pname, T defaultValue, bool isWebGL2) {
+inline T MParamGL(uint32_t pname, T defaultValue, bool isWebGL2,
+                  const nlohmann::json& data = GetJson()) {
   if (auto value = MaskConfig::GetNested(
           isWebGL2 ? "webGl2:parameters" : "webGl:parameters",
-          std::to_string(pname));
+          std::to_string(pname), data);
       value.has_value()) {
     return value.value().get<T>();
   }
@@ -329,13 +331,14 @@ inline T MParamGL(uint32_t pname, T defaultValue, bool isWebGL2) {
 }
 
 inline std::optional<std::array<int32_t, 3UL>> MShaderData(
-    uint32_t shaderType, uint32_t precisionType, bool isWebGL2) {
+    uint32_t shaderType, uint32_t precisionType, bool isWebGL2,
+    const nlohmann::json& config = GetJson()) {
   std::string valueName =
       std::to_string(shaderType) + "," + std::to_string(precisionType);
   if (auto value =
           MaskConfig::GetNested(isWebGL2 ? "webGl2:shaderPrecisionFormats"
                                          : "webGl:shaderPrecisionFormats",
-                                valueName)) {
+                                valueName, config)) {
     // Convert {rangeMin: int, rangeMax: int, precision: int} to array
     auto data = value.value();
     // Assert rangeMin, rangeMax, and precision are present
