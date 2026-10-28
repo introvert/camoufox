@@ -487,6 +487,21 @@ rules:
       moving to the 158 build. Both behaviours are stock-shaped, so the choice
       is the user's; the default is the one that never hangs.
 
+  - id: history-is-not-recorded
+    title: places.history.enabled is off, and other debloat needs a measured win
+    check: manual
+    evidence:
+      - "measured 2026-10-22 on v158.0-beta.38 headless, one context, three pages navigating local pages with images, script and storage, rounds interleaved: 120 navigations 15.8 to 14.9 s CPU (5 rounds), 300 navigations 58.1 to 53.7 s CPU (3 rounds)"
+      - "same runs: removing the ipp-activator and search-detection built-in add-ons, and browser.urlbar.formatting.enabled=false, changed CPU and memory by less than the run-to-run spread"
+    rationale: >-
+      A profile of that workload put history writes, frecency and the new-tab
+      site map (NewTabUtils) on the parent's main thread for every navigation.
+      Turning recording off is the stock "Remember browsing and download
+      history" checkbox, so it is a configuration real Firefox users run, and
+      script cannot read history. Prefs a page can measure stay at Firefox's
+      defaults whatever they cost. A cut that does not move the numbers is not
+      worth the diff.
+
   # -------------------------------------------------------------------------
   # Config schema
   # -------------------------------------------------------------------------
