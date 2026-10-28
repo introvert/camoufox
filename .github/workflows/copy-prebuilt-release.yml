@@ -7,10 +7,11 @@
 # zips exist already, as that run's artifacts. This copies them onto the
 # release, inside GitHub's own network, in a couple of minutes.
 #
-# It never builds anything. Give it the run whose artifacts you want and the
-# tag to attach them to, and check that the run's head commit is the code the
-# tag holds: the workflow prints both so the answer is in the log, but only a
-# human knows whether a difference matters.
+# A tag build already does this by itself when a pull request run holds the
+# tag's exact tree. This is for the rest: a run whose tree differs in a way
+# only a human can judge harmless. It never builds anything. Give it the run
+# whose artifacts you want and the tag to attach them to; the workflow prints
+# both trees so the difference is in the log.
 name: Copy Prebuilt Release
 
 on:
