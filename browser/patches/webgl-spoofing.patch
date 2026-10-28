@@ -2,7 +2,7 @@ diff --git a/dom/base/WebGLParamsManager.cpp b/dom/base/WebGLParamsManager.cpp
 new file mode 100644
 --- /dev/null
 +++ b/dom/base/WebGLParamsManager.cpp
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,76 @@
 +/* Camoufox: Per-context WebGL parameter manager */
 +#include "WebGLParamsManager.h"
 +#include "json.hpp"
@@ -48,6 +48,14 @@ new file mode 100644
 +bool WebGLParamsManager::GetConfig(uint32_t aId, nsAString& aOut) {
 +  return RoverfoxStorageManager::GetString(
 +      RoverfoxStorageManager::ContextKey("webgl_cfg_", aId), aOut);
++}
++
++void WebGLParamsManager::DisableVendorFunction(uint32_t aId) {
++  RoverfoxStorageManager::MarkSetterUsed("webgl_v", aId);
++}
++
++void WebGLParamsManager::DisableRendererFunction(uint32_t aId) {
++  RoverfoxStorageManager::MarkSetterUsed("webgl_r", aId);
 +}
 +
 +void WebGLParamsManager::DisableConfigFunction(uint32_t aId) {
