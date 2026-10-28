@@ -487,6 +487,21 @@ rules:
       moving to the 158 build. Both behaviours are stock-shaped, so the choice
       is the user's; the default is the one that never hangs.
 
+  - id: history-is-not-recorded
+    title: places.history.enabled is off, and other debloat needs a measured win
+    check: manual
+    evidence:
+      - "measured 2026-10-22 on v158.0-beta.38 headless, one context, three pages navigating local pages with images, script and storage, rounds interleaved: 120 navigations 15.8 to 14.9 s CPU (5 rounds), 300 navigations 58.1 to 53.7 s CPU (3 rounds)"
+      - "same runs: removing the ipp-activator and search-detection built-in add-ons, and browser.urlbar.formatting.enabled=false, changed CPU and memory by less than the run-to-run spread"
+    rationale: >-
+      A profile of that workload put history writes, frecency and the new-tab
+      site map (NewTabUtils) on the parent's main thread for every navigation.
+      Turning recording off is the stock "Remember browsing and download
+      history" checkbox, so it is a configuration real Firefox users run, and
+      script cannot read history. Prefs a page can measure stay at Firefox's
+      defaults whatever they cost. A cut that does not move the numbers is not
+      worth the diff.
+
   # -------------------------------------------------------------------------
   # Config schema
   # -------------------------------------------------------------------------
@@ -607,3 +622,15 @@ rules:
       stable. Weekly was considered and rejected as too many updates for users
       to manage. A fix that cannot wait is cut by dispatching release.yml on
       main, and an open issue labelled `regression` holds the promotion.
+
+  - id: a-tag-reuses-the-pull-request-build
+    title: A tag publishes the pull request build of its tree and builds only when there is none
+    check: manual   # ci/tests/test_ci.py
+    evidence:
+      - "run 39675248849: the v158.0-beta.39 tag rebuilt tree 0454ed4, which pull request run 39645860412 had built; it was cancelled and the zips copied by hand"
+    rationale: >-
+      A tag points at a merge commit, whose tree is the pull request's last
+      head when the branch was up to date with main, and build.yml had already
+      compiled that head on all four targets. Matching on the tree rather than
+      the commit is what makes the reuse exact: identical sources, identical
+      workflow. A tree no pull request run holds is built as before.

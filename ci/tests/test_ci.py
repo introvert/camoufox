@@ -2618,6 +2618,31 @@ def test_the_compiler_cache_never_crosses_source_directories(workflow):
         assert re.search(r"version \}\}-\$\{\{ [\w.]*release \}\}-", key), key
 
 
+def test_a_tag_publishes_the_pull_request_build_of_its_tree():
+    """Merging a pull request and tagging it rebuilt the same tree for two hours.
+
+    The tag run takes the zips of the pull request run that holds its tree and
+    builds only when there is none. They are uploaded again under the same names,
+    because tests.yml takes the last release's browser from the tag run.
+    """
+    import yaml
+
+    jobs = yaml.safe_load((WORKFLOW.parent / "build.yml").read_text(encoding="utf-8"))["jobs"]
+    find = jobs["prebuilt"]["steps"][0]["run"]
+    assert "-w build.yml -e pull_request -s success" in find
+    assert ".commit.tree.sha" in find
+    assert "needs.prebuilt.outputs.run_id == ''" in jobs["build"]["if"]
+    assert jobs["reuse"]["if"] == "needs.prebuilt.outputs.run_id != ''"
+    download, upload = jobs["reuse"]["steps"]
+    assert download["with"]["name"] == upload["with"]["name"] == "${{ matrix.name }}"
+    assert set(jobs["release"]["needs"]) == {"build", "reuse"}
+    assert "!failure()" in jobs["release"]["if"]
+
+    tests = (WORKFLOW).read_text(encoding="utf-8")
+    assert "-w build.yml -e push -s success" in tests
+    assert "-n CamoufoxBuilds-linux-x86_64" in tests
+
+
 # ---------------------------------------------------------------------------
 # declared isolation hangs
 # ---------------------------------------------------------------------------
