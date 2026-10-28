@@ -622,3 +622,15 @@ rules:
       stable. Weekly was considered and rejected as too many updates for users
       to manage. A fix that cannot wait is cut by dispatching release.yml on
       main, and an open issue labelled `regression` holds the promotion.
+
+  - id: a-tag-reuses-the-pull-request-build
+    title: A tag publishes the pull request build of its tree and builds only when there is none
+    check: manual   # ci/tests/test_ci.py
+    evidence:
+      - "run 39675248849: the v158.0-beta.39 tag rebuilt tree 0454ed4, which pull request run 39645860412 had built; it was cancelled and the zips copied by hand"
+    rationale: >-
+      A tag points at a merge commit, whose tree is the pull request's last
+      head when the branch was up to date with main, and build.yml had already
+      compiled that head on all four targets. Matching on the tree rather than
+      the commit is what makes the reuse exact: identical sources, identical
+      workflow. A tree no pull request run holds is built as before.

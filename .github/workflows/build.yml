@@ -20,7 +20,75 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # A tag usually points at the merge of a pull request whose last push this
+  # workflow already compiled: same tree, different commit. Building it again
+  # took two hours per architecture, so a tag takes that run's zips instead and
+  # builds only when no successful pull request run holds its exact tree.
+  prebuilt:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run_id: ${{ steps.find.outputs.run_id }}
+      names: ${{ steps.find.outputs.names }}
+    steps:
+      - name: Find a pull request build of this tree
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tree=$(gh api "repos/$REPO/commits/$GITHUB_REF" --jq .commit.tree.sha)
+          echo "tag $GITHUB_REF_NAME: tree $tree"
+          runs=$(gh run list -R "$REPO" -w build.yml -e pull_request -s success -L 30 \
+            --json databaseId,headSha -q '.[] | "\(.databaseId) \(.headSha)"')
+          while read -r run sha; do
+            [ -n "$run" ] || continue
+            run_tree=$(gh api "repos/$REPO/commits/$sha" --jq .commit.tree.sha)
+            [ "$run_tree" = "$tree" ] || continue
+            artifacts=$(gh api "repos/$REPO/actions/runs/$run/artifacts" \
+              --jq '[.artifacts[] | select(.name | startswith("CamoufoxBuilds-"))]')
+            if [ "$(jq 'length' <<<"$artifacts")" = 0 ] || [ "$(jq 'any(.expired)' <<<"$artifacts")" = true ]; then
+              echo "run $run built this tree, but its zips are gone"
+              continue
+            fi
+            echo "run $run built this tree at $sha; reusing its zips"
+            echo "run_id=$run" >> "$GITHUB_OUTPUT"
+            echo "names=$(jq -c 'map(.name)' <<<"$artifacts")" >> "$GITHUB_OUTPUT"
+            break
+          done <<<"$runs"
+          grep -q '^run_id=' "$GITHUB_OUTPUT" || echo "No pull request build holds this tree; building it."
+
+  reuse:
+    needs: prebuilt
+    if: needs.prebuilt.outputs.run_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    strategy:
+      matrix:
+        name: ${{ fromJSON(needs.prebuilt.outputs.names) }}
+    steps:
+      # Uploaded again under the same name, so the tag run carries its
+      # binaries as a built one does and anything reading them finds them.
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ needs.prebuilt.outputs.run_id }}
+          github-token: ${{ github.token }}
+          name: ${{ matrix.name }}
+          path: dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+
   build:
+    needs: prebuilt
+    # On a pull request `prebuilt` is skipped, which is not a failure.
+    if: ${{ !cancelled() && !failure() && needs.prebuilt.outputs.run_id == '' }}
     runs-on: ubuntu-24.04
     env:
       # The mozconfig prefers the sccache that `mach bootstrap` installs, so
@@ -35,11 +103,11 @@ jobs:
         # job to succeed. i686 went with it -- it was a Windows-only arch,
         # unsupported on both linux and macos.
         #
-        # Pull requests build all four, so copy-prebuilt-release.yml can
-        # publish every architecture from the pull request's run instead of
-        # waiting on a tag build. arm64 is listed first: jobs are queued in
-        # matrix order, so when runners are scarce the arm64 builds start
-        # first.
+        # Pull requests build all four, so a tag of the same tree publishes
+        # every architecture from the pull request's run (the prebuilt and
+        # reuse jobs) instead of building again. arm64 is listed first: jobs
+        # are queued in matrix order, so when runners are scarce the arm64
+        # builds start first.
         arch: [arm64, x86_64]
         target: [macos, linux]
 
@@ -158,10 +226,11 @@ jobs:
           path: browser/dist/*
 
   release:
-    needs: build
+    needs: [build, reuse]
     # Skip the job outright on a pull request rather than letting it start and
     # create nothing: the create step below is already gated on a tag ref.
-    if: startsWith(github.ref, 'refs/tags/')
+    # One of build and reuse is skipped on every tag.
+    if: ${{ startsWith(github.ref, 'refs/tags/') && !cancelled() && !failure() }}
     permissions:
       contents: write
     runs-on: ubuntu-latest

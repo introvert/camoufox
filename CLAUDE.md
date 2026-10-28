@@ -53,20 +53,20 @@ python3 browser/scripts/patchstack.py regen browser/patches/<name>.patch  # rewr
 
 Upstream's `release.yml` publishes the `camoufox` packages to PyPI and npm, so it
 only runs by hand here. Browser releases come from `build.yml`: pushing a tag
-builds linux and macos on x86_64 and arm64 and drafts a release, about two hours
-per architecture. When the tag points at code a pull request already compiled,
-which is the usual case because the release bump is the last commit on the
-branch, those zips already exist as that run's artifacts:
+drafts a release of linux and macos on x86_64 and arm64. The tag run first looks
+for a successful pull request run of `build.yml` whose head holds the tag's
+tree. A merge commit has a different sha than the branch tip it merged, but the
+same tree when the branch was up to date with `main`, so tag the merge of an
+up-to-date pull request and the release takes that run's zips in a few minutes
+instead of building again for about two hours per architecture. The log says
+which run it reused, or that none matched and it is building.
+
+When the trees differ in a way that does not matter, copy a run's zips onto the
+release by hand instead (cancel the tag's build first):
 
 ```bash
 gh workflow run copy-prebuilt-release.yml -f run_id=<pr build run> -f tag=<tag>
 ```
-
-It copies them onto the release inside GitHub's network in about two minutes and
-builds nothing. Check the trees first: `git rev-parse <run head>^{tree}` against
-`git rev-parse <tag>^{tree}`; a merge commit has a different sha than the branch
-tip it merged while holding the same tree, which is the case this is for. A pull
-request builds all four zips, arm64 first, so the copy covers both architectures.
 
 The release number in `browser/upstream.sh` continues the fork's own sequence,
 not upstream's.
