@@ -139,7 +139,8 @@ function applyWindowSize(win) {
     // the identity's size plus 10px. After the deadline a change is the user's.
     const deadline = Date.now() + 5000;
     const holdStartupSize = () => {
-      if (Date.now() > deadline) {
+      // A context's viewport (Juggler sizes the browser) owns the size.
+      if (Date.now() > deadline || win.gBrowser?.selectedBrowser?.style.width) {
         win.removeEventListener("sizemodechange", holdStartupSize);
         win.removeEventListener("resize", holdStartupSize);
         return;

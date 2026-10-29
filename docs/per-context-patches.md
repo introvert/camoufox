@@ -19,6 +19,7 @@ for the calling window's context, and is gone before any page script runs
 | `setTimezone(tz)` | `timezone-spoofing.patch` | `Date`, `Intl.DateTimeFormat` and every other time API |
 | `setScreenDimensions(w, h)` | `screen-spoofing.patch` | `screen.width`, `screen.height`, matching CSS media features |
 | `setScreenColorDepth(depth)` | `screen-spoofing.patch` | `screen.colorDepth` |
+| `setWindowPosition(x, y)` | `screen-spoofing.patch` | `screenX`, `screenY`, `screenLeft`, `screenTop` |
 | `setNavigatorPlatform(platform)` | `navigator-spoofing.patch` | `navigator.platform` |
 | `setNavigatorOscpu(oscpu)` | `navigator-spoofing.patch` | `navigator.oscpu` |
 | `setNavigatorHardwareConcurrency(cores)` | `navigator-spoofing.patch` | `navigator.hardwareConcurrency` |
@@ -29,7 +30,7 @@ for the calling window's context, and is gone before any page script runs
 | `setWebGLRenderer(renderer)` | `webgl-spoofing.patch` | `UNMASKED_RENDERER_WEBGL` |
 | `setWebGLConfig(json)` | `webgl-spoofing.patch` | The GPU's limits, extensions and shader precisions: a JSON object of the `webGl:*` and `webGl2:*` config keys, which replaces the launch's for the context (`{}`: the host's) |
 | `setFontList(fonts)` | `font-list-spoofing.patch` | Which fonts exist (comma-separated, case-insensitive) |
-| `setSpeechVoices(voices)` | `speech-voices-spoofing.patch` | `speechSynthesis.getVoices()` (comma-separated names) |
+| `setSpeechVoices(voices)` | `speech-voices-spoofing.patch` | `speechSynthesis.getVoices()` (one name per line) |
 
 Supporting patches, with no setter of their own:
 
@@ -215,10 +216,11 @@ The User-Agent's version is rewritten to the running browser's.
 ## Changing identity without a restart
 
 A new context is the unit of identity: `NewContext()` gives it another user
-agent, OS, GPU, screen, locale, timezone, position, WebRTC IP, fonts and voices
-on a running browser, and every scope of its pages (iframes, dedicated, shared
-and service workers, the isolated world) and every request agrees
-(`context-identity-swap.py`). An existing context keeps the identity it was
+agent, OS, GPU, screen, window, locale, timezone, position, WebRTC IP, fonts and
+voices on a running browser, and every scope of its pages (iframes, dedicated,
+shared and service workers, the isolated world) and every request agrees
+(`context-identity-swap.py`). A page reads what a browser launched with that
+identity reports (`context-relaunch-parity.py`). An existing context keeps the identity it was
 created with: the setters are offered once, so a page cannot change it, and its
 cookies, storage, cache and open pages would tie the old identity to the new one.
 
@@ -229,6 +231,8 @@ A few values stay the launch's for every context:
 | Media devices (`mediaDevices:*`) | Enumerated once per process by the media backend, with no context to ask |
 | Whether WebGL2 exists (`webgl.enable-webgl2`) | A browser-wide pref; recorded GPUs nearly all have it |
 | `Accept-Encoding`, `navigator.doNotTrack`, `globalPrivacyControl` | Launch settings, not identity draws |
+| `navigator.hardwareConcurrency` | A page can time parallel workers to count the cores the browser runs on (`fix_hardware_concurrency`) |
+| A phone launch's device | The whole browser renders at its pixel ratio (`layout.css.devPixelsPerPx`): text measured at another device's was a mismatch |
 
 ## Known limitations
 

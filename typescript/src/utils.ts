@@ -1083,6 +1083,26 @@ export function launchesMobile(fromOptions: Record<string, any>): boolean {
 }
 
 /**
+ * What a launch's contexts share because the browser has one of each, as
+ * generateContextFingerprint() arguments: the cores a page can measure
+ * (fixHardwareConcurrency), and a phone launch's pixel ratio (applyMobileMode),
+ * which the whole browser renders at.
+ */
+export function launchMachine(fromOptions: Record<string, any>): {
+	hardware_concurrency: number | null;
+	device_pixel_ratio: number | null;
+} {
+	const blob = camouConfigBlob(fromOptions);
+	const config = blob ? JSON.parse(blob) : {};
+	const dpr = fromOptions.firefoxUserPrefs?.["layout.css.devPixelsPerPx"];
+	return {
+		hardware_concurrency: config["navigator.hardwareConcurrency"] ?? null,
+		device_pixel_ratio:
+			dpr && coherence.isMobileConfig(config) ? Number(dpr) : null,
+	};
+}
+
+/**
  * Default newPage()/newContext() to hasTouch. A phone's page gets touch events
  * from mobile mode either way; Playwright's tap() and touchscreen also need the
  * context to say so.

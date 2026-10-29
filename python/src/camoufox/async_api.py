@@ -20,6 +20,7 @@ from .utils import (
     context_identity,
     host_identity,
     launch_options,
+    launch_machine,
     launches_mobile,
     needs_exit_geo,
     new_context_options,
@@ -180,6 +181,7 @@ async def _launch(
     browser = await playwright.firefox.launch(**from_options)
     attach_context_defaults(browser, no_viewport_default, launches_mobile(from_options))
     browser._camoufox_host_identity = identity
+    browser._camoufox_machine = launch_machine(from_options)
     return await async_attach_vd(browser, virtual_display)
 
 
@@ -237,7 +239,9 @@ async def AsyncNewContext(
     fp = await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: generate_context_fingerprint(
-            preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config
+            preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config,
+            locale=context_kwargs.get('locale'),
+            **vars(browser).get('_camoufox_machine', {}),
         ),
     )
 

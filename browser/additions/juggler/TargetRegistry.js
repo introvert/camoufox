@@ -779,8 +779,12 @@ export class PageTarget {
 
   updateDPPXOverride(browsingContext = undefined) {
     browsingContext ||= this._linkedBrowser.browsingContext;
-    const dppx = this._zoom * (this._browserContext.deviceScaleFactor || this._initialDPPX);
-    browsingContext.overrideDPPX = dppx;
+    // Camoufox: a scale factor the browser already renders at (a phone
+    // launch's layout.css.devPixelsPerPx) needs no override, which would
+    // report it rounded to a float: 2.857142925 for a device's 60/21.
+    const native = Number(Services.prefs.getStringPref('layout.css.devPixelsPerPx', '-1'));
+    const scale = this._browserContext.deviceScaleFactor || this._initialDPPX;
+    browsingContext.overrideDPPX = this._zoom === 1 && scale === native ? this._initialDPPX : this._zoom * scale;
   }
 
   updateMobileEmulation(browsingContext = undefined) {

@@ -58,6 +58,7 @@ SETTERS = [
     "setNavigatorUserAgent",
     "setScreenDimensions",
     "setScreenColorDepth",
+    "setWindowPosition",
     "setWebGLVendor",
     "setWebGLRenderer",
     "setWebGLConfig",

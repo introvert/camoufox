@@ -143,7 +143,10 @@ diff --git a/dom/base/moz.build b/dom/base/moz.build
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -27,6 +27,7 @@
+@@ -24,12 +24,13 @@
+ #include "Navigator.h"
+ #include "PaintWorkletImpl.h"
+ #include "SessionStorageCache.h"
  #include "FontListManager.h"
  #include "Units.h"
  #include "VRManagerChild.h"
@@ -151,7 +154,13 @@ diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
  #include "WindowDestroyedEvent.h"
  #include "WindowNamedPropertiesHandler.h"
  #include "js/ComparisonOperators.h"
-@@ -7894,6 +7895,34 @@ void nsGlobalWindowInner::SetSpeechVoices(const nsAString& aVoices,
+ #include "js/CompilationAndEvaluation.h"
+ #include "js/CompileOptions.h"
+ #include "js/Id.h"
+@@ -7908,12 +7909,40 @@ void nsGlobalWindowInner::SetSpeechVoices(const nsAString& aVoices,
+   const uint32_t userContextId = RoverfoxStorageManager::UserContextId(this);
+   SpeechVoicesManager::SetVoices(userContextId, aVoices);
+   SpeechVoicesManager::DisableFunction(userContextId);
    RoverfoxStorageManager::RemoveSetter("setSpeechVoices");
  }
  
@@ -186,10 +195,16 @@ diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
  RefPtr<GenericPromise> nsGlobalWindowInner::StorageAccessPermissionChanged(
      bool aGranted) {
    // Invalidate cached StorageAllowed field so that calls to GetLocalStorage
+   // give us the updated localStorage object.
+   ClearStorageAllowedCache();
+ 
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -716,6 +716,11 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -714,12 +714,17 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+   void SetScreenColorDepth(uint32_t depth, mozilla::ErrorResult& aRv);
+   void SetWindowPosition(int32_t x, int32_t y, mozilla::ErrorResult& aRv);
+ 
    // Per-context speech voices
    void SetSpeechVoices(const nsAString& aVoices, mozilla::ErrorResult& aRv);
  
@@ -201,6 +216,9 @@ diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
   public:
    void Alert(nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aError);
    void Alert(const nsAString& aMessage, nsIPrincipal& aSubjectPrincipal,
+              mozilla::ErrorResult& aError);
+   bool Confirm(const nsAString& aMessage, nsIPrincipal& aSubjectPrincipal,
+                mozilla::ErrorResult& aError);
 diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.cpp
 --- a/dom/canvas/ClientWebGLContext.cpp
 +++ b/dom/canvas/ClientWebGLContext.cpp
@@ -622,8 +640,11 @@ diff --git a/dom/canvas/moz.build b/dom/canvas/moz.build
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
 --- a/dom/webidl/Window.webidl
 +++ b/dom/webidl/Window.webidl
-@@ -1010,6 +1010,24 @@ partial interface Window {
-   undefined setScreenColorDepth(unsigned long depth);
+@@ -1013,12 +1013,30 @@ partial interface Window {
+ // Per-context window position
+ partial interface Window {
+   [Throws, Func="mozilla::dom::ScreenDimensionManager::IsWindowPositionFunctionEnabledForWebIDL"]
+   undefined setWindowPosition(long x, long y);
  };
  
 +// Per-context WebGL vendor spoofing
@@ -647,3 +668,6 @@ diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
  dictionary WindowPostMessageOptions : StructuredSerializeOptions {
    USVString targetOrigin = "/";
  };
+ 
+ // https://wicg.github.io/cookie-store/#Window
+ [SecureContext]

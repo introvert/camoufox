@@ -691,6 +691,20 @@ def launches_mobile(from_options: Dict[str, Any]) -> bool:
     return bool(blob) and is_mobile_config(orjson.loads(blob))
 
 
+def launch_machine(from_options: Dict[str, Any]) -> Dict[str, Any]:
+    """What a launch's contexts share because the browser has one of each, as
+    generate_context_fingerprint() arguments: the cores a page can measure
+    (fix_hardware_concurrency), and a phone launch's pixel ratio
+    (apply_mobile_mode), which the whole browser renders at."""
+    blob = _camou_config_blob(from_options)
+    config = orjson.loads(blob) if blob else {}
+    dpr = from_options.get('firefox_user_prefs', {}).get('layout.css.devPixelsPerPx')
+    return {
+        'hardware_concurrency': config.get('navigator.hardwareConcurrency'),
+        'device_pixel_ratio': float(dpr) if dpr and is_mobile_config(config) else None,
+    }
+
+
 # Playwright emulates four media features on every context it creates, whether
 # or not the caller asked: `colorScheme` defaults to "light" and reducedMotion /
 # forcedColors / contrast to their no-preference values. That is an override, not
