@@ -220,7 +220,9 @@ agent, OS, GPU, screen, window, locale, timezone, position, WebRTC IP, fonts and
 voices on a running browser, and every scope of its pages (iframes, dedicated,
 shared and service workers, the isolated world) and every request agrees
 (`context-identity-swap.py`). A page reads what a browser launched with that
-identity reports (`context-relaunch-parity.py`). An existing context keeps the identity it was
+identity reports (`context-relaunch-parity.py`). The identity is drawn as a
+launch draws one, from the same fpgen model and pools. Playwright's own
+`new_context()` draws nothing, and its pages report the launch's identity. An existing context keeps the identity it was
 created with: the setters are offered once, so a page cannot change it, and its
 cookies, storage, cache and open pages would tie the old identity to the new one.
 

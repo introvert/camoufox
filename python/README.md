@@ -102,6 +102,11 @@ not a `Browser`.
 `NewContext()` gives each context its own identity (navigator, screen, WebGL,
 fonts, voices, audio seed, timezone, WebRTC IP), applied through
 `add_init_script` before any page script runs.
+Each call draws a new identity the way a launch does, from the same fpgen model
+and font and voice pools, and a page in the context reads what a browser
+launched with that identity reports. Playwright's own `browser.new_context()` draws
+nothing: its pages report the launch's identity, so all such contexts are one
+device.
 
 ```python
 from camoufox.sync_api import Camoufox, NewContext
