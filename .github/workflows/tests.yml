@@ -317,6 +317,9 @@ jobs:
           # April-2025 model. Install the pinned one first: see
           # python/scripts/pin-fpgen-model.py.
           python3 python/scripts/pin-fpgen-model.py
+      - name: Warm Xvfb
+        # The image's xvfb; see the typescript job's prerequisites.
+        run: xvfb-run -a -s "-screen 0 1x1x24 +extension GLX" true
       - name: Run
         # pythonlib resolves the published release through the GitHub API
         # (pkgman.py honours GITHUB_TOKEN). Unauthenticated, a runner shares the
@@ -376,6 +379,11 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends xvfb
+          # A fresh runner's disk is cold: the first Xvfb took over ten seconds
+          # to read its libraries and keymaps (run 40781636384), past
+          # VirtualDisplay's 10 s bound, and the next one four. Start one with
+          # GLX, as VirtualDisplay does, so the suite times Xvfb, not the disk.
+          xvfb-run -a -s "-screen 0 1x1x24 +extension GLX" true
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: typescript/package.json

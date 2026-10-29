@@ -2618,6 +2618,22 @@ def test_the_compiler_cache_never_crosses_source_directories(workflow):
         assert re.search(r"version \}\}-\$\{\{ [\w.]*release \}\}-", key), key
 
 
+@pytest.mark.parametrize("job", ["typescript", "pythonlib"])
+def test_xvfb_is_warm_before_the_virtual_display_tests(job):
+    """A fresh runner's first Xvfb read its libraries from a cold disk.
+
+    It took over ten seconds, past VirtualDisplay's bound, and failed the
+    lifecycle test with no change to the code (run 40781636384).
+    """
+    import yaml
+
+    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"][job]["steps"]
+    runs = [s.get("run", "") for s in steps]
+    warm = next(i for i, r in enumerate(runs) if "xvfb-run" in r and "+extension GLX" in r)
+    suite = next(i for i, r in enumerate(runs) if f"ci.run_{job}" in r)
+    assert warm < suite
+
+
 def test_a_tag_publishes_the_pull_request_build_of_its_tree():
     """Merging a pull request and tagging it rebuilt the same tree for two hours.
 
