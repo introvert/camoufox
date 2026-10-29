@@ -27,6 +27,7 @@ for the calling window's context, and is gone before any page script runs
 | `setWebRTCIPv6(ip)` | `webrtc-ip-spoofing.patch` | The same, for IPv6 |
 | `setWebGLVendor(vendor)` | `webgl-spoofing.patch` | `UNMASKED_VENDOR_WEBGL` |
 | `setWebGLRenderer(renderer)` | `webgl-spoofing.patch` | `UNMASKED_RENDERER_WEBGL` |
+| `setWebGLConfig(json)` | `webgl-spoofing.patch` | The GPU's limits, extensions and shader precisions: a JSON object of the `webGl:*` and `webGl2:*` config keys, which replaces the launch's for the context (`{}`: the host's) |
 | `setFontList(fonts)` | `font-list-spoofing.patch` | Which fonts exist (comma-separated, case-insensitive) |
 | `setSpeechVoices(voices)` | `speech-voices-spoofing.patch` | `speechSynthesis.getVoices()` (comma-separated names) |
 
@@ -161,7 +162,7 @@ real value.
 | `screen-spoofing.patch` | `nsScreen::GetRect`, `nsDeviceContext`, `nsMediaFeatures.cpp` | CSS `device-width` and `color` agree with `screen.*`. |
 | `navigator-spoofing.patch` | `Navigator::GetPlatform`, `GetOscpu`, `HardwareConcurrency`, `GetUserAgent`, `GetAppVersion` (global only; `per-context-consistency.patch` derives a context's from its user agent); the `WorkerNavigator` versions of platform, cores and UA | Falls back to `navigator.*` in `CAMOU_CONFIG`. |
 | `webrtc-ip-spoofing.patch` | `SanitizeSDPForIPLeak`, `CandidateReady`, candidate `.address`/`.relatedAddress`, `getStats()`, `UpdateDefaultCandidate`, `NrSocketBase::CreateSocket` | Forces `default_address_only` while spoofing; loopback, link-local and private addresses are left alone. UDP candidate ports come from the ephemeral range of the identity's OS (`MaskConfig::SpoofedEphemeralPorts()`), so a Windows identity on Linux never shows a Linux port. |
-| `webgl-spoofing.patch` | `ClientWebGLContext::GetParameter` | Per context: vendor and renderer. Global only (`CAMOU_CONFIG`): parameters, extensions, shader precision. Works from `OffscreenCanvas` in workers. |
+| `webgl-spoofing.patch` | `ClientWebGLContext::GetParameter`, `GetShaderPrecisionFormat`, `IsSupported`, `GetSupportedExtensions` | Per context: vendor, renderer, and the parameters, extensions and shader precisions of that GPU, else `CAMOU_CONFIG`'s. Works from `OffscreenCanvas` in workers. |
 | `font-list-spoofing.patch` | `gfxPlatformFontList::MaskedFontListBlocks`, which `FindAndAddFamiliesLocked`, `GlobalFontFallback` and `local()` sources consult | A context's list replaces the launch `fonts` list for its documents; it does not narrow it. Chrome documents and contexts without a list keep the launch list. A thread-local context id, set by an RAII guard in `FontFaceSet::Check/Load`, `gfxFontGroup::EnsureFontList` and `gfxFontGroup::FindFontForChar`, avoids changing ~50 signatures. A fallback lookup under a context's list is not cached process-wide. The list is in the shared store, so it holds in every content process, and a worker's `OffscreenCanvas` draws with its page's list. |
 | `speech-voices-spoofing.patch` | `SpeechSynthesis::GetVoices` | Filters the real list by name; a listed voice that is not installed is left out. |
 
@@ -202,7 +203,7 @@ The User-Agent's version is rewritten to the running browser's.
 |---|---|
 | UA, platform, cores, oscpu | fpgen or the preset; UA version set to the browser's |
 | Screen, color depth | fpgen or the preset |
-| WebGL | One GPU fpgen recorded for Firefox on that OS, weighted by its share and checked against the machine (`coherence.gpu_fits_machine()`); `webgl_for_gpu()` adds its parameters, extensions and shader precisions |
+| WebGL | The preset's GPU, or one fpgen recorded for Firefox on that OS, weighted by its share and checked against the machine (`coherence.gpu_fits_machine()`); `webgl_for_gpu()` adds its parameters, extensions and shader precisions |
 | Fonts | `_generate_random_font_subset()`: one OS-version base plus measured additions ([FONTS.md](FONTS.md)); never from presets |
 | Voices | `_generate_random_voice_subset()`, from `voice-manifests.json`, seeded by the identity; never from presets |
 | Audio seed | Derived from the identity (`NewBrowser`) or random (`NewContext`), never 0 |
@@ -210,6 +211,24 @@ The User-Agent's version is rewritten to the running browser's.
 | Locale | Playwright's `locale`; with a proxy, `NewContext` draws one for the exit IP's country, as geoip does at launch |
 | WebRTC IP | `NewContext`'s `webrtc_ip` or the proxy's exit IP, to the IPv4 or IPv6 setter; an invalid address raises `InvalidIP` |
 | Geolocation | The `geolocation` argument, via Playwright; with a proxy, the exit IP's position |
+
+## Changing identity without a restart
+
+A new context is the unit of identity: `NewContext()` gives it another user
+agent, OS, GPU, screen, locale, timezone, position, WebRTC IP, fonts and voices
+on a running browser, and every scope of its pages (iframes, dedicated, shared
+and service workers, the isolated world) and every request agrees
+(`context-identity-swap.py`). An existing context keeps the identity it was
+created with: the setters are offered once, so a page cannot change it, and its
+cookies, storage, cache and open pages would tie the old identity to the new one.
+
+A few values stay the launch's for every context:
+
+| Value | Why |
+|---|---|
+| Media devices (`mediaDevices:*`) | Enumerated once per process by the media backend, with no context to ask |
+| Whether WebGL2 exists (`webgl.enable-webgl2`) | A browser-wide pref; recorded GPUs nearly all have it |
+| `Accept-Encoding`, `navigator.doNotTrack`, `globalPrivacyControl` | Launch settings, not identity draws |
 
 ## Known limitations
 

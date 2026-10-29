@@ -1,11 +1,11 @@
 diff --git a/dom/base/WebGLParamsManager.cpp b/dom/base/WebGLParamsManager.cpp
 new file mode 100644
-index 0000000000..f39fbfdcf2
 --- /dev/null
 +++ b/dom/base/WebGLParamsManager.cpp
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,76 @@
 +/* Camoufox: Per-context WebGL parameter manager */
 +#include "WebGLParamsManager.h"
++#include "json.hpp"
 +
 +namespace mozilla {
 +namespace dom {
@@ -34,12 +34,32 @@ index 0000000000..f39fbfdcf2
 +  return RoverfoxStorageManager::GetString(key, aOut);
 +}
 +
++bool WebGLParamsManager::SetConfig(uint32_t aId, const nsAString& aJson) {
++  const NS_ConvertUTF16toUTF8 json(aJson);
++  const auto parsed = nlohmann::json::parse(json.get(), nullptr, false);
++  if (!parsed.is_object()) {
++    return false;
++  }
++  RoverfoxStorageManager::PutString(
++      RoverfoxStorageManager::ContextKey("webgl_cfg_", aId), aJson);
++  return true;
++}
++
++bool WebGLParamsManager::GetConfig(uint32_t aId, nsAString& aOut) {
++  return RoverfoxStorageManager::GetString(
++      RoverfoxStorageManager::ContextKey("webgl_cfg_", aId), aOut);
++}
++
 +void WebGLParamsManager::DisableVendorFunction(uint32_t aId) {
 +  RoverfoxStorageManager::MarkSetterUsed("webgl_v", aId);
 +}
 +
 +void WebGLParamsManager::DisableRendererFunction(uint32_t aId) {
 +  RoverfoxStorageManager::MarkSetterUsed("webgl_r", aId);
++}
++
++void WebGLParamsManager::DisableConfigFunction(uint32_t aId) {
++  RoverfoxStorageManager::MarkSetterUsed("webgl_c", aId);
 +}
 +
 +bool WebGLParamsManager::IsVendorFunctionEnabledForWebIDL(JSContext* aCx,
@@ -52,14 +72,18 @@ index 0000000000..f39fbfdcf2
 +  return RoverfoxStorageManager::IsSetterOffered(aObj, "webgl_r");
 +}
 +
++bool WebGLParamsManager::IsConfigFunctionEnabledForWebIDL(JSContext* aCx,
++                                                           JSObject* aObj) {
++  return RoverfoxStorageManager::IsSetterOffered(aObj, "webgl_c");
++}
++
 +}  // namespace dom
 +}  // namespace mozilla
 diff --git a/dom/base/WebGLParamsManager.h b/dom/base/WebGLParamsManager.h
 new file mode 100644
-index 0000000000..06de6922f3
 --- /dev/null
 +++ b/dom/base/WebGLParamsManager.h
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,38 @@
 +/* Camoufox: Per-context WebGL parameter manager */
 +#ifndef mozilla_dom_WebGLParamsManager_h
 +#define mozilla_dom_WebGLParamsManager_h
@@ -76,11 +100,22 @@ index 0000000000..06de6922f3
 +  static bool GetVendor(uint32_t aId, nsAString& aOut);
 +  static void SetRenderer(uint32_t aId, const nsAString& aValue);
 +  static bool GetRenderer(uint32_t aId, nsAString& aOut);
++  // The context's own WebGL tables: CAMOU_CONFIG's webGl:* and webGl2:*
++  // parameters, extensions and shader precisions, for the GPU it names with
++  // SetVendor/SetRenderer. Without them a context of another GPU reported the
++  // launch GPU's limits beside its own renderer. SetConfig returns false for
++  // anything but a JSON object; GetConfig returns false for a context without
++  // tables, which keeps the launch's. WebIDL bindings include this header, so
++  // it stays free of the JSON library: ClientWebGLContext parses the tables.
++  static bool SetConfig(uint32_t aId, const nsAString& aJson);
++  static bool GetConfig(uint32_t aId, nsAString& aOut);
 +  static void DisableVendorFunction(uint32_t aId);
 +  static void DisableRendererFunction(uint32_t aId);
++  static void DisableConfigFunction(uint32_t aId);
 +  static bool IsVendorFunctionEnabledForWebIDL(JSContext* aCx, JSObject* aObj);
 +  static bool IsRendererFunctionEnabledForWebIDL(JSContext* aCx,
 +                                                  JSObject* aObj);
++  static bool IsConfigFunctionEnabledForWebIDL(JSContext* aCx, JSObject* aObj);
 +};
 +
 +}  // namespace dom
@@ -88,10 +123,9 @@ index 0000000000..06de6922f3
 +
 +#endif  // mozilla_dom_WebGLParamsManager_h
 diff --git a/dom/base/moz.build b/dom/base/moz.build
-index ee5d0b9149..cb146517aa 100644
 --- a/dom/base/moz.build
 +++ b/dom/base/moz.build
-@@ -587,6 +587,14 @@ EXPORTS.mozilla.dom += [
+@@ -588,6 +588,14 @@ EXPORTS.mozilla.dom += [
      "SpeechVoicesManager.h",
  ]
  
@@ -107,7 +141,6 @@ index ee5d0b9149..cb146517aa 100644
  # CharacterDataBuffer.cpp
  if CONFIG["INTEL_ARCHITECTURE"]:
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 3590b9f2b0..e1281931d5 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
 @@ -27,6 +27,7 @@
@@ -118,7 +151,7 @@ index 3590b9f2b0..e1281931d5 100644
  #include "WindowDestroyedEvent.h"
  #include "WindowNamedPropertiesHandler.h"
  #include "js/ComparisonOperators.h"
-@@ -7898,6 +7899,23 @@ void nsGlobalWindowInner::SetSpeechVoices(const nsAString& aVoices,
+@@ -7894,6 +7895,34 @@ void nsGlobalWindowInner::SetSpeechVoices(const nsAString& aVoices,
    RoverfoxStorageManager::RemoveSetter("setSpeechVoices");
  }
  
@@ -139,20 +172,31 @@ index 3590b9f2b0..e1281931d5 100644
 +  RoverfoxStorageManager::RemoveSetter("setWebGLRenderer");
 +}
 +
++void nsGlobalWindowInner::SetWebGLConfig(const nsAString& config,
++                                          ErrorResult& aRv) {
++  const uint32_t userContextId = RoverfoxStorageManager::UserContextId(this);
++  if (!WebGLParamsManager::SetConfig(userContextId, config)) {
++    aRv.ThrowTypeError("WebGL config is not a JSON object");
++    return;
++  }
++  WebGLParamsManager::DisableConfigFunction(userContextId);
++  RoverfoxStorageManager::RemoveSetter("setWebGLConfig");
++}
++
  RefPtr<GenericPromise> nsGlobalWindowInner::StorageAccessPermissionChanged(
      bool aGranted) {
    // Invalidate cached StorageAllowed field so that calls to GetLocalStorage
 diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
-index a9d8fb50ba..f3fbefbbfd 100644
 --- a/dom/base/nsGlobalWindowInner.h
 +++ b/dom/base/nsGlobalWindowInner.h
-@@ -714,6 +714,10 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+@@ -716,6 +716,11 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
    // Per-context speech voices
    void SetSpeechVoices(const nsAString& aVoices, mozilla::ErrorResult& aRv);
  
 +  // Per-context WebGL parameter spoofing
 +  void SetWebGLVendor(const nsAString& vendor, mozilla::ErrorResult& aRv);
 +  void SetWebGLRenderer(const nsAString& renderer, mozilla::ErrorResult& aRv);
++  void SetWebGLConfig(const nsAString& config, mozilla::ErrorResult& aRv);
 +
   public:
    void Alert(nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aError);
@@ -160,12 +204,15 @@ index a9d8fb50ba..f3fbefbbfd 100644
 diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.cpp
 --- a/dom/canvas/ClientWebGLContext.cpp
 +++ b/dom/canvas/ClientWebGLContext.cpp
-@@ -3,6 +3,12 @@
+@@ -3,6 +3,15 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  #include "ClientWebGLContext.h"
 +#include "MaskConfig.hpp"
 +#include "WebGLParamsManager.h"
++#include "mozilla/StaticMutex.h"
++#include <memory>
++#include <unordered_map>
 +#include "mozilla/dom/WorkerPrivate.h"
 +#include "nsPIDOMWindow.h"
 +#include <algorithm>
@@ -173,7 +220,7 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
  
  #include <fmt/format.h>
  
-@@ -781,6 +787,23 @@ void ClientWebGLContext::SetUnpackColorSpace(
+@@ -781,6 +790,69 @@ void ClientWebGLContext::SetUnpackColorSpace(
    Run<RPROC(SetUnpackColorSpace)>(*mUnpackColorSpace);
  }
  
@@ -194,10 +241,56 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
 +  return 0;
 +}
 +
++// Camoufox: the webGl:* / webGl2:* tables this context answers from: its
++// browsing context's own GPU (setWebGLConfig), else the launch's.
++class CamouWebGLTables final {
++ public:
++  explicit CamouWebGLTables(uint32_t aUserContextId)
++      : mOwn(Parsed(aUserContextId)) {}
++  const nlohmann::json& operator*() const {
++    return mOwn ? *mOwn : MaskConfig::GetJson();
++  }
++
++ private:
++  // Parsed once per context and storage generation: getParameter() reads it
++  // on every call, from windows and from workers' OffscreenCanvas.
++  static std::shared_ptr<const nlohmann::json> Parsed(uint32_t aId) {
++    struct Entry {
++      uint32_t mGeneration;
++      std::shared_ptr<const nlohmann::json> mTables;
++    };
++    static StaticMutex sMutex MOZ_UNANNOTATED;
++    static std::unordered_map<uint32_t, Entry> sParsed;
++
++    const uint32_t generation = dom::RoverfoxStorageManager::Generation();
++    {
++      StaticMutexAutoLock lock(sMutex);
++      const auto found = sParsed.find(aId);
++      if (found != sParsed.end() && found->second.mGeneration == generation) {
++        return found->second.mTables;
++      }
++    }
++    std::shared_ptr<const nlohmann::json> tables;
++    nsAutoString stored;
++    if (dom::WebGLParamsManager::GetConfig(aId, stored)) {
++      auto parsed = nlohmann::json::parse(
++          NS_ConvertUTF16toUTF8(stored).get(), nullptr, false);
++      if (parsed.is_object()) {
++        tables = std::make_shared<const nlohmann::json>(std::move(parsed));
++      }
++    }
++    StaticMutexAutoLock lock(sMutex);
++    sParsed.insert_or_assign(aId, Entry{generation, tables});
++    return tables;
++  }
++
++  std::shared_ptr<const nlohmann::json> mOwn;
++};
++
  void ClientWebGLContext::GetContextAttributes(
      dom::Nullable<dom::WebGLContextAttributes>& retval) {
    retval.SetNull();
-@@ -794,6 +817,9 @@ void ClientWebGLContext::GetContextAttributes(
+@@ -794,6 +866,9 @@ void ClientWebGLContext::GetContextAttributes(
  
    const auto& options = notLost->info.options;
  
@@ -207,7 +300,7 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
    result.mAlpha.Construct(options.alpha);
    result.mDepth = options.depth;
    result.mStencil = options.stencil;
-@@ -2179,6 +2205,107 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2179,6 +2254,108 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
    const auto& state = State();
  
    // -
@@ -283,11 +376,12 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
 +    }
 +  }();
 +
++  const CamouWebGLTables tables(GetUserContextId());
 +  std::optional<
 +      std::variant<int64_t, bool, double, std::string, std::nullptr_t>>
 +      data;
 +  if (fromTable) {
-+    data = MaskConfig::GLParam(pname, mIsWebGL2);
++    data = MaskConfig::GLParam(pname, mIsWebGL2, *tables);
 +  }
 +
 +  if (data.has_value()) {
@@ -315,7 +409,7 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
  
    const auto fnSetRetval_Buffer = [&](const GLenum target) {
      const auto buffer = *MaybeFind(state.mBoundBufferByTarget, target);
-@@ -2288,13 +2415,19 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2288,13 +2465,19 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
        return;
  
      case LOCAL_GL_ALIASED_POINT_SIZE_RANGE:
@@ -324,7 +418,7 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
 +      retval.set(Create<dom::Float32Array>(
 +          cx, this,
 +          MaskConfig::MParamGL<std::array<float, 2UL>>(
-+              pname, limits.pointSizeRange, mIsWebGL2),
++              pname, limits.pointSizeRange, mIsWebGL2, *tables),
 +          rv));
        return;
  
@@ -334,12 +428,12 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
 +      retval.set(Create<dom::Float32Array>(
 +          cx, this,
 +          MaskConfig::MParamGL<std::array<float, 2UL>>(
-+              pname, limits.lineWidthRange, mIsWebGL2),
++              pname, limits.lineWidthRange, mIsWebGL2, *tables),
 +          rv));
        return;
  
      // 4 floats
-@@ -2310,7 +2443,11 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2310,7 +2493,11 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
      case LOCAL_GL_MAX_VIEWPORT_DIMS: {
        auto maxViewportDim = BitwiseCast<int32_t>(limits.maxViewportDim);
        const auto dims = std::array<int32_t, 2>{maxViewportDim, maxViewportDim};
@@ -347,12 +441,12 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
 +      retval.set(Create<dom::Int32Array>(
 +          cx, this,
 +          MaskConfig::MParamGL<std::array<int32_t, 2UL>>(pname, dims,
-+                                                         mIsWebGL2),
++                                                         mIsWebGL2, *tables),
 +          rv));
        return;
      }
  
-@@ -2438,6 +2575,31 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2438,6 +2625,31 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
    // -
  
    if (!debug) {
@@ -384,7 +478,7 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
      const auto GetUnmaskedRenderer = [&]() {
        const auto prefLock = StaticPrefs::webgl_override_unmasked_renderer();
        if (!prefLock->IsEmpty()) {
-@@ -2470,9 +2632,12 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2470,9 +2682,12 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
            allowRenderer = false;
          }
          if (allowRenderer) {
@@ -400,7 +494,7 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
            }
          }
          if (!ret) {
-@@ -2510,9 +2675,12 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2510,9 +2725,12 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
                  ShouldResistFingerprinting(RFPTarget::WebGLRendererConstant)) {
                ret = Some("Mozilla"_ns);
              } else {
@@ -416,7 +510,7 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
                }
              }
              break;
-@@ -2542,10 +2710,13 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2542,10 +2760,13 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
                             RFPTarget::WebGLVendorConstant)) {
                ret = Some("Mozilla"_ns);
              } else {
@@ -434,13 +528,14 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
                }
              }
              break;
-@@ -3020,6 +3191,24 @@ ClientWebGLContext::GetShaderPrecisionFormat(const GLenum shadertype,
+@@ -3020,6 +3241,26 @@ ClientWebGLContext::GetShaderPrecisionFormat(const GLenum shadertype,
      return nullptr;
    }
  
 +  // Check for spoofed value
-+  if (auto value =
-+          MaskConfig::MShaderData(shadertype, precisiontype, mIsWebGL2)) {
++  const CamouWebGLTables tables(GetUserContextId());
++  if (auto value = MaskConfig::MShaderData(shadertype, precisiontype,
++                                           mIsWebGL2, *tables)) {
 +    const auto& format = value.value();
 +    const auto spoofed = webgl::ShaderPrecisionFormat{
 +        static_cast<uint8_t>(format[0]),  // rangeMin
@@ -450,22 +545,23 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
 +    return AsAddRefed(new WebGLShaderPrecisionFormatJS(spoofed));
 +  }
 +  // Check if block if not defined is on
-+  if (MaskConfig::GetBool(
++  if (const auto block = (*tables).find(
 +          mIsWebGL2 ? "webGl2:shaderPrecisionFormats:blockIfNotDefined"
-+                    : "webGl:shaderPrecisionFormats:blockIfNotDefined")) {
++                    : "webGl:shaderPrecisionFormats:blockIfNotDefined");
++      block != (*tables).end() && block->is_boolean() && block->get<bool>()) {
 +    return nullptr;
 +  }
 +
    const auto& shaderPrecisions = *notLost->info.shaderPrecisions;
    const auto args =
        webgl::GetShaderPrecisionFormatArgs{shadertype, precisiontype};
-@@ -6390,6 +6579,17 @@ bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
+@@ -6390,6 +6631,17 @@ bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
      return false;
    }
  
-+  if (std::vector<std::string> maskValues =
-+          MaskConfig::GetStringList(mIsWebGL2 ? "webGl2:supportedExtensions"
-+                                              : "webGl:supportedExtensions");
++  if (std::vector<std::string> maskValues = MaskConfig::GetStringList(
++          mIsWebGL2 ? "webGl2:supportedExtensions" : "webGl:supportedExtensions",
++          *CamouWebGLTables(GetUserContextId()));
 +      !maskValues.empty()) {
 +    if (std::find(maskValues.begin(), maskValues.end(),
 +                  GetExtensionName(ext)) != maskValues.end()) {
@@ -477,15 +573,15 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
    const auto& limits = Limits();
    return limits.supportedExtensions[ext];
  }
-@@ -6404,6 +6604,18 @@ void ClientWebGLContext::GetSupportedExtensions(
+@@ -6404,6 +6656,18 @@ void ClientWebGLContext::GetSupportedExtensions(
    }
  
    auto& retarr = retval.SetValue();
 +
 +  // Implement separately to prevent O(n^2) timing
-+  if (std::vector<std::string> maskValues =
-+          MaskConfig::GetStringList(mIsWebGL2 ? "webGl2:supportedExtensions"
-+                                              : "webGl:supportedExtensions");
++  if (std::vector<std::string> maskValues = MaskConfig::GetStringList(
++          mIsWebGL2 ? "webGl2:supportedExtensions" : "webGl:supportedExtensions",
++          *CamouWebGLTables(GetUserContextId()));
 +      !maskValues.empty()) {
 +    for (const auto& ext : maskValues) {
 +      retarr.AppendElement(NS_ConvertUTF8toUTF16(ext));
@@ -497,7 +593,6 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
      if (!IsSupported(i, callerType)) continue;
  
 diff --git a/dom/canvas/ClientWebGLContext.h b/dom/canvas/ClientWebGLContext.h
-index 6f73f55eef..902f9b3a0d 100644
 --- a/dom/canvas/ClientWebGLContext.h
 +++ b/dom/canvas/ClientWebGLContext.h
 @@ -1089,6 +1089,9 @@ class ClientWebGLContext final : public nsICanvasRenderingContextInternal,
@@ -511,7 +606,6 @@ index 6f73f55eef..902f9b3a0d 100644
        WebGLFramebufferJS* fb, bool webvr,
        const webgl::SwapChainOptions& options = webgl::SwapChainOptions());
 diff --git a/dom/canvas/moz.build b/dom/canvas/moz.build
-index b5809a1fca..8d36d592b2 100644
 --- a/dom/canvas/moz.build
 +++ b/dom/canvas/moz.build
 @@ -180,6 +180,10 @@ TEST_DIRS += [
@@ -526,10 +620,9 @@ index b5809a1fca..8d36d592b2 100644
      "/js/xpconnect/wrappers",
  ]
 diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
-index c2c6eb41b8..6cf202d17a 100644
 --- a/dom/webidl/Window.webidl
 +++ b/dom/webidl/Window.webidl
-@@ -1006,6 +1006,18 @@ partial interface Window {
+@@ -1010,6 +1010,24 @@ partial interface Window {
    undefined setScreenColorDepth(unsigned long depth);
  };
  
@@ -543,6 +636,12 @@ index c2c6eb41b8..6cf202d17a 100644
 +partial interface Window {
 +  [Throws, Func="mozilla::dom::WebGLParamsManager::IsRendererFunctionEnabledForWebIDL"]
 +  undefined setWebGLRenderer(DOMString renderer);
++};
++
++// Per-context WebGL parameters, extensions and shader precisions (JSON)
++partial interface Window {
++  [Throws, Func="mozilla::dom::WebGLParamsManager::IsConfigFunctionEnabledForWebIDL"]
++  undefined setWebGLConfig(DOMString config);
 +};
 +
  dictionary WindowPostMessageOptions : StructuredSerializeOptions {
