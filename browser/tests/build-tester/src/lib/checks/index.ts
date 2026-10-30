@@ -11,6 +11,7 @@ const SELF_DESTRUCT_FUNCTIONS = [
   "setTimezone",
   "setScreenDimensions",
   "setScreenColorDepth",
+  "setWindowPosition",
   "setNavigatorPlatform",
   "setNavigatorOscpu",
   "setNavigatorHardwareConcurrency",

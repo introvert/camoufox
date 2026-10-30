@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -7,12 +8,12 @@ import unicodedata
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from random import Random, choice, choices, randint, randrange
-from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 import orjson
 
 from camoufox._warnings import FallbackWarning, LeakWarning
-from camoufox.coherence import is_mobile_config
+from camoufox.coherence import BROWSER_CHROME_HEIGHT, is_mobile_config
 from camoufox.ip import valid_ipv4, validate_ip
 from camoufox.pkgman import LAUNCHER_CONSTANTS, load_yaml
 
@@ -614,11 +615,14 @@ def _generate_random_voice_subset(
                 chosen.add(g)
                 take_pack(packs[g])
 
-    selected = [_split_voice_entry(e) for e in out + legacy]
-    if not selected:
-        return []
+    return _voice_objects(os_key, out + legacy)
 
-    voices: List[Dict[str, Any]] = [
+
+def _voice_objects(os_key: str, entries: List[str]) -> List[Dict[str, Any]]:
+    # No voice carries default=true: stock Firefox 152 marks none on Windows
+    # (SAPI), macOS or Linux (measured 2026-09-14 on all three), so a spoofed
+    # default would be the odd one out.
+    return [
         {
             'name': name,
             'lang': lang,
@@ -626,13 +630,28 @@ def _generate_random_voice_subset(
             'isDefault': False,
             'isLocalService': vtype == 'local',
         }
-        for (name, lang, vtype) in selected
+        for (name, lang, vtype) in map(_split_voice_entry, entries)
     ]
 
-    # No voice carries default=true: stock Firefox 152 marks none on Windows
-    # (SAPI), macOS or Linux (measured 2026-09-14 on all three), so a spoofed
-    # default would be the odd one out.
-    return voices
+
+def voice_pool(os_keys: Iterable[str]) -> List[Dict[str, Any]]:
+    """Every voice the manifests record for these OSes, for `voices:pool`.
+
+    The browser registers them beside the launch's own voices, and a context
+    sees those its list names: the voices its draw took for its locale, which
+    the launch's draw need not have.
+    """
+    manifests = _load_voice_manifests()
+    pool: List[Dict[str, Any]] = []
+    for os_key in os_keys:
+        manifest = manifests[os_key]
+        entries = list(manifest.get('base') or [])
+        for pack in (manifest.get('langPacks') or {}).values():
+            entries += (pack.get('oneCore') or []) + (pack.get('desktop') or [])
+        for addition in manifest.get('additions', []):
+            entries += addition.get('voices') or []
+        pool += _voice_objects(os_key, list(dict.fromkeys(entries)))
+    return pool
 
 
 def _normalize_preset_voices(
@@ -1432,10 +1451,11 @@ def _draw_fonts(target_os: str, seed: int, instead: str, identity: Optional[str]
         return None
 
 
-def _draw_voices(target_os: str, seed: int, instead: str, identity: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+def _draw_voices(target_os: str, seed: int, instead: str, identity: Optional[str],
+                 locale: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
     """The identity's voice draw, or None after a FallbackWarning naming `instead`."""
     try:
-        return _generate_random_voice_subset(target_os, seed=seed)
+        return _generate_random_voice_subset(target_os, locale, seed=seed)
     except (OSError, ValueError, KeyError) as e:
         FallbackWarning.warn('Drawing the speech voices', instead, e, identity)
         return None
@@ -1490,6 +1510,14 @@ def _build_init_script(values: Dict[str, Any]) -> str:
                 f'  if (typeof w.setScreenColorDepth === "function") w.setScreenColorDepth({scd});'
             )
 
+    # Window position (x + y together; a maximized Windows window sits at -8)
+    wx = values.get('windowX')
+    wy = values.get('windowY')
+    if wx is not None and wy is not None:
+        lines.append(
+            f'  if (typeof w.setWindowPosition === "function") w.setWindowPosition({wx}, {wy});'
+        )
+
     # Timezone — only call setTimezone() when we have an explicit value.
     # Without this, the C++ MaskConfig fallback (from CAMOU_CONFIG set by geoip
     # in launch_options) handles timezone for both main thread and workers via
@@ -1523,13 +1551,13 @@ def _build_init_script(values: Dict[str, Any]) -> str:
             f'  if (typeof w.setFontList === "function") w.setFontList({_json.dumps(joined)});'
         )
 
-    # Speech voices (comma-separated names). config['voices'] holds MaskConfig
-    # voice objects; extract the display name from each (tolerating a legacy
-    # list of plain name strings).
+    # Speech voices, one name per line, as names hold commas. config['voices']
+    # holds MaskConfig voice objects; extract the display name from each
+    # (tolerating a legacy list of plain name strings).
     voices = values.get('speechVoices')
     if voices and len(voices) > 0:
         names = [v['name'] if isinstance(v, dict) else v for v in voices]
-        joined = ','.join(names)
+        joined = '\n'.join(names)
         lines.append(
             f'  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices({_json.dumps(joined)});'
         )
@@ -1547,6 +1575,8 @@ def generate_context_fingerprint(
     locale: Optional[str] = None,
     config_overrides: Optional[Dict[str, Any]] = None,
     webgl_config: Optional[Tuple[str, str]] = None,
+    device_pixel_ratio: Optional[float] = None,
+    hardware_concurrency: Optional[int] = None,
     i_know_what_im_doing: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -1567,6 +1597,10 @@ def generate_context_fingerprint(
             is built but before init_script is rendered (e.g. {'audio:seed': 7}).
         webgl_config: The (vendor, renderer) a drawn identity claims, instead of
             drawing one.
+        device_pixel_ratio: The pixel ratio the browser renders at, which an
+            Android identity's device must have (a phone launch's).
+        hardware_concurrency: The cores the browser reports, which a page can
+            measure whatever the context claims (fix_hardware_concurrency).
         i_know_what_im_doing: Silences the warning that a phone takes its
             voices and GPU from the Linux pools.
     """
@@ -1587,9 +1621,15 @@ def generate_context_fingerprint(
             )
             tables.pop('webGl2Enabled')
             config.update(tables)
+        if hardware_concurrency:
+            config['navigator.hardwareConcurrency'] = hardware_concurrency
+            nav = {**nav, 'hardwareConcurrency': hardware_concurrency}
     else:
-        # Fall back to synthetic generation
-        fp = generate_fingerprint(os=os)
+        # Fall back to synthetic generation. A phone renders at the launch's
+        # pixel ratio whatever the context claims (layout.css.devPixelsPerPx
+        # is the whole browser's), so its text measured as another device's.
+        fp = (_generate_android_fingerprint(device_pixel_ratio)
+              if os == 'android' and device_pixel_ratio else generate_fingerprint(os=os))
         config = from_fpgen(fp, ff_version)
         # fpgen's Linux pool now and then pairs the Linux UA with a Windows
         # platform and oscpu. launch_options() corrects that; this path did
@@ -1597,6 +1637,8 @@ def generate_context_fingerprint(
         # is read from the platform, drew Windows fonts and voices as well.
         if 'Linux' in str(config.get('navigator.userAgent', '')):
             fix_navigator_arch(config, 'lin')
+        if hardware_concurrency:
+            config['navigator.hardwareConcurrency'] = hardware_concurrency
 
         # A fresh identity: every seeded draw below gets its own salt.
         _salt = identity_salt()
@@ -1676,17 +1718,44 @@ def generate_context_fingerprint(
     if timezone:
         config['timezone'] = timezone
     if locale:
-        from .locales import normalize_locale
-        parsed = normalize_locale(locale)
+        from .locales import Locale, normalize_locale, verify_locale
+        # Playwright's form: a tag, or a language list whose first entry is
+        # the locale (per-context-consistency.patch).
+        primary = locale.split(',')[0].strip()
+        if '-' in primary:
+            parsed = normalize_locale(primary)
+        else:
+            verify_locale(primary)
+            parsed = Locale(language=primary)
         config['locale:language'] = parsed.language
-        config['locale:region'] = parsed.region
+        if parsed.region:
+            config['locale:region'] = parsed.region
         config['navigator.language'] = parsed.as_string
         if parsed.script:
             config['locale:script'] = parsed.script
+        # The Windows voice list is the display language's pack, so the voices
+        # are drawn again for the locale, as launch_options() draws them after
+        # resolving its own.
+        voices = _draw_voices(
+            platform_to_os(config.get('navigator.platform', '')),
+            identity_seed(config, identity_salt()), "the locale-blind draw",
+            config.get('navigator.userAgent'), parsed.as_string,
+        )
+        if voices is not None:
+            config['voices'] = voices
 
     # Apply caller overrides before rendering init_script
     if config_overrides:
         config.update(config_overrides)
+
+    # The window the identity claims, fitted to the screen the browser reports
+    # for it as launch_options() fits the launch's.
+    follow_baseline_protection(config, OS_KEYS[platform_to_os(config.get('navigator.platform', ''))])
+    clamp_window_dimensions(config)
+    clamp_window_position(config)
+    # Unset, a launch reports where its window is: 0, 0 for an unplaced one.
+    for key in ('window.screenX', 'window.screenY'):
+        config[key] = config.get(key) or 0
 
     # Build the values dict for the init script (works for both paths)
     init_values: Dict[str, Any] = {
@@ -1700,6 +1769,8 @@ def generate_context_fingerprint(
         'screenWidth': screen.get('width'),
         'screenHeight': screen.get('height'),
         'screenColorDepth': screen.get('colorDepth'),
+        'windowX': config['window.screenX'],
+        'windowY': config['window.screenY'],
         'timezone': preset.get('timezone') if isinstance(preset.get('timezone'), str) else config.get('timezone'),
         'fontList': config.get('fonts'),
         'speechVoices': config.get('voices'),
@@ -1733,11 +1804,11 @@ def generate_context_fingerprint(
             # Juggler reads the screen size to report screen.orientation.
             context_options['screen'] = {'width': sw, 'height': sh}
     if sw and sh:
+        # Juggler sizes the real window to this viewport plus the browser's
+        # chrome, and outerWidth/outerHeight report that window.
         context_options['viewport'] = {
-            'width': sw,
-            # A phone's browser chrome is its own; the 600px floor is for
-            # desktop windows.
-            'height': (config.get('window.outerHeight') or sh) if mobile else max(sh - 28, 600),
+            'width': config.get('window.outerWidth') or sw,
+            'height': (config.get('window.outerHeight') or sh) - BROWSER_CHROME_HEIGHT,
         }
     dpr = screen.get('devicePixelRatio')
     if dpr:
@@ -1747,7 +1818,7 @@ def generate_context_fingerprint(
         tz = preset.get('timezone')
     if tz:
         context_options['timezone_id'] = tz
-    nav_lang = config.get('navigator.language')
+    nav_lang = locale or config.get('navigator.language')
     if nav_lang:
         context_options['locale'] = nav_lang
 
@@ -1897,14 +1968,20 @@ def android_gpus() -> FrozenSet[Tuple[str, str]]:
     return frozenset((g['vendor'], g['renderer']) for g in _android_devices()['gpus'])
 
 
-def _generate_android_fingerprint() -> Dict[str, Any]:
+def _generate_android_fingerprint(device_pixel_ratio: Optional[float] = None) -> Dict[str, Any]:
     """A Firefox for Android phone, in fpgen's fingerprint shape.
 
     The screen and window are one recorded device's, drawn by its weight. The
-    whole screen is available, as Firefox for Android reports it.
+    whole screen is available, as Firefox for Android reports it. With
+    `device_pixel_ratio`, only a device that renders at it.
     """
     android = _android_devices()
-    devices = android['devices']
+    devices = [
+        d for d in android['devices']
+        if device_pixel_ratio is None or math.isclose(d['window']['devicePixelRatio'], device_pixel_ratio)
+    ]
+    if not devices:
+        raise ValueError(f'No recorded phone has a device pixel ratio of {device_pixel_ratio}')
     device = choices(devices, weights=[d['weight'] for d in devices])[0]  # nosec
     screen = device['screen']
     return {

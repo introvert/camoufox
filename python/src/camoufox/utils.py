@@ -22,7 +22,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import Screen, platform_to_os, _set_app_version, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts, android_gpu, android_gpus
+from .fingerprints import Screen, platform_to_os, _set_app_version, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, voice_pool, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts, android_gpu, android_gpus
 from . import coherence
 from .coherence import is_mobile_config, is_mobile_user_agent
 from .geolocation import geoip_allowed, get_geolocation
@@ -689,6 +689,20 @@ def launches_mobile(from_options: Dict[str, Any]) -> bool:
     """Whether the CAMOU_CONFIG in a set of launch options is a phone's."""
     blob = _camou_config_blob(from_options)
     return bool(blob) and is_mobile_config(orjson.loads(blob))
+
+
+def launch_machine(from_options: Dict[str, Any]) -> Dict[str, Any]:
+    """What a launch's contexts share because the browser has one of each, as
+    generate_context_fingerprint() arguments: the cores a page can measure
+    (fix_hardware_concurrency), and a phone launch's pixel ratio
+    (apply_mobile_mode), which the whole browser renders at."""
+    blob = _camou_config_blob(from_options)
+    config = orjson.loads(blob) if blob else {}
+    dpr = from_options.get('firefox_user_prefs', {}).get('layout.css.devPixelsPerPx')
+    return {
+        'hardware_concurrency': config.get('navigator.hardwareConcurrency'),
+        'device_pixel_ratio': float(dpr) if dpr and is_mobile_config(config) else None,
+    }
 
 
 # Playwright emulates four media features on every context it creates, whether
@@ -1738,6 +1752,10 @@ def launch_options(
     if cover_canvas:
         add_canvas_placeholder(firefox_user_prefs)
         LeakWarning.warn('canvas_noise', i_know_what_im_doing)
+    # A context's voices follow its own OS and locale. The browser registers
+    # every voice such a draw can take, and shows each context the ones it
+    # lists. Without canvas noise a context claims the launch's OS.
+    config['voices:pool'] = voice_pool(OS_KEYS.values() if cover_canvas else [target_os])
 
     if block_webgl:
         firefox_user_prefs['webgl.disabled'] = True

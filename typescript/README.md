@@ -91,6 +91,11 @@ await context.close();
 `NewContext()` gives each context its own identity (navigator, screen, WebGL,
 fonts, voices, audio seed, timezone, WebRTC IP), applied through
 `addInitScript` before any page script runs.
+Each call draws a new identity the way a launch does, from the same fpgen model
+and font and voice pools, and a page in the context reads what a browser
+launched with that identity reports. Playwright's own `browser.newContext()` draws
+nothing: its pages report the launch's identity, so all such contexts are one
+device.
 
 ```javascript
 import { Camoufox, NewContext } from "camoufox";
@@ -114,7 +119,12 @@ await browser.close();
 | `webrtc_ip` | IPv4 or IPv6 address WebRTC reports. |
 | `proxy` | Per-context proxy, in Playwright's format. The context is placed where the proxy exits: `webrtc_ip`, `timezoneId`, `locale` and `geolocation` each default to the exit IP's, looked up through the proxy unless all four are given, and `InvalidIP` is thrown if the lookup fails. |
 | `geolocation` | `{ latitude, longitude }`; also grants the `geolocation` permission. |
+| `locale` | Playwright's: a tag (`"de-DE"`, reported as `de-DE, de`) or a language list (`"de, en-US, en"`) whose first entry is the locale. The context's speech voices are drawn for it. |
 | anything else | Passed to Playwright's `browser.newContext()` (camelCase, e.g. `timezoneId`), overriding the generated value. |
+
+What the browser has one of, every context of it shares: the cores a page can
+measure (`navigator.hardwareConcurrency`), and on a phone launch
+(`os: "android"`) the device, since the whole browser renders at its pixel ratio.
 
 Canvas noise belongs to the browser, not the context (see
 [The canvas on another OS](#the-canvas-on-another-os)). On a browser without it,

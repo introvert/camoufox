@@ -568,7 +568,9 @@ def test_instant_animations_are_an_opt_in():
 
 def test_spoofed_voices_complete_without_a_config_switch():
     patch = (BROWSER / "patches" / "voice-spoofing.patch").read_text(encoding="utf-8")
-    assert "fakeCompletion" not in patch and "DispatchError(0, 0)" not in patch, (
+    # Firefox's own error path for a real engine may show as context.
+    added = "\n".join(line for line in patch.splitlines() if line.startswith("+"))
+    assert "fakeCompletion" not in added and "DispatchError(0, 0)" not in added, (
         explain("spoofed-voices-speak")
     )
 

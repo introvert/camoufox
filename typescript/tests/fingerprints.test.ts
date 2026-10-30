@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Generator } from "fpgen-js";
 import { describe, expect, it, vi } from "vitest";
+import { BROWSER_CHROME_HEIGHT } from "../src/coherence.js";
 import { InvalidIP } from "../src/exceptions.js";
 import {
 	androidGpus,
@@ -35,9 +36,11 @@ import {
 	type Preset,
 	Screen,
 	setMediaDevicesDefaults,
+	voicePool,
 	WINDOWS_11_MARKER_FONTS,
 } from "../src/fingerprints.js";
 import { LOCAL_DATA } from "../src/paths.js";
+import { NewContext } from "../src/sync_api.js";
 import { MODEL } from "./fpgen-setup.js";
 
 function data(name: string): any {
@@ -926,6 +929,111 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		expect(fromP.config["navigator.platform"]).toBe("MacIntel");
 	});
 
+	it.each([
+		"de-DE",
+		"de",
+		"de, en-US, en",
+	])("a %s context's voices follow its locale", (locale) => {
+		// The voices were drawn without the locale: a de-DE Windows context
+		// listed only the en-US pack, where a de-DE launch lists the German one.
+		const fp = generateContextFingerprint({ os: "windows", locale });
+		const names = fp.config.voices.map((v: { name: string }) => v.name);
+		expect(names.some((n: string) => n.includes("German (Germany)"))).toBe(
+			true,
+		);
+		expect(fp.context_options.locale).toBe(locale);
+		expect(fp.config["navigator.language"]).toBe(locale.split(",")[0]);
+	});
+
+	it.each([
+		["windows", "win"],
+		["macos", "mac"],
+		["linux", "lin"],
+		["android", "lin"],
+	])("a %s context's voices are all in voices:pool", (os, key) => {
+		// The browser registers the launch's voices and voices:pool; a
+		// context's list only selects among them.
+		const pool = new Set(voicePool([key]).map((v) => v.voiceUri));
+		for (const locale of ["de-DE", "fr-FR", "ja-JP", "en-GB"]) {
+			for (let i = 0; i < 5; i++) {
+				const fp = generateContextFingerprint({ os, locale });
+				for (const v of fp.config.voices) expect(pool).toContain(v.voiceUri);
+			}
+		}
+	});
+
+	it("NewContext draws the identity for its context's locale", async () => {
+		let options: Record<string, any> = {};
+		let script = "";
+		const browser = {
+			version: () => "150.0.2",
+			newContext: async (o: Record<string, any>) => {
+				options = o;
+				return {
+					addInitScript: async (s: string) => {
+						script = s;
+					},
+				};
+			},
+		};
+		await NewContext(browser as any, {
+			os: "windows",
+			locale: "de, en-US, en",
+		});
+		expect(options.locale).toBe("de, en-US, en");
+		expect(script).toContain("German (Germany)");
+	});
+
+	it("a phone context is its phone launch's device", async () => {
+		// The browser renders at the launch's pixel ratio (devPixelsPerPx), so a
+		// context of another device measured its text as the launch's.
+		let options: Record<string, any> = {};
+		const browser = {
+			version: () => "155.0",
+			_camoufoxMachine: { device_pixel_ratio: 60 / 21 },
+			newContext: async (o: Record<string, any>) => {
+				options = o;
+				return { addInitScript: async () => undefined };
+			},
+		};
+		await NewContext(browser as any, { os: "android" });
+		expect(options.deviceScaleFactor).toBe(60 / 21);
+		expect(options.screen).toEqual({ width: 378, height: 811 });
+	});
+
+	it.each([
+		"windows",
+		"macos",
+		"linux",
+	])("a %s context reports its browser's cores", async (os) => {
+		// A page can time parallel workers to count the cores the browser
+		// runs on, whatever the context claims.
+		let script = "";
+		const browser = {
+			version: () => "155.0",
+			_camoufoxMachine: { hardware_concurrency: 6 },
+			newContext: async () => ({
+				addInitScript: async (s: string) => {
+					script = s;
+				},
+			}),
+		};
+		for (let i = 0; i < 5; i++) {
+			await NewContext(browser as any, { os });
+			expect(script).toContain("setNavigatorHardwareConcurrency(6)");
+		}
+	});
+
+	it("no phone renders at a desktop's pixel ratio", () => {
+		expect(() =>
+			generateContextFingerprint({
+				os: "android",
+				device_pixel_ratio: 1,
+				i_know_what_im_doing: true,
+			}),
+		).toThrow(/pixel ratio of 1/);
+	});
+
 	it("an Android context asks Playwright for a phone", () => {
 		const { context_options: opts, init_script } = generateContextFingerprint({
 			os: "android",
@@ -958,7 +1066,52 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		});
 		for (const key of ["isMobile", "hasTouch", "deviceScaleFactor", "screen"])
 			expect(opts).not.toHaveProperty(key);
-		expect(opts.viewport.height).toBeGreaterThanOrEqual(600);
+	});
+
+	it.each([
+		"windows",
+		"macos",
+		"linux",
+		"android",
+	] as const)("a %s context's window fits its screen", (os) => {
+		// Juggler sizes the real window to the viewport plus the browser's
+		// chrome, and outerWidth/outerHeight report that window.
+		for (let i = 0; i < 20; i++) {
+			const {
+				config,
+				context_options: opts,
+				init_script: script,
+			} = generateContextFingerprint({
+				os,
+				i_know_what_im_doing: true,
+			});
+			expect(opts.viewport.width).toBe(config["window.outerWidth"]);
+			expect(opts.viewport.height + BROWSER_CHROME_HEIGHT).toBe(
+				config["window.outerHeight"],
+			);
+			expect(config["window.outerWidth"]).toBeLessThanOrEqual(
+				config["screen.availWidth"],
+			);
+			expect(config["window.outerHeight"]).toBeLessThanOrEqual(
+				config["screen.availHeight"],
+			);
+			expect(config["screen.availHeight"]).toBeLessThanOrEqual(
+				config["screen.height"],
+			);
+			// Its own position, inside its screen: the launch's sat a full-width
+			// context window partly off it.
+			const position = /setWindowPosition\((-?\d+), (-?\d+)\)/.exec(script);
+			expect(position).not.toBeNull();
+			const [, x, y] = (position ?? []).map(Number);
+			expect(x).toBeGreaterThanOrEqual(0);
+			expect(x).toBeLessThanOrEqual(
+				config["screen.width"] - config["window.outerWidth"],
+			);
+			expect(y).toBeGreaterThanOrEqual(0);
+			expect(y).toBeLessThanOrEqual(
+				config["screen.height"] - config["window.outerHeight"],
+			);
+		}
 	});
 
 	it("a context with a Linux UA is Linux throughout", () => {

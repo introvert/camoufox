@@ -15,13 +15,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { generate, InvalidConstraints } from "fpgen-js";
 import * as random from "python-random";
-import { isMobileConfig } from "./coherence.js";
+import { BROWSER_CHROME_HEIGHT, isMobileConfig } from "./coherence.js";
 import {
 	supported as cpuAffinitySupported,
 	hostCoreCount,
 } from "./cpu_affinity.js";
 import { validateIP, validIPv4 } from "./ip.js";
-import { normalizeLocale } from "./locales.js";
+import { Locale, normalizeLocale, verifyLocale } from "./locales.js";
 import { LAUNCHER_CONSTANTS, LOCAL_DATA, loadDataFile } from "./paths.js";
 import { pkgmanDeps } from "./pkgman.js";
 import {
@@ -756,14 +756,41 @@ export function generateRandomVoiceSubset(
 		}
 	}
 
-	const selected = [...out, ...legacy].map(splitVoiceEntry);
-	return selected.map(([name, lang, vtype]) => ({
+	return voiceObjects(osKey, [...out, ...legacy]);
+}
+
+// No voice carries default=true: stock Firefox marks none on any OS.
+function voiceObjects(osKey: string, entries: string[]): VoiceObject[] {
+	return entries.map(splitVoiceEntry).map(([name, lang, vtype]) => ({
 		name,
 		lang,
 		voiceUri: voiceUri(osKey, name, lang),
 		isDefault: false,
 		isLocalService: vtype === "local",
 	}));
+}
+
+/**
+ * Every voice the manifests record for these OSes, for `voices:pool`. The
+ * browser registers them beside the launch's own voices, and a context sees
+ * those its list names: the voices its draw took for its locale, which the
+ * launch's draw need not have.
+ */
+export function voicePool(osKeys: Iterable<string>): VoiceObject[] {
+	const manifests = loadVoiceManifests();
+	const pool: VoiceObject[] = [];
+	for (const osKey of osKeys) {
+		const manifest = manifests[osKey];
+		const entries: string[] = [...(manifest.base ?? [])];
+		for (const pack of Object.values(manifest.langPacks ?? {}) as any[]) {
+			entries.push(...(pack.oneCore ?? []), ...(pack.desktop ?? []));
+		}
+		for (const addition of manifest.additions ?? []) {
+			entries.push(...(addition.voices ?? []));
+		}
+		pool.push(...voiceObjects(osKey, [...new Set(entries)]));
+	}
+	return pool;
 }
 
 /**
@@ -1590,6 +1617,8 @@ export interface InitValues {
 	screenWidth?: number;
 	screenHeight?: number;
 	screenColorDepth?: number;
+	windowX?: number;
+	windowY?: number;
 	timezone?: string;
 	fontList?: string[];
 	speechVoices?: Array<string | VoiceObject>;
@@ -1648,6 +1677,15 @@ export function buildInitScript(values: InitValues): string {
 		}
 	}
 
+	// Window position (x + y together; a maximized Windows window sits at -8)
+	const wx = values.windowX;
+	const wy = values.windowY;
+	if (wx != null && wy != null) {
+		lines.push(
+			`  if (typeof w.setWindowPosition === "function") w.setWindowPosition(${wx}, ${wy});`,
+		);
+	}
+
 	// Timezone -- only with an explicit value; MaskConfig handles the rest.
 	const tz = values.timezone;
 	if (pyTruthy(tz)) {
@@ -1678,14 +1716,14 @@ export function buildInitScript(values: InitValues): string {
 		);
 	}
 
-	// Speech voices (comma-separated names)
+	// Speech voices, one name per line, as names hold commas
 	const voices = values.speechVoices;
 	if (voices?.length) {
 		const names = voices.map((v) =>
 			v !== null && typeof v === "object" ? v.name : v,
 		);
 		lines.push(
-			`  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices(${pyJsonDumps(names.join(","))});`,
+			`  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices(${pyJsonDumps(names.join("\n"))});`,
 		);
 	}
 
@@ -1745,6 +1783,10 @@ function poolKeyFromPlatform(plat: string): TargetOS {
  *   and before the init script is rendered.
  * @param webgl_config The [vendor, renderer] a drawn identity claims, instead
  *   of drawing one.
+ * @param device_pixel_ratio The pixel ratio the browser renders at, which an
+ *   Android identity's device must have (a phone launch's).
+ * @param hardware_concurrency The cores the browser reports, which a page can
+ *   measure whatever the context claims (fixHardwareConcurrency).
  * @param i_know_what_im_doing Silences the warning that a phone takes its
  *   voices and GPU from the Linux pools.
  */
@@ -1757,6 +1799,8 @@ export function generateContextFingerprint({
 	locale,
 	config_overrides,
 	webgl_config,
+	device_pixel_ratio,
+	hardware_concurrency,
 	i_know_what_im_doing = false,
 }: {
 	preset?: Preset | null;
@@ -1767,6 +1811,8 @@ export function generateContextFingerprint({
 	locale?: string | null;
 	config_overrides?: Config | null;
 	webgl_config?: [string, string] | null;
+	device_pixel_ratio?: number | null;
+	hardware_concurrency?: number | null;
 	i_know_what_im_doing?: boolean;
 } = {}): ContextFingerprint {
 	let config: Config;
@@ -1796,8 +1842,18 @@ export function generateContextFingerprint({
 			delete tables.webGl2Enabled;
 			Object.assign(config, tables);
 		}
+		if (hardware_concurrency) {
+			config["navigator.hardwareConcurrency"] = hardware_concurrency;
+			nav = { ...nav, hardwareConcurrency: hardware_concurrency };
+		}
 	} else {
-		const fp = generateFingerprint({ os: os ?? undefined });
+		// A phone renders at the launch's pixel ratio whatever the context
+		// claims (layout.css.devPixelsPerPx is the whole browser's), so its
+		// text measured as another device's.
+		const fp =
+			os === "android" && device_pixel_ratio
+				? generateAndroidFingerprint(device_pixel_ratio)
+				: generateFingerprint({ os: os ?? undefined });
 		config = fromFpgen(fp, ff_version);
 		// fpgen's Linux pool now and then pairs the Linux UA with a Windows
 		// platform and oscpu. launchOptions() corrects that; this path did not,
@@ -1805,6 +1861,8 @@ export function generateContextFingerprint({
 		// read from the platform, drew Windows fonts and voices as well.
 		if (pyStr(get(config, "navigator.userAgent", "")).includes("Linux"))
 			fixNavigatorArch(config, "lin");
+		if (hardware_concurrency)
+			config["navigator.hardwareConcurrency"] = hardware_concurrency;
 
 		// A fresh identity: every seeded draw below gets its own salt.
 		const salt = identitySalt();
@@ -1914,14 +1972,53 @@ export function generateContextFingerprint({
 
 	if (timezone) config.timezone = timezone;
 	if (locale) {
-		const parsed = normalizeLocale(locale);
+		// Playwright's form: a tag, or a language list whose first entry is the
+		// locale (per-context-consistency.patch).
+		const primary = locale.split(",")[0].trim();
+		let parsed: Locale;
+		if (primary.includes("-")) {
+			parsed = normalizeLocale(primary);
+		} else {
+			verifyLocale(primary);
+			parsed = new Locale(primary);
+		}
 		config["locale:language"] = parsed.language;
-		config["locale:region"] = parsed.region;
+		if (parsed.region) config["locale:region"] = parsed.region;
 		config["navigator.language"] = parsed.asString;
 		if (parsed.script) config["locale:script"] = parsed.script;
+		// The Windows voice list is the display language's pack, so the voices
+		// are drawn again for the locale, as launchOptions() draws them after
+		// resolving its own.
+		try {
+			config.voices = generateRandomVoiceSubset(
+				targetOsFromPlatform(pyStr(get(config, "navigator.platform", ""))),
+				parsed.asString,
+				identitySeed(config, identitySalt()),
+			);
+		} catch (e) {
+			if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
+			FallbackWarning.warn(
+				"Drawing the speech voices",
+				"the locale-blind draw",
+				e,
+				config["navigator.userAgent"],
+			);
+		}
 	}
 
 	if (config_overrides) Object.assign(config, config_overrides);
+
+	// The window the identity claims, fitted to the screen the browser reports
+	// for it as launchOptions() fits the launch's.
+	followBaselineProtection(
+		config,
+		poolKeyFromPlatform(String(config["navigator.platform"] ?? "")),
+	);
+	clampWindowDimensions(config);
+	clampWindowPosition(config);
+	// Unset, a launch reports where its window is: 0, 0 for an unplaced one.
+	for (const key of ["window.screenX", "window.screenY"])
+		config[key] = config[key] || 0;
 
 	const initValues: InitValues = {
 		audioFingerprintSeed: config["audio:seed"],
@@ -1936,6 +2033,8 @@ export function generateContextFingerprint({
 		screenWidth: screen.width,
 		screenHeight: screen.height,
 		screenColorDepth: screen.colorDepth,
+		windowX: config["window.screenX"],
+		windowY: config["window.screenY"],
 		timezone:
 			typeof resolvedPreset.timezone === "string"
 				? resolvedPreset.timezone
@@ -1972,21 +2071,20 @@ export function generateContextFingerprint({
 		if (pyTruthy(sw) && pyTruthy(sh))
 			contextOptions.screen = { width: sw, height: sh };
 	}
-	if (pyTruthy(sw) && pyTruthy(sh))
+	if (pyTruthy(sw) && pyTruthy(sh)) {
+		// Juggler sizes the real window to this viewport plus the browser's
+		// chrome, and outerWidth/outerHeight report that window.
 		contextOptions.viewport = {
-			width: sw,
-			// A phone's browser chrome is its own; the 600px floor is for
-			// desktop windows.
-			height: mobile
-				? config["window.outerHeight"] || sh
-				: Math.max(sh - 28, 600),
+			width: config["window.outerWidth"] || sw,
+			height: (config["window.outerHeight"] || sh) - BROWSER_CHROME_HEIGHT,
 		};
+	}
 	const dpr = screen.devicePixelRatio;
 	if (pyTruthy(dpr)) contextOptions.deviceScaleFactor = dpr;
 	let tz = config.timezone;
 	if (!pyTruthy(tz)) tz = resolvedPreset.timezone;
 	if (pyTruthy(tz)) contextOptions.timezoneId = tz;
-	const navLang = config["navigator.language"];
+	const navLang = locale || config["navigator.language"];
 	if (pyTruthy(navLang)) contextOptions.locale = navLang;
 
 	return {
@@ -2155,11 +2253,22 @@ export function androidGpus(): [string, string][] {
 /**
  * A Firefox for Android phone, in fpgen's fingerprint shape. The screen and
  * window are one recorded device's, drawn by its weight. The whole screen is
- * available, as Firefox for Android reports it.
+ * available, as Firefox for Android reports it. With `devicePixelRatio`, only a
+ * device that renders at it.
  */
-function generateAndroidFingerprint(): Record<string, any> {
+function generateAndroidFingerprint(
+	devicePixelRatio?: number | null,
+): Record<string, any> {
 	const android = loadAndroidDevices();
-	const devices: Record<string, any>[] = android.devices;
+	const devices: Record<string, any>[] = android.devices.filter(
+		(d: Record<string, any>) =>
+			devicePixelRatio == null ||
+			Math.abs(d.window.devicePixelRatio - devicePixelRatio) < 1e-9,
+	);
+	if (!devices.length)
+		throw new ValueError(
+			`No recorded phone has a device pixel ratio of ${devicePixelRatio}`,
+		);
 	const device = random.choices(devices, {
 		weights: devices.map((d) => d.weight),
 	})[0];

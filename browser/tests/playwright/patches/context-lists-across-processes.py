@@ -84,12 +84,12 @@ async def main() -> int:
         # The probe measures against monospace and serif, so the fonts those
         # resolve to on Windows must stay visible in the context too.
         fonts = sorted({*sorted(launch["fonts"])[:18], "Courier New", "Times New Roman"})
-        voices = launch["voices"][:1]
+        voices = "\n".join(launch["voices"][:1])
 
         context = await browser.new_context()
         await context.add_init_script(
             f"if (typeof setFontList === 'function') setFontList({json.dumps(','.join(fonts))});"
-            f"if (typeof setSpeechVoices === 'function') setSpeechVoices({json.dumps(','.join(voices))});"
+            f"if (typeof setSpeechVoices === 'function') setSpeechVoices({json.dumps(voices)});"
         )
         seen = {}
         for host in HOSTS:

@@ -32,6 +32,7 @@ import {
 	hostIdentity,
 	type LaunchOptions,
 	launchesMobile,
+	launchMachine,
 	launchOptions,
 	pinnedCoreCount,
 	STOCK_MEDIA_DEFAULTS,
@@ -217,6 +218,7 @@ async function launchWith(
 	attachStockMediaDefaults(browser);
 	attachDesktopOnlyWarning(browser);
 	(browser as any)._camoufoxHostIdentity = identity;
+	(browser as any)._camoufoxMachine = launchMachine(fromOptions);
 	return attachVirtualDisplay(browser, virtualDisplay);
 }
 
@@ -316,6 +318,8 @@ export async function NewContext(
 		ff_version: ffVersion,
 		webrtc_ip: webrtcIp,
 		webgl_config: webglConfig,
+		locale: contextOptions.locale,
+		...(browser as any)._camoufoxMachine,
 	});
 
 	// Merge the generated context options with user overrides (user wins). They

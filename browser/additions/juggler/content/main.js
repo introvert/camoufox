@@ -57,7 +57,9 @@ export function initialize(browsingContext, docShell) {
           browsingContext.top.languageOverride = locale || "";
         }
       } catch (e) { /* fall through */ }
-      docShell.languageOverride = locale;
+      // Of a language list, ICU takes the first entry, the locale
+      // (JS::RealmBehaviors::setLocaleOverride in the patches).
+      docShell.languageOverride = locale && locale.split(',')[0].trim();
     },
 
     javaScriptDisabled: (javaScriptDisabled) => {

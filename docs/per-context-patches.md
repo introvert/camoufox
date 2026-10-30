@@ -19,6 +19,7 @@ for the calling window's context, and is gone before any page script runs
 | `setTimezone(tz)` | `timezone-spoofing.patch` | `Date`, `Intl.DateTimeFormat` and every other time API |
 | `setScreenDimensions(w, h)` | `screen-spoofing.patch` | `screen.width`, `screen.height`, matching CSS media features |
 | `setScreenColorDepth(depth)` | `screen-spoofing.patch` | `screen.colorDepth` |
+| `setWindowPosition(x, y)` | `screen-spoofing.patch` | `screenX`, `screenY`, `screenLeft`, `screenTop` |
 | `setNavigatorPlatform(platform)` | `navigator-spoofing.patch` | `navigator.platform` |
 | `setNavigatorOscpu(oscpu)` | `navigator-spoofing.patch` | `navigator.oscpu` |
 | `setNavigatorHardwareConcurrency(cores)` | `navigator-spoofing.patch` | `navigator.hardwareConcurrency` |
@@ -29,7 +30,7 @@ for the calling window's context, and is gone before any page script runs
 | `setWebGLRenderer(renderer)` | `webgl-spoofing.patch` | `UNMASKED_RENDERER_WEBGL` |
 | `setWebGLConfig(json)` | `webgl-spoofing.patch` | The GPU's limits, extensions and shader precisions: a JSON object of the `webGl:*` and `webGl2:*` config keys, which replaces the launch's for the context (`{}`: the host's) |
 | `setFontList(fonts)` | `font-list-spoofing.patch` | Which fonts exist (comma-separated, case-insensitive) |
-| `setSpeechVoices(voices)` | `speech-voices-spoofing.patch` | `speechSynthesis.getVoices()` (comma-separated names) |
+| `setSpeechVoices(voices)` | `speech-voices-spoofing.patch` | `speechSynthesis.getVoices()` (one name per line) |
 
 Supporting patches, with no setter of their own:
 
@@ -37,7 +38,7 @@ Supporting patches, with no setter of their own:
 |---|---|
 | `anti-font-fingerprinting.patch` | The context id on each font group |
 | `cross-process-storage.patch` | `RoverfoxStorageManager`, the per-context store, with the IPC that makes a value set in one process readable in every other, and the guard and removal every setter uses |
-| `per-context-consistency.patch` | What follows from a context's own values: `navigator.appVersion` derived from its user agent (windows and workers), that user agent on worker and service worker requests, which have no browsing context to carry Playwright's override, and a per-context locale ("de-DE") expanded to the list a Firefox set to it reports ("de-DE, de") in `Accept-Language` and `navigator.languages`. That locale is also stored per context, for what has no browsing context to carry it (service workers, worker scripts, shared and service worker requests), and becomes the default locale of the context's content processes, which isolated worlds, worklets and form widgets read. The parent also makes it those processes' app locale, the language of Firefox's own strings (`validationMessage`, XML parse errors, form controls): it sends them that locale's chrome and app locales, at launch or when the context's locale arrives, and keeps its shared string bundles, which are in the launch's language, from them |
+| `per-context-consistency.patch` | What follows from a context's own values: `navigator.appVersion` derived from its user agent (windows and workers), that user agent on worker and service worker requests, which have no browsing context to carry Playwright's override, and a per-context locale ("de-DE") expanded to the list a Firefox set to it reports ("de-DE, de") in `Accept-Language` and `navigator.languages`. A list ("de, en-US, en") is kept as given: its first entry is the locale of `Intl` in every realm and of ICU, and the app locale is negotiated from the whole list. That locale is also stored per context, for what has no browsing context to carry it (service workers, worker scripts, shared and service worker requests), and becomes the default locale of the context's content processes, which isolated worlds, worklets and form widgets read. The parent also makes it those processes' app locale, the language of Firefox's own strings (`validationMessage`, XML parse errors, form controls): it sends them that locale's chrome and app locales, at launch or when the context's locale arrives, and keeps its shared string bundles, which are in the launch's language, from them |
 
 There is no canvas pixel noise and no glyph-spacing noise: both produce output
 no real machine does ([`ci/tribal-rules.yml`](../ci/tribal-rules.yml)). A
@@ -164,7 +165,7 @@ real value.
 | `webrtc-ip-spoofing.patch` | `SanitizeSDPForIPLeak`, `CandidateReady`, candidate `.address`/`.relatedAddress`, `getStats()`, `UpdateDefaultCandidate`, `NrSocketBase::CreateSocket` | Forces `default_address_only` while spoofing; loopback, link-local and private addresses are left alone. UDP candidate ports come from the ephemeral range of the identity's OS (`MaskConfig::SpoofedEphemeralPorts()`), so a Windows identity on Linux never shows a Linux port. |
 | `webgl-spoofing.patch` | `ClientWebGLContext::GetParameter`, `GetShaderPrecisionFormat`, `IsSupported`, `GetSupportedExtensions` | Per context: vendor, renderer, and the parameters, extensions and shader precisions of that GPU, else `CAMOU_CONFIG`'s. Works from `OffscreenCanvas` in workers. |
 | `font-list-spoofing.patch` | `gfxPlatformFontList::MaskedFontListBlocks`, which `FindAndAddFamiliesLocked`, `GlobalFontFallback` and `local()` sources consult | A context's list replaces the launch `fonts` list for its documents; it does not narrow it. Chrome documents and contexts without a list keep the launch list. A thread-local context id, set by an RAII guard in `FontFaceSet::Check/Load`, `gfxFontGroup::EnsureFontList` and `gfxFontGroup::FindFontForChar`, avoids changing ~50 signatures. A fallback lookup under a context's list is not cached process-wide. The list is in the shared store, so it holds in every content process, and a worker's `OffscreenCanvas` draws with its page's list. |
-| `speech-voices-spoofing.patch` | `SpeechSynthesis::GetVoices` | Filters the real list by name; a listed voice that is not installed is left out. |
+| `speech-voices-spoofing.patch` | `SpeechSynthesis::GetVoices` | Shows the registered voices the context lists, in its order. The launcher registers the launch's voices and, as `voices:pool`, every voice a context's draw can take (`voice-spoofing.patch`); a page outside such a context sees only the launch's. |
 
 Global-only patches (no setter) read `CAMOU_CONFIG` at startup:
 
@@ -205,20 +206,23 @@ The User-Agent's version is rewritten to the running browser's.
 | Screen, color depth | fpgen or the preset |
 | WebGL | The preset's GPU, or one fpgen recorded for Firefox on that OS, weighted by its share and checked against the machine (`coherence.gpu_fits_machine()`); `webgl_for_gpu()` adds its parameters, extensions and shader precisions |
 | Fonts | `_generate_random_font_subset()`: one OS-version base plus measured additions ([FONTS.md](FONTS.md)); never from presets |
-| Voices | `_generate_random_voice_subset()`, from `voice-manifests.json`, seeded by the identity; never from presets |
+| Voices | `_generate_random_voice_subset()`, from `voice-manifests.json`, seeded by the identity and drawn for the locale; never from presets. `voices:pool` holds every voice of the manifests for the OSes a context may claim |
 | Audio seed | Derived from the identity (`NewBrowser`) or random (`NewContext`), never 0 |
 | Timezone | The preset, or `timezone` in `CAMOU_CONFIG` (from geoip); with a proxy, `NewContext` takes the exit IP's |
-| Locale | Playwright's `locale`; with a proxy, `NewContext` draws one for the exit IP's country, as geoip does at launch |
+| Locale | Playwright's `locale`; with a proxy, `NewContext` draws one for the exit IP's country, as geoip does at launch. A tag ("de-DE") also gives the languages a Firefox set to it reports ("de-DE, de"); a list ("de, en-US, en") is the languages as given, and its first entry the locale of `Intl` and Firefox's own strings |
 | WebRTC IP | `NewContext`'s `webrtc_ip` or the proxy's exit IP, to the IPv4 or IPv6 setter; an invalid address raises `InvalidIP` |
 | Geolocation | The `geolocation` argument, via Playwright; with a proxy, the exit IP's position |
 
 ## Changing identity without a restart
 
 A new context is the unit of identity: `NewContext()` gives it another user
-agent, OS, GPU, screen, locale, timezone, position, WebRTC IP, fonts and voices
-on a running browser, and every scope of its pages (iframes, dedicated, shared
-and service workers, the isolated world) and every request agrees
-(`context-identity-swap.py`). An existing context keeps the identity it was
+agent, OS, GPU, screen, window, locale, timezone, position, WebRTC IP, fonts and
+voices on a running browser, and every scope of its pages (iframes, dedicated,
+shared and service workers, the isolated world) and every request agrees
+(`context-identity-swap.py`). A page reads what a browser launched with that
+identity reports (`context-relaunch-parity.py`). The identity is drawn as a
+launch draws one, from the same fpgen model and pools. Playwright's own
+`new_context()` draws nothing, and its pages report the launch's identity. An existing context keeps the identity it was
 created with: the setters are offered once, so a page cannot change it, and its
 cookies, storage, cache and open pages would tie the old identity to the new one.
 
@@ -229,6 +233,8 @@ A few values stay the launch's for every context:
 | Media devices (`mediaDevices:*`) | Enumerated once per process by the media backend, with no context to ask |
 | Whether WebGL2 exists (`webgl.enable-webgl2`) | A browser-wide pref; recorded GPUs nearly all have it |
 | `Accept-Encoding`, `navigator.doNotTrack`, `globalPrivacyControl` | Launch settings, not identity draws |
+| `navigator.hardwareConcurrency` | A page can time parallel workers to count the cores the browser runs on (`fix_hardware_concurrency`) |
+| A phone launch's device | The whole browser renders at its pixel ratio (`layout.css.devPixelsPerPx`): text measured at another device's was a mismatch |
 
 ## Known limitations
 

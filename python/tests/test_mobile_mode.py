@@ -17,6 +17,7 @@ Run with:
 """
 
 import json
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
@@ -25,7 +26,7 @@ import pytest
 
 from camoufox import coherence, utils
 from camoufox._warnings import LeakWarning
-from camoufox.coherence import is_mobile_config, is_mobile_user_agent
+from camoufox.coherence import BROWSER_CHROME_HEIGHT, is_mobile_config, is_mobile_user_agent
 from camoufox.fingerprints import (
     ANDROID_FONTS,
     MOBILE_FIREFOX_PREFS,
@@ -397,7 +398,24 @@ class TestContextFingerprint:
         assert 'has_touch' not in opts
         assert 'device_scale_factor' not in opts
         assert 'screen' not in opts
-        assert opts['viewport']['height'] >= 600
+
+    @pytest.mark.parametrize('os', ['windows', 'macos', 'linux', 'android'])
+    def test_context_window_fits_its_screen(self, os):
+        # Juggler sizes the real window to the viewport plus the browser's
+        # chrome, and outerWidth/outerHeight report that window. A viewport of
+        # the screen's full height made it taller than the screen, and the
+        # launch's window size was reported beside it.
+        for _ in range(20):
+            fp = generate_context_fingerprint(os=os, ff_version='155', i_know_what_im_doing=True)
+            config, viewport = fp['config'], fp['context_options']['viewport']
+            assert viewport['width'] == config['window.outerWidth'] <= config['screen.availWidth']
+            assert viewport['height'] + BROWSER_CHROME_HEIGHT == config['window.outerHeight']
+            assert config['window.outerHeight'] <= config['screen.availHeight'] <= config['screen.height']
+            # Its own position, inside its screen: the launch's sat a full-width
+            # context window partly off it.
+            x, y = map(int, re.search(r'setWindowPosition\((-?\d+), (-?\d+)\)', fp['init_script']).groups())
+            assert 0 <= x <= config['screen.width'] - config['window.outerWidth']
+            assert 0 <= y <= config['screen.height'] - config['window.outerHeight']
 
 
 

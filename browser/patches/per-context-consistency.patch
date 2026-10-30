@@ -388,7 +388,7 @@ diff --git a/docshell/base/BrowsingContext.cpp b/docshell/base/BrowsingContext.c
  #include "mozilla/StaticPrefs_fission.h"
  #include "mozilla/StaticPrefs_media.h"
  #include "mozilla/StaticPrefs_page_load.h"
-@@ -3591,12 +3595,31 @@ void BrowsingContext::DidSet(FieldIndex<IDX_AnimationsPlayBackRateMultiplier>,
+@@ -3591,12 +3595,34 @@ void BrowsingContext::DidSet(FieldIndex<IDX_AnimationsPlayBackRateMultiplier>,
  void BrowsingContext::DidSet(FieldIndex<IDX_LanguageOverride>,
                               nsCString&& aOldValue) {
    MOZ_ASSERT(IsTop());
@@ -400,14 +400,17 @@ diff --git a/docshell/base/BrowsingContext.cpp b/docshell/base/BrowsingContext.c
 +  // gives it to the context's processes as their app locale, the language of
 +  // Firefox's own strings. In those processes it becomes the default locale,
 +  // which realms without an override of their own read: the launch's
-+  // otherwise.
++  // otherwise. Of a language list, the locale is the first entry
++  // (JS::RealmBehaviors::setLocaleOverride).
 +  if (XRE_IsParentProcess()) {
 +    const uint32_t userContextId = OriginAttributesRef().mUserContextId;
 +    if (NavigatorManager::SetLocale(userContextId, languageOverride)) {
 +      ContentParent::UpdateContextLocale(userContextId);
 +    }
 +  } else {
-+    mozilla::intl::Locale::SetContextLocale(languageOverride.get());
++    const nsAutoCString locale(
++        Substring(languageOverride, 0, languageOverride.FindChar(',')));
++    mozilla::intl::Locale::SetContextLocale(locale.get());
 +    AutoJSAPI jsapi;
 +    jsapi.Init();
 +    JS_ResetDefaultLocale(JS_GetRuntime(jsapi.cx()));
@@ -476,7 +479,21 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
  #include "mozilla/dom/ParentProcessMessageManager.h"
  #include "mozilla/dom/PermissionObserver.h"
  #include "mozilla/dom/PermissionStatusBinding.h"
-@@ -1215,12 +1216,54 @@ mozilla::ipc::IPCResult ContentParent::RecvRoverfoxStorageGet(
+@@ -190,12 +191,13 @@
+ #include "nsAnonymousTemporaryFile.h"
+ #include "nsAppRunner.h"
+ #include "nsCExternalHandlerService.h"
+ #include "nsCOMPtr.h"
+ #include "nsCRT.h"
+ #include "nsChromeRegistryChrome.h"
++#include "nsCharSeparatedTokenizer.h"
+ #include "nsComponentManagerUtils.h"
+ #include "nsConsoleMessage.h"
+ #include "nsConsoleService.h"
+ #include "nsContentPermissionHelper.h"
+ #include "nsContentUtils.h"
+ #include "nsDNSService2.h"
+@@ -1215,12 +1217,58 @@ mozilla::ipc::IPCResult ContentParent::RecvRoverfoxStorageGet(
      return IPC_OK();
    }
    Preferences::GetCString(aPrefName.get(), *aOutValue, PrefValueKind::Default);
@@ -491,7 +508,11 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
 +      locale.IsEmpty()) {
 +    return false;
 +  }
-+  AutoTArray<nsCString, 1> requested{locale};
++  nsTArray<nsCString> requested;
++  for (const nsACString& tag :
++       nsCCharSeparatedTokenizer(locale, ',').ToRange()) {
++    requested.AppendElement(tag);
++  }
 +  AutoTArray<nsCString, 100> available;
 +  nsAutoCString fallback;
 +  localeService->GetAvailableLocales(available);
@@ -531,7 +552,7 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
    mozilla::glean::security::FissionPrincipalsExtra extra = {};
    extra.value = Some(aMethod);
  
-@@ -1475,12 +1518,16 @@ void ContentParent::GetAllEvenIfDead(nsTArray<ContentParent*>& aArray) {
+@@ -1475,12 +1523,16 @@ void ContentParent::GetAllEvenIfDead(nsTArray<ContentParent*>& aArray) {
    }
  }
  
@@ -548,7 +569,7 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
      (void)cp->SendRegisterStringBundles(std::move(array));
    }
  }
-@@ -2741,13 +2788,13 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
+@@ -2741,13 +2793,13 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
    MOZ_ASSERT(spellChecker, "No spell checker?");
  
    spellChecker->GetDictionaryList(&xpcomInit.dictionaries());
@@ -563,7 +584,7 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
    L10nRegistry::GetParentProcessFileSourceDescriptors(
        xpcomInit.l10nFileSources());
  
-@@ -2884,15 +2931,17 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
+@@ -2884,15 +2936,17 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
  
    nsCOMPtr<nsIChromeRegistry> registrySvc = nsChromeRegistry::GetService();
    nsChromeRegistryChrome* chromeRegistry =
@@ -811,3 +832,41 @@ diff --git a/dom/base/nsContentUtils.h b/dom/base/nsContentUtils.h
    TryGetBrowserChildGlobal(nsISupports* aFrom);
  
    /**
+diff --git a/js/src/jsapi.cpp b/js/src/jsapi.cpp
+--- a/js/src/jsapi.cpp
++++ b/js/src/jsapi.cpp
+@@ -17,12 +17,13 @@
+ #include <cstdarg>
+ #ifdef __linux__
+ #  include <dlfcn.h>
+ #endif
+ #include <stdarg.h>
+ #include <string.h>
++#include <string>
+ 
+ #include "jsfriendapi.h"
+ #include "jstypes.h"
+ 
+ #include "builtin/AtomicsObject.h"
+ #include "builtin/Eval.h"
+@@ -1811,14 +1812,19 @@ static RefCountedString* CopyStringZ(const char* str) {
+   memcpy(strPtr, str, size);
+ 
+   return new (memoryPtr) RefCountedString(strPtr);
+ }
+ 
+ JS::RealmBehaviors& JS::RealmBehaviors::setLocaleOverride(const char* locale) {
++  // Camoufox: a context's locale may be a language list ("de, en-US, en"),
++  // its navigator.languages and Accept-Language. Its first entry is the
++  // locale: read whole, the list is none and Intl fell back to en-GB.
+   if (locale) {
+-    localeOverride_ = CopyStringZ<JS::LocaleString>(locale);
++    const char* comma = strchr(locale, ',');
++    localeOverride_ = CopyStringZ<JS::LocaleString>(
++        comma ? std::string(locale, comma - locale).c_str() : locale);
+   } else {
+     localeOverride_ = nullptr;
+   }
+   return *this;
+ }
+ 
