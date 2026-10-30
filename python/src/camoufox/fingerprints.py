@@ -1805,11 +1805,16 @@ def generate_context_fingerprint(
             context_options['screen'] = {'width': sw, 'height': sh}
     if sw and sh:
         # Juggler sizes the real window to this viewport plus the browser's
-        # chrome, and outerWidth/outerHeight report that window.
-        context_options['viewport'] = {
+        # chrome, and outerWidth/outerHeight report that window. The config
+        # claims the same inner size, so a relaunch with it reports this page.
+        viewport = {
             'width': config.get('window.outerWidth') or sw,
             'height': (config.get('window.outerHeight') or sh) - BROWSER_CHROME_HEIGHT,
         }
+        context_options['viewport'] = viewport
+        if not mobile:
+            config['window.innerWidth'] = viewport['width']
+            config['window.innerHeight'] = viewport['height']
     dpr = screen.get('devicePixelRatio')
     if dpr:
         context_options['device_scale_factor'] = dpr

@@ -54,6 +54,11 @@ const HUNDRED_YEARS = 60 * 60 * 24 * 365 * 100;
 // _startSnapshotScreencast lowers it further whenever encoding cannot keep up.
 const SNAPSHOT_SCREENCAST_FPS = 25;
 
+// The chrome height every identity claims (coherence.BROWSER_CHROME_HEIGHT).
+// A launch's pinned browser stack holds its page to that claim whatever the
+// real toolbars measure, which varies with the UI fonts.
+const CLAIMED_CHROME_HEIGHT = 86;
+
 const ALL_PERMISSIONS = [
   'geo',
   'desktop-notification',
@@ -867,7 +872,9 @@ export class PageTarget {
       this._linkedBrowser.closest('.browserStack').style.setProperty('scrollbar-width', 'none');
 
       const stackRect = this._linkedBrowser.closest('.browserStack').getBoundingClientRect();
-      const toolbarTop = stackRect.y;
+      // A window shorter than the claim would report outer - inner below it,
+      // where a relaunch with the same identity reports the claim.
+      const toolbarTop = Math.max(stackRect.y, CLAIMED_CHROME_HEIGHT);
       this._window.resizeBy(width - this._window.innerWidth, height + toolbarTop - this._window.innerHeight);
 
       await this._channel.connect('').send('awaitViewportDimensions', { width: width / this._zoom, height: height / this._zoom });

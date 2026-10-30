@@ -2073,11 +2073,17 @@ export function generateContextFingerprint({
 	}
 	if (pyTruthy(sw) && pyTruthy(sh)) {
 		// Juggler sizes the real window to this viewport plus the browser's
-		// chrome, and outerWidth/outerHeight report that window.
-		contextOptions.viewport = {
+		// chrome, and outerWidth/outerHeight report that window. The config
+		// claims the same inner size, so a relaunch with it reports this page.
+		const viewport = {
 			width: config["window.outerWidth"] || sw,
 			height: (config["window.outerHeight"] || sh) - BROWSER_CHROME_HEIGHT,
 		};
+		contextOptions.viewport = viewport;
+		if (!mobile) {
+			config["window.innerWidth"] = viewport.width;
+			config["window.innerHeight"] = viewport.height;
+		}
 	}
 	const dpr = screen.devicePixelRatio;
 	if (pyTruthy(dpr)) contextOptions.deviceScaleFactor = dpr;

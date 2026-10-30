@@ -1098,6 +1098,13 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 			expect(config["screen.availHeight"]).toBeLessThanOrEqual(
 				config["screen.height"],
 			);
+			if (os !== "android") {
+				// A relaunch with this config reports the same page size.
+				expect(opts.viewport).toEqual({
+					width: config["window.innerWidth"],
+					height: config["window.innerHeight"],
+				});
+			}
 			// Its own position, inside its screen: the launch's sat a full-width
 			// context window partly off it.
 			const position = /setWindowPosition\((-?\d+), (-?\d+)\)/.exec(script);
