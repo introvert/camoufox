@@ -166,8 +166,10 @@ function applyWindowSize(win) {
   const doc = win.document;
   doc.getElementById("browser")?.style.setProperty("box-sizing", "content-box");
   const style = doc.createElement("style");
+  // A context's viewport (Juggler sizes the browser) owns the content size: a
+  // launch's pinned stack would hold that context's window to the launch's.
   style.textContent = `
-    .browserStack {
+    .browserStack:not(:has(> browser[style*="width"])) {
       ${innerWidth ? `width: ${innerWidth}px !important;` : ""}
       ${innerHeight ? `height: ${innerHeight}px !important;` : ""}
       ${innerHeight ? "flex: unset !important;" : ""}

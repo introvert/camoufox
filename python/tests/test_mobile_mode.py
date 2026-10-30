@@ -411,11 +411,21 @@ class TestContextFingerprint:
             assert viewport['width'] == config['window.outerWidth'] <= config['screen.availWidth']
             assert viewport['height'] + BROWSER_CHROME_HEIGHT == config['window.outerHeight']
             assert config['window.outerHeight'] <= config['screen.availHeight'] <= config['screen.height']
+            if os != 'android':
+                # A relaunch with this config reports the same page size.
+                assert viewport == {'width': config['window.innerWidth'], 'height': config['window.innerHeight']}
             # Its own position, inside its screen: the launch's sat a full-width
             # context window partly off it.
             x, y = map(int, re.search(r'setWindowPosition\((-?\d+), (-?\d+)\)', fp['init_script']).groups())
             assert 0 <= x <= config['screen.width'] - config['window.outerWidth']
             assert 0 <= y <= config['screen.height'] - config['window.outerHeight']
+
+    def test_juggler_pads_a_context_window_to_the_claimed_chrome(self):
+        # Juggler sizes a context's window from its viewport; with the real
+        # toolbars shorter than the claim, outer - inner fell short of it.
+        juggler = Path(__file__).resolve().parents[2] / 'browser/additions/juggler/TargetRegistry.js'
+        claimed = re.search(r'CLAIMED_CHROME_HEIGHT = (\d+);', juggler.read_text())
+        assert claimed and int(claimed.group(1)) == BROWSER_CHROME_HEIGHT
 
 
 
