@@ -36,6 +36,7 @@ import {
 	type Preset,
 	Screen,
 	setMediaDevicesDefaults,
+	voicePool,
 	WINDOWS_11_MARKER_FONTS,
 } from "../src/fingerprints.js";
 import { LOCAL_DATA } from "../src/paths.js";
@@ -942,6 +943,23 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		);
 		expect(fp.context_options.locale).toBe(locale);
 		expect(fp.config["navigator.language"]).toBe(locale.split(",")[0]);
+	});
+
+	it.each([
+		["windows", "win"],
+		["macos", "mac"],
+		["linux", "lin"],
+		["android", "lin"],
+	])("a %s context's voices are all in voices:pool", (os, key) => {
+		// The browser registers the launch's voices and voices:pool; a
+		// context's list only selects among them.
+		const pool = new Set(voicePool([key]).map((v) => v.voiceUri));
+		for (const locale of ["de-DE", "fr-FR", "ja-JP", "en-GB"]) {
+			for (let i = 0; i < 5; i++) {
+				const fp = generateContextFingerprint({ os, locale });
+				for (const v of fp.config.voices) expect(pool).toContain(v.voiceUri);
+			}
+		}
 	});
 
 	it("NewContext draws the identity for its context's locale", async () => {

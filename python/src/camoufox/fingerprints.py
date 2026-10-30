@@ -8,7 +8,7 @@ import unicodedata
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from random import Random, choice, choices, randint, randrange
-from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 import orjson
 
@@ -615,11 +615,14 @@ def _generate_random_voice_subset(
                 chosen.add(g)
                 take_pack(packs[g])
 
-    selected = [_split_voice_entry(e) for e in out + legacy]
-    if not selected:
-        return []
+    return _voice_objects(os_key, out + legacy)
 
-    voices: List[Dict[str, Any]] = [
+
+def _voice_objects(os_key: str, entries: List[str]) -> List[Dict[str, Any]]:
+    # No voice carries default=true: stock Firefox 152 marks none on Windows
+    # (SAPI), macOS or Linux (measured 2026-09-14 on all three), so a spoofed
+    # default would be the odd one out.
+    return [
         {
             'name': name,
             'lang': lang,
@@ -627,13 +630,28 @@ def _generate_random_voice_subset(
             'isDefault': False,
             'isLocalService': vtype == 'local',
         }
-        for (name, lang, vtype) in selected
+        for (name, lang, vtype) in map(_split_voice_entry, entries)
     ]
 
-    # No voice carries default=true: stock Firefox 152 marks none on Windows
-    # (SAPI), macOS or Linux (measured 2026-09-14 on all three), so a spoofed
-    # default would be the odd one out.
-    return voices
+
+def voice_pool(os_keys: Iterable[str]) -> List[Dict[str, Any]]:
+    """Every voice the manifests record for these OSes, for `voices:pool`.
+
+    The browser registers them beside the launch's own voices, and a context
+    sees those its list names: the voices its draw took for its locale, which
+    the launch's draw need not have.
+    """
+    manifests = _load_voice_manifests()
+    pool: List[Dict[str, Any]] = []
+    for os_key in os_keys:
+        manifest = manifests[os_key]
+        entries = list(manifest.get('base') or [])
+        for pack in (manifest.get('langPacks') or {}).values():
+            entries += (pack.get('oneCore') or []) + (pack.get('desktop') or [])
+        for addition in manifest.get('additions', []):
+            entries += addition.get('voices') or []
+        pool += _voice_objects(os_key, list(dict.fromkeys(entries)))
+    return pool
 
 
 def _normalize_preset_voices(

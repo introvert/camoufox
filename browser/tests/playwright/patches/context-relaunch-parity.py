@@ -13,7 +13,8 @@ launch's or followed only part of the identity:
              position, a full-width context window partly off its screen
   voices     names holding a comma were dropped, and the voices were drawn
              without the context's locale (only the en-US pack on a de-DE
-             Windows)
+             Windows); drawn for it, a context could still show only voices
+             the launch had, so none of the German pack
   phone      text measured at the launch's pixel ratio beside the context's
              devicePixelRatio: the browser renders at one ratio, so a phone
              context is now the launch's device
@@ -31,6 +32,7 @@ launch in at least one value, so the check is not vacuous.
 
 import http.server
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -44,6 +46,7 @@ FONT_POOL = {"windows": "win", "macos": "mac", "linux": "lin", "android": "lin"}
 # Given to both the context and the relaunch, so they say nothing of the draw.
 FORCED = {"languages", "intl", "timeZone", "acceptLanguage"}
 LOCALE_KEYS = {"navigator.language", "locale:language", "locale:region", "locale:script"}
+ALLOWED = os.environ.get("CAMOUFOX_TEST_ALLOW_MISSING", "").split(",")
 
 READ = """async (fonts) => {
   const ctx = document.createElement('canvas').getContext('2d');
@@ -132,6 +135,14 @@ def main() -> int:
                 relaunch = read(browser.new_page(), base, f"/{target_os}-relaunch", fonts)
 
             print(f"{target_os}:")
+            if relaunch["intl"] != LOCALE and "packaged-locales" in ALLOWED:
+                # A build without packaged locales negotiates its app locale,
+                # and with it the launch's Intl, to en-US; a release reports
+                # the locale it was given (context-locale-follows.py).
+                print(f"  intl                 not compared, this build has no packaged "
+                      f"locales (allowed: packaged-locales)")
+                for read_ in (relaunch, swap, launch):
+                    del read_["intl"]
             differs = 0
             if target_os == "android":
                 # Known difference: a relaunch's window is sized to its outer

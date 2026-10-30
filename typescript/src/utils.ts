@@ -49,6 +49,7 @@ import {
 	setAppVersion,
 	setMediaDevicesDefaults,
 	targetOsFromPlatform,
+	voicePool,
 	WINDOWS_11_MARKER_FONTS,
 } from "./fingerprints.js";
 import { geoipAllowed, getGeolocation } from "./geolocation.js";
@@ -2137,6 +2138,12 @@ export async function launchOptions({
 		addCanvasPlaceholder(firefox_user_prefs);
 		LeakWarning.warn("canvas_noise", i_know_what_im_doing);
 	}
+	// A context's voices follow its own OS and locale. The browser registers
+	// every voice such a draw can take, and shows each context the ones it
+	// lists. Without canvas noise a context claims the launch's OS.
+	config["voices:pool"] = voicePool(
+		coverCanvas ? ["mac", "win", "lin"] : [targetOs],
+	);
 
 	if (block_webgl) {
 		firefox_user_prefs["webgl.disabled"] = true;

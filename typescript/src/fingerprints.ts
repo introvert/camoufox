@@ -756,14 +756,41 @@ export function generateRandomVoiceSubset(
 		}
 	}
 
-	const selected = [...out, ...legacy].map(splitVoiceEntry);
-	return selected.map(([name, lang, vtype]) => ({
+	return voiceObjects(osKey, [...out, ...legacy]);
+}
+
+// No voice carries default=true: stock Firefox marks none on any OS.
+function voiceObjects(osKey: string, entries: string[]): VoiceObject[] {
+	return entries.map(splitVoiceEntry).map(([name, lang, vtype]) => ({
 		name,
 		lang,
 		voiceUri: voiceUri(osKey, name, lang),
 		isDefault: false,
 		isLocalService: vtype === "local",
 	}));
+}
+
+/**
+ * Every voice the manifests record for these OSes, for `voices:pool`. The
+ * browser registers them beside the launch's own voices, and a context sees
+ * those its list names: the voices its draw took for its locale, which the
+ * launch's draw need not have.
+ */
+export function voicePool(osKeys: Iterable<string>): VoiceObject[] {
+	const manifests = loadVoiceManifests();
+	const pool: VoiceObject[] = [];
+	for (const osKey of osKeys) {
+		const manifest = manifests[osKey];
+		const entries: string[] = [...(manifest.base ?? [])];
+		for (const pack of Object.values(manifest.langPacks ?? {}) as any[]) {
+			entries.push(...(pack.oneCore ?? []), ...(pack.desktop ?? []));
+		}
+		for (const addition of manifest.additions ?? []) {
+			entries.push(...(addition.voices ?? []));
+		}
+		pool.push(...voiceObjects(osKey, [...new Set(entries)]));
+	}
+	return pool;
 }
 
 /**
