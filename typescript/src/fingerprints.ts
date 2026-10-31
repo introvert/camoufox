@@ -927,7 +927,10 @@ export const MOBILE_FIREFOX_PREFS: Readonly<Record<string, any>> =
  * to Roboto, serif to Noto Serif, emoji to Noto Color Emoji. A desktop build
  * defaults to serif, so unstyled text measured desktop-wide without them.
  * Families the bundle lacks (Google Sans, Droid Sans, Charis SIL Compact) are
- * skipped by the browser, as on a phone that does not ship them.
+ * skipped by the browser, as on a phone that does not ship them. Droid Sans
+ * Mono is followed by DejaVu Sans Mono in each monospace list: when every
+ * family in a list is missing, Gecko falls back to the proportional default
+ * font, not to fontconfig's monospace.
  */
 export const MOBILE_FONT_PREFS: Readonly<Record<string, any>> =
 	LAUNCHER_CONSTANTS.mobileFontPrefs;

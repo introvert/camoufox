@@ -282,6 +282,17 @@ class TestLaunchOptions:
         assert prefs['dom.disable_window_move_resize'] is True
         assert prefs['browser.tabs.remote.coep.credentialless'] is False
         assert prefs['browser.link.open_newwindow.restriction'] == 0
+        assert prefs['dom.webserial.enabled'] is False
+        assert prefs['media.getdisplaymedia.enabled'] is False
+
+    def test_android_launch_gets_firefox_for_androids_system_colors(self):
+        _, prefs = launch(os='android')
+        # Fenix's colorAccent, and Highlight as that accent at alpha 78.
+        assert prefs['ui.accentcolor'] == '#180e30'
+        assert prefs['ui.highlight'] == 'rgba(24, 14, 48, 0.306)'
+        # NS_SAME_AS_FOREGROUND_COLOR, which style resolves to currentcolor.
+        assert prefs['ui.highlighttext'] == 'rgba(2, 0, 0, 0)'
+        assert prefs['ui.-moz-dialog'] == '#efebe7'
 
     def test_android_launch_has_a_phones_media_devices(self):
         config, _ = launch(os='android')
