@@ -98,6 +98,9 @@ PHONE: Dict[str, Any] = {
     # a phone and keeps it in step with screen.orientation.
     "window.orientation": 0,
     "'onorientationchange' in window": True,
+    # The deprecated property reads the same override (window-orientation.patch),
+    # not the host monitor's orientation.
+    "screen.mozOrientation": "portrait-primary",
 }
 
 DESKTOP: Dict[str, Any] = {
@@ -112,6 +115,7 @@ DESKTOP: Dict[str, Any] = {
     "(any-hover: hover)": True,
     "window.orientation": None,
     "'onorientationchange' in window": False,
+    "screen.mozOrientation matches screen.orientation.type": True,
     # Desktop Firefox has no such handler, so the content attribute is inert.
     "<body onorientationchange> fires": False,
 }
@@ -151,6 +155,9 @@ PROBE_JS = r"""() => {
     "screen.orientation.angle":          screen.orientation.angle,
     "window.orientation":                "orientation" in window ? window.orientation : null,
     "'onorientationchange' in window":   "onorientationchange" in window,
+    "screen.mozOrientation":             screen.mozOrientation,
+    "screen.mozOrientation matches screen.orientation.type":
+                                         screen.mozOrientation === screen.orientation.type,
   };
 }"""
 
@@ -245,10 +252,59 @@ async def read_viewports(page, window_width: int, mobile: bool) -> Dict[str, Any
 PHONE_SURFACE: Dict[str, Any] = {
     "enumerateDevices kinds": ["audioinput", "videoinput"],
     "'requestMIDIAccess' in navigator": False,
+    # @IS_NOT_MOBILE@ in StaticPrefList.yaml, like Web MIDI.
+    "'serial' in navigator": False,
+    "'getDisplayMedia' in navigator.mediaDevices": False,
+    # widget/android/nsLookAndFeel.cpp with Fenix's colorAccent (#180e30):
+    # Highlight is the accent at alpha 78, HighlightText the text's own color.
+    "Highlight": "rgba(24, 14, 48, 0.306)",
+    "HighlightText is the text color": True,
+    "AccentColor": "rgb(24, 14, 48)",
+    "-moz-dialog": "rgb(239, 235, 231)",
+    "monospace is fixed-width": True,
     "COEP credentialless isolates": False,
     "page.tap() fires touchstart": True,
     "window.open() popup is the opener's size": True,
 }
+
+# The same probes on a desktop launch: none of the phone's values leak into it.
+DESKTOP_SURFACE: Dict[str, Any] = {
+    "'requestMIDIAccess' in navigator": True,
+    "'serial' in navigator": True,
+    "'getDisplayMedia' in navigator.mediaDevices": True,
+    "Highlight is the phone's": False,
+    "AccentColor is the phone's": False,
+    "monospace is fixed-width": True,
+}
+
+SURFACE_JS = r"""() => {
+  const color = c => {
+    const d = document.createElement("div");
+    d.style.color = "rgb(10, 20, 30)";
+    const inner = document.createElement("div");
+    inner.style.color = c;
+    d.append(inner);
+    document.body.append(d);
+    const got = getComputedStyle(inner).color;
+    d.remove();
+    return got;
+  };
+  const ctx = document.createElement("canvas").getContext("2d");
+  ctx.font = "100px monospace";
+  return {
+    "'requestMIDIAccess' in navigator": "requestMIDIAccess" in navigator,
+    "'serial' in navigator": "serial" in navigator,
+    "'getDisplayMedia' in navigator.mediaDevices": "getDisplayMedia" in navigator.mediaDevices,
+    "Highlight": color("Highlight"),
+    "Highlight is the phone's": color("Highlight") === "rgba(24, 14, 48, 0.306)",
+    "HighlightText is the text color": color("HighlightText") === "rgb(10, 20, 30)",
+    "AccentColor": color("AccentColor"),
+    "AccentColor is the phone's": color("AccentColor") === "rgb(24, 14, 48)",
+    "-moz-dialog": color("-moz-dialog"),
+    "monospace is fixed-width":
+      ctx.measureText("iiiiiiiiii").width === ctx.measureText("WWWWWWWWWW").width,
+  };
+}"""
 
 SURFACE_PAGE = (
     b'<!doctype html><meta name="viewport" content="width=device-width">'
@@ -289,8 +345,8 @@ async def probe_phone_surface(page) -> Dict[str, Any]:
         await page.goto(f"{origin}/")
         got.update(await page.evaluate("""async () => ({
           "enumerateDevices kinds": (await navigator.mediaDevices.enumerateDevices()).map(d => d.kind).sort(),
-          "'requestMIDIAccess' in navigator": 'requestMIDIAccess' in navigator,
         })"""))
+        got.update(await page.evaluate(SURFACE_JS))
         try:
             await page.tap("#b", timeout=5000)
             got["page.tap() fires touchstart"] = await page.title() == "touched"
@@ -474,6 +530,16 @@ async def run_package(binary: Path) -> bool:
 
     async with AsyncCamoufox(os="linux", headless=False, executable_path=str(binary),
                              i_know_what_im_doing=True) as browser:
+        page = await browser.new_page()
+        srv = serve()
+        try:
+            await page.goto(f"http://127.0.0.1:{srv.server_address[1]}/")
+            ok &= compare("package, os='linux': no phone values",
+                          await page.evaluate(SURFACE_JS), DESKTOP_SURFACE)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        await page.close()
         context = await AsyncNewContext(browser, os="android")
         page = await context.new_page()
         await page.goto(page_with_meta("width=device-width"))

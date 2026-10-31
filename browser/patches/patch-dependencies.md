@@ -56,7 +56,7 @@ be listed there.
 | `voice-spoofing.patch` | `voices`, `voices:blockIfNotDefined` |
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
-| `window-orientation.patch` | `mobile` (builds `window.orientation` / `onorientationchange` everywhere and exposes them for a phone: mobile mode or an Android `isMobile` context) |
+| `window-orientation.patch` | `mobile` (builds `window.orientation` / `onorientationchange` everywhere and exposes them for a phone: mobile mode or an Android `isMobile` context; `screen.mozOrientation` follows the same orientation override) |
 
 To regenerate the list: `grep -l 'MaskConfig::' patches/*.patch`.
 

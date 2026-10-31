@@ -307,3 +307,33 @@ diff --git a/widget/EventMessageList.inc b/widget/EventMessageList.inc
  NS_EVENT_MESSAGE(eVRDisplayDeactivate)
  NS_EVENT_MESSAGE(eVRDisplayConnect)
  NS_EVENT_MESSAGE(eVRDisplayDisconnect)
+diff --git a/dom/base/nsScreen.cpp b/dom/base/nsScreen.cpp
+--- a/dom/base/nsScreen.cpp
++++ b/dom/base/nsScreen.cpp
+@@ -7,6 +7,7 @@
+ #include "MaskConfig.hpp"
+ #include "ScreenDimensionManager.h"
+ 
++#include "mozilla/ErrorResult.h"
+ #include "mozilla/GeckoBindings.h"
+ #include "mozilla/dom/BrowsingContext.h"
+ #include "mozilla/dom/BrowsingContextBinding.h"
+@@ -244,7 +245,17 @@ dom::ScreenOrientation* nsScreen::Orientation() const {
+ 
+ void nsScreen::GetMozOrientation(nsString& aOrientation,
+                                  CallerType aCallerType) const {
+-  switch (mScreenOrientation->DeviceType(aCallerType)) {
++  OrientationType type = mScreenOrientation->DeviceType(aCallerType);
++  // Camoufox: under an orientation override (Juggler sets one for a phone),
++  // report screen.orientation.type, as window.orientation does, rather than
++  // the host monitor's orientation.
++  nsPIDOMWindowInner* owner = GetOwnerWindow();
++  BrowsingContext* bc = owner ? owner->GetBrowsingContext() : nullptr;
++  if (bc && bc->HasOrientationOverride()) {
++    IgnoredErrorResult rv;
++    type = mScreenOrientation->GetType(aCallerType, rv);
++  }
++  switch (type) {
+     case OrientationType::Portrait_primary:
+       aOrientation.AssignLiteral("portrait-primary");
+       break;

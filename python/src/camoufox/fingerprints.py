@@ -801,7 +801,10 @@ MOBILE_FIREFOX_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['mobilePrefs']
 # to Roboto, serif to Noto Serif, emoji to Noto Color Emoji. A desktop build
 # defaults to serif, so unstyled text measured desktop-wide without them.
 # Families the bundle lacks (Google Sans, Droid Sans, Charis SIL Compact) are
-# skipped by the browser, as on a phone that does not ship them.
+# skipped by the browser, as on a phone that does not ship them. Droid Sans
+# Mono is followed by DejaVu Sans Mono in each monospace list: when every
+# family in a list is missing, Gecko falls back to the proportional default
+# font, not to fontconfig's monospace.
 MOBILE_FONT_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['mobileFontPrefs']
 # The families of a stock Android install that the Linux bundle can render:
 # Roboto, the Noto script and CJK families, Noto Color Emoji and Droid Sans
