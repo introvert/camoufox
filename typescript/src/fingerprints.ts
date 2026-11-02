@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { generate, InvalidConstraints } from "fpgen-js";
 import * as random from "python-random";
+import * as coherence from "./coherence.js";
 import { BROWSER_CHROME_HEIGHT, isMobileConfig } from "./coherence.js";
 import {
 	supported as cpuAffinitySupported,
@@ -1961,6 +1962,12 @@ export function generateContextFingerprint({
 			}
 			delete webglFp.webGl2Enabled;
 			Object.assign(config, webglFp);
+			// The whole-identity repairs launchOptions applies, so the context
+			// reports what a relaunch with its identity does. The browser's own
+			// cores still win: a page measures them whatever the context claims.
+			coherence.apply(config, targetOs);
+			if (hardware_concurrency)
+				config["navigator.hardwareConcurrency"] = hardware_concurrency;
 		}
 
 		nav = {

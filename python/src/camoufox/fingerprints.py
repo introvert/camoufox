@@ -13,6 +13,7 @@ from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 import orjson
 
 from camoufox._warnings import WARNINGS_DATA, FallbackWarning, LeakWarning, _warn_from_caller
+from camoufox import coherence
 from camoufox.coherence import BROWSER_CHROME_HEIGHT, is_mobile_config
 from camoufox.ip import valid_ipv4, validate_ip
 from camoufox.pkgman import LAUNCHER_CONSTANTS, load_yaml
@@ -1716,6 +1717,12 @@ def generate_context_fingerprint(
                 )
             webgl_fp.pop('webGl2Enabled')
             config.update(webgl_fp)
+            # The whole-identity repairs launch_options() applies, so the context
+            # reports what a relaunch with its identity does. The browser's own
+            # cores still win: a page measures them whatever the context claims.
+            coherence.apply(config, _target_os)
+            if hardware_concurrency:
+                config['navigator.hardwareConcurrency'] = hardware_concurrency
 
         # Build source dicts from the fingerprint config for init_values
         nav = {

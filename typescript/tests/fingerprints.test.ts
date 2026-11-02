@@ -1047,6 +1047,19 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		}
 	});
 
+	it("a context identity is as coherent as a launch", () => {
+		// A context drew its own GPU but skipped the whole-identity repairs a
+		// launch applies, so an Apple Silicon context reported the drawn colour
+		// depth of 24 where a relaunch with its identity reports 30.
+		for (let i = 0; i < 20; i++) {
+			const { init_script } = generateContextFingerprint({
+				os: "macos",
+				webgl_config: ["Apple", "Apple M1, or similar"],
+			});
+			expect(init_script).toContain("setScreenColorDepth(30)");
+		}
+	});
+
 	it("no phone renders at a desktop's pixel ratio", () => {
 		expect(() =>
 			generateContextFingerprint({
