@@ -38,7 +38,7 @@ are listed in [`browser/patches/patch-dependencies.md`](../browser/patches/patch
 ### Key Infrastructure Files
 
 - **RoverfoxStorageManager.cpp/h**: Thread-safe key-value storage for per-context data
-- **Manager Classes**: AudioFingerprintManager, WebRTCIPManager, etc.
+- **Manager Classes**: FontListManager, WebRTCIPManager, etc.
 - **Window.webidl**: Exposes the per-context setters to Playwright
 
 ---
@@ -79,9 +79,11 @@ the patch.
 
 ### Step 1: Bump the Version and Find the Broken Patches
 
-Update `version` and `release` in `browser/upstream.sh`, then:
+Update `version` and `release` in `browser/upstream.sh`, pin the PGO profiles
+Mozilla trained for that release, then:
 
 ```bash
+python3 scripts/pgo.py pin
 make dir
 ```
 
@@ -308,14 +310,14 @@ Simply apply the patch manually at the correct line number. The code hasn't chan
 Most spoofing patches carry per-context support. When porting one, expect these
 pieces:
 
-1. **Manager classes** (e.g., AudioFingerprintManager, WebRTCIPManager):
+1. **Manager classes** (e.g., FontListManager, WebRTCIPManager):
    - Store per-context settings using RoverfoxStorageManager
    - Gate their setter with `RoverfoxStorageManager::IsSetterOffered` and
      `MarkSetterUsed`
 
 2. **Window.webidl functions**:
    - JavaScript APIs exposed to Playwright
-   - Examples: `setAudioFingerprintSeed()`, `setWebRTCIPv4()`
+   - Examples: `setFontList()`, `setWebRTCIPv4()`
 
 3. **nsGlobalWindowInner.cpp implementations**:
    - Extract userContextId from window/document/docshell
@@ -416,7 +418,10 @@ The launchers build WebGL from fpgen's recordings, which an older Firefox made.
 Some values are the browser's rather than the GPU's, and an upgrade can change
 them on every device: Firefox 156 added `EXT_depth_clamp` on Windows and fixed
 WebGL1's `ALIASED_LINE_WIDTH_RANGE` at `[1, 1]` on Linux
-([`webgl-browser-owned-values-follow-firefox`](../ci/tribal-rules.yml)). The
+([`webgl-browser-owned-values-follow-firefox`](../ci/tribal-rules.yml)).
+Firefox 158 added `EXT_polygon_offset_clamp` on Windows devices with WebGL2
+(ANGLE's D3D11 backend at feature level 10_0 and above) and on Linux desktop GL,
+but not on macOS, where release builds use CGL's GL 4.1. The
 `stock-gpu-parity` guard finds them. It runs stock Firefox of the new version,
 stock Firefox of the release fpgen's model recorded, and Camoufox claiming the
 machine's GPU, and fails where the two stock releases differ and Camoufox does
@@ -485,7 +490,8 @@ grep -r "class Navigator" . --include="*.h"
 
 ## Checklist
 
-- [ ] Bump `browser/upstream.sh` and run `make dir` to list the failing patches
+- [ ] Bump `browser/upstream.sh`, run `python3 scripts/pgo.py pin`, and run `make dir` to list the failing patches
+- [ ] Delete the [backports](../browser/patches/patch-dependencies.md#backports) the new Firefox ships
 - [ ] For each: `make clean`, apply its dependencies, `make first-checkpoint`, `make patch` it
 - [ ] Port each reject to the new Firefox code
 - [ ] Remove `.rej` and `.orig` files, `git add -N` new files

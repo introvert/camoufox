@@ -22,7 +22,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import Screen, platform_to_os, _set_app_version, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, identity_seed, voice_pool, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts, android_gpu, android_gpus
+from .fingerprints import Screen, platform_to_os, _set_app_version, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, voice_pool, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts, android_gpu, android_gpus
 from . import coherence
 from .coherence import is_mobile_config, is_mobile_user_agent
 from .geolocation import geoip_allowed, get_geolocation
@@ -44,6 +44,7 @@ from .pkgman import (
     selected_launch_path,
     warn_if_package_outdated,
 )
+from .gpudisplay import GPU_PREFS, GpuDisplay, async_prove_gpu, prove_gpu, select_gpu
 from .virtdisplay import VirtualDisplay
 from ._warnings import FallbackWarning, LeakWarning
 from .host_rendering import Gpu, add_canvas_placeholder, has_canvas_placeholder, host_gpu, renders_on_hardware, set_webgpu
@@ -53,6 +54,34 @@ ListOrString: TypeAlias = Union[Tuple[str, ...], List[str], str]
 
 # Camoufox preferences to cache previous pages and requests
 CACHE_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['cachePrefs']
+
+# Prefs whose default differs between Firefox's Windows and Linux builds (all.js,
+# firefox.js and StaticPrefList.yaml, checked on 158) and that a page or the
+# user can observe, set to the Windows default:
+#   - eat_space_to_next_word: double-click selects the trailing space too.
+#   - general.autoScroll, middlemouse.*: middle click autoscrolls. Linux instead pastes the
+#     X11 primary selection, firing a paste event no Windows browser sends.
+#   - full-screen-api.transition-duration.*: GTK builds have no transition.
+#   - ui.scrollToClick, slider.snapMultiplier, click_and_hold_track: a track
+#     click pages rather than jumps (GTK otherwise reads the desktop setting),
+#     a thumb dragged far off snaps back, and holding on the track stops at
+#     the pointer.
+# Windows-only machinery (DirectComposition, ClearType, WMF) does nothing in a
+# Linux build and is left out, as is media.eme.enabled: Windows has PlayReady
+# behind EME, which a Linux build cannot supply.
+WINDOWS_BEHAVIOUR_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['windowsBehaviourPrefs']
+
+
+def _physical_scale(config: Dict[str, Any], prefs: Optional[Dict[str, Any]] = None) -> float:
+    """Monitor pixels per CSS pixel of the window at the scale it renders at.
+
+    Linux reports the monitor in pixels at scale 1. On Windows and macOS the
+    host's own scaling is already in the bounds and is not known here, so 1.
+    """
+    if OS_NAME != 'lin':
+        return 1.0
+    pref = float((prefs or {}).get('layout.css.devPixelsPerPx') or -1)  # -1 is Firefox's "the system's"
+    return pref if pref > 0 else float(config.get('window.devicePixelRatio') or 1)
 
 
 def _host_os_key() -> Optional[str]:
@@ -864,7 +893,7 @@ def host_identity(from_options: Dict[str, Any], canvas_noise: Optional[bool]) ->
     host_os = _host_os_key()
     covered, gpu = plan_rendering(
         host_os, None, False, bool(prefs.get('webgl.disabled')),
-        lambda: host_gpu(from_options['executable_path'], from_options['headless'], from_options['env']),
+        lambda: host_gpu(from_options['executable_path'], from_options['headless'], from_options['env'], prefs),
     )
     return None if covered else (host_os, gpu)
 
@@ -940,11 +969,37 @@ def new_context_options(
     return opts
 
 
+def start_virtual_display(
+    headless: Any, debug: Optional[bool], kwargs: Dict[str, Any]
+) -> Tuple[Optional[VirtualDisplay], Any]:
+    """Start the display headless='virtual' or 'virtual-gpu' asks for.
+
+    Pops the display's own options from `kwargs` and points the launch at the
+    display. Returns the display, or None, and the headless value to launch with.
+    """
+    gpu = kwargs.pop('gpu', None)
+    require_gpu = kwargs.pop('require_gpu', None)
+    if headless == 'virtual-gpu':
+        display: VirtualDisplay = GpuDisplay(
+            select_gpu(gpu), debug=bool(debug), require_gpu=require_gpu is not False
+        )
+        kwargs['firefox_user_prefs'] = {**GPU_PREFS, **(kwargs.get('firefox_user_prefs') or {})}
+    elif gpu is not None or require_gpu is not None:
+        raise ValueError("gpu and require_gpu apply to headless='virtual-gpu' only")
+    elif headless == 'virtual':
+        display = VirtualDisplay(debug=debug)
+    else:
+        return None, headless
+    kwargs['virtual_display'] = display.get()
+    return display, False
+
+
 async def async_attach_vd(
     browser: Any, virtual_display: Optional[VirtualDisplay] = None
 ) -> Any:  # type: ignore
     """
-    Attaches the virtual display to the async browser cleanup
+    Attaches the virtual display to the async browser cleanup, and on a GPU
+    display checks the browser renders on the GPU.
     """
     if not virtual_display:  # Skip if no virtual display is provided
         return browser
@@ -959,6 +1014,13 @@ async def async_attach_vd(
 
     browser.close = new_close
 
+    if isinstance(virtual_display, GpuDisplay):
+        try:
+            await async_prove_gpu(browser, virtual_display)
+        except BaseException:
+            await browser.close()
+            raise
+
     return browser
 
 
@@ -966,7 +1028,8 @@ def sync_attach_vd(
     browser: Any, virtual_display: Optional[VirtualDisplay] = None
 ) -> Any:  # type: ignore
     """
-    Attaches the virtual display to the sync browser cleanup
+    Attaches the virtual display to the sync browser cleanup, and on a GPU
+    display checks the browser renders on the GPU.
     """
     if not virtual_display:  # Skip if no virtual display is provided
         return browser
@@ -980,6 +1043,13 @@ def sync_attach_vd(
             virtual_display.kill()
 
     browser.close = new_close
+
+    if isinstance(virtual_display, GpuDisplay):
+        try:
+            prove_gpu(browser, virtual_display)
+        except BaseException:
+            browser.close()
+            raise
 
     return browser
 
@@ -1139,7 +1209,8 @@ def launch_options(
         headless (Optional[bool]):
             Whether to run the browser in headless mode. Defaults to False.
             Note: If you are running linux, passing headless='virtual' to Camoufox, AsyncCamoufox
-            or launch_server will use Xvfb.
+            or launch_server will use Xvfb, and headless='virtual-gpu' a headless Xorg
+            server bound to one GPU.
         main_world_eval (Optional[bool]):
             Whether to enable running scripts in the main world.
             To use this, prepend "mw:" to the script: page.evaluate("mw:" + script).
@@ -1263,7 +1334,7 @@ def launch_options(
     _user_set_dnt = 'navigator.doNotTrack' in config
     _user_set_gpc = 'navigator.globalPrivacyControl' in config
     _user_set_accept_encoding = 'headers.Accept-Encoding' in config
-    _user_set_audio_seed = 'audio:seed' in config
+    drop_audio_seed(config)
 
     # The salt that makes every seeded draw belong to this identity (see
     # fingerprints.identity_salt): stable when the caller pinned the identity
@@ -1302,19 +1373,19 @@ def launch_options(
     if not os and (webgl_config or _default_webgl_config):
         raise ValueError(f'OS must be set when using webgl_config or {WEBGL_CONFIG_ENV}')
 
-    # Add the default addons
-    add_default_addons(addons, exclude_addons)
-
-    # Confirm all addon paths are valid
-    if addons:
-        confirm_paths(addons)
-        config['addons'] = addons
-
     # Resolve the binary that will launch before reading its version:
     # launch_path() downloads the browser when none is installed, and the
     # identity has to match the Firefox that actually runs.
     browser_binary = str(executable_path) if executable_path else launch_path()
     warn_if_package_outdated()
+
+    # The default addons are the ones that build bundles, beside its binary
+    add_default_addons(addons, exclude_addons, browser_binary)
+
+    # Confirm all addon paths are valid
+    if addons:
+        confirm_paths(addons)
+        config['addons'] = addons
 
     # Get the Firefox version
     if ff_version:
@@ -1408,7 +1479,9 @@ def launch_options(
         # headless='virtual' reaches here as headless=False (see async_api) with
         # a 1x1 Xvfb (virtdisplay.py) that is not a real screen.
         if headless is False and not virtual_display and screen_cons:
-            clamp_screen_to_display(config, screen_cons.max_width, screen_cons.max_height)
+            fit = _physical_scale(config)
+            clamp_screen_to_display(config, screen_cons.max_width and int(screen_cons.max_width / fit),
+                                    screen_cons.max_height and int(screen_cons.max_height / fit))
         follow_baseline_protection(config, target_os)
         clamp_window_dimensions(config)
         clamp_window_position(config)
@@ -1488,6 +1561,34 @@ def launch_options(
     else:
         firefox_user_prefs.setdefault('ui.useOverlayScrollbars', 1)
 
+    # A Windows identity on another host: answers that come from the host
+    # build's platform code are set to what stock Windows Firefox gives. A
+    # Windows host already gives them, so nothing is set there.
+    if target_os == 'win' and _host_os_key() != 'win':
+        # Math.sin/cos/tan/pow: the last bit differs between glibc (or
+        # fdlibm) and the Windows CRT, so one call identifies the host OS.
+        # windows-crt-math.patch computes them as the CRT does, and its
+        # guard compares them with stock Firefox on Windows.
+        firefox_user_prefs.setdefault('javascript.options.use_ucrt_math', True)
+
+        # Keyboard: Windows' shortcut tables instead of GTK's text bindings
+        # (Ctrl+Up/Down to line start/end, Alt+Backspace undo, Shift+Delete
+        # with no selection deletes), AltGr as keyCode 18 rather than 225,
+        # and Ctrl+Backspace/Delete in rich text deleting a word from a
+        # selection's start (windows-keyboard.patch).
+        config.setdefault('input:windowsKeyboard', True)
+
+        for pref, value in WINDOWS_BEHAVIOUR_PREFS.items():
+            firefox_user_prefs.setdefault(pref, value)
+
+        # The scrollbars pinned above are drawn by the host build's theme: on
+        # a Linux host a Windows 10 identity's classic scrollbars measured
+        # 12 px (GTK's) where stock Firefox on Windows draws 17. Draw Windows'
+        # own (widget.non-native-theme.scrollbar.style: 4 Windows 10, 5
+        # Windows 11), 17 px: only Windows' build reads a system metric.
+        overlay = firefox_user_prefs.get('ui.useOverlayScrollbars')
+        firefox_user_prefs.setdefault('widget.non-native-theme.scrollbar.style', 5 if overlay else 4)
+
     # Per-character font fallback, LINUX ONLY. Gecko's GlobalFontFallback walks
     # the shared font list for a family whose charmap covers the character; in a
     # content process with async fallback on it hits the
@@ -1555,16 +1656,6 @@ def launch_options(
     # is dropped unless the caller set it.
     if not _user_set_accept_encoding:
         config.pop('headers.Accept-Encoding', None)
-
-    # The audio noise seed follows the identity: a returning "same device" must
-    # reproduce its audio hash (#442/#765). Never 0 (0 disables the noise). A
-    # preset draws its own random seed; it is replaced here too so a pinned
-    # preset reproduces it, but a seed the caller set is kept. There is no
-    # canvas seed: the browser adds no canvas noise (#528), and no glyph-spacing
-    # noise either (ci/tribal-rules.yml: no-glyph-spacing-noise).
-    if not _user_set_audio_seed:
-        _ident = identity_seed(config, _identity_salt)
-        config['audio:seed'] = ((_ident * 2654435761 + 97) & 0xFFFFFFFF) or 1
 
     # Set geolocation
     if geoip:
@@ -1747,7 +1838,7 @@ def launch_options(
         canvas_noise,
         bool(webgl_config or (config.get('webGl:vendor') and config.get('webGl:renderer'))),
         bool(block_webgl),
-        lambda: host_gpu(browser_binary, headless, env),
+        lambda: host_gpu(browser_binary, headless, env, firefox_user_prefs),
     )
     if cover_canvas:
         add_canvas_placeholder(firefox_user_prefs)
@@ -1822,6 +1913,21 @@ def launch_options(
     if _incoherent and debug:
         for _violation in _incoherent:
             print(f'Incoherent identity ({_violation.rule}): {_violation.detail}')
+
+    # Render at the claimed display scale, so (resolution) and the CSS geometry
+    # agree with devicePixelRatio as on the real machine (#933). That includes 1:
+    # on a HiDPI host the host's own scale would otherwise reach (resolution).
+    if config.get('window.devicePixelRatio'):
+        firefox_user_prefs.setdefault('layout.css.devPixelsPerPx', f"{float(config['window.devicePixelRatio']):g}")
+    if headless is False and not virtual_display and screen_cons:
+        fit = _physical_scale(config, firefox_user_prefs)
+        for axis, cap in (('Width', screen_cons.max_width), ('Height', screen_cons.max_height)):
+            size = config.get(f'window.outer{axis}')
+            if cap and size and size * fit > cap:
+                raise ValueError(
+                    f'window.outer{axis} {size} at display scale {fit:g} needs {size * fit:g} pixels, '
+                    f'but this monitor has {cap}. Pass a smaller screen and window, or run headless.'
+                )
 
     set_webgpu(firefox_user_prefs, target_os, (config.get('webGl:vendor'), config.get('webGl:renderer')), host)
 

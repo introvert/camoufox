@@ -1,8 +1,8 @@
 diff --git a/dom/base/moz.build b/dom/base/moz.build
-index e8f35ff5c4..88cea77d60 100644
+index c62b3b0424..f9f88078bd 100644
 --- a/dom/base/moz.build
 +++ b/dom/base/moz.build
-@@ -664,3 +664,6 @@ GeneratedFile(
+@@ -659,3 +659,6 @@ GeneratedFile(
          "/servo/components/style/properties/counted_unknown_properties.py",
      ],
  )
@@ -11,7 +11,7 @@ index e8f35ff5c4..88cea77d60 100644
 +LOCAL_INCLUDES += ["/camoucfg"]
 \ No newline at end of file
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 4bc8548e31..2bea4b618a 100644
+index 49a25262ca..6e124cdb05 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
 @@ -3,6 +3,7 @@
@@ -22,38 +22,21 @@ index 4bc8548e31..2bea4b618a 100644
  
  #include <inttypes.h>
  #include <stdio.h>
-@@ -3715,6 +3716,8 @@ void nsGlobalWindowInner::SetName(const nsAString& aName,
- 
- double nsGlobalWindowInner::GetInnerWidth(CallerType aCallerType,
-                                           ErrorResult& aError) {
-+  if (auto value = MaskConfig::GetDouble("window.innerWidth"))
-+    return value.value();
-   FORWARD_TO_OUTER_OR_THROW(GetInnerWidthOuter, (aCallerType, aError), aError,
-                             0);
- }
-@@ -3728,6 +3731,8 @@ nsresult nsGlobalWindowInner::GetInnerWidth(CallerType aCallerType,
- 
- double nsGlobalWindowInner::GetInnerHeight(CallerType aCallerType,
-                                            ErrorResult& aError) {
-+  if (auto value = MaskConfig::GetDouble("window.innerHeight"))
-+    return value.value();
-   FORWARD_TO_OUTER_OR_THROW(GetInnerHeightOuter, (aCallerType, aError), aError,
-                             0);
- }
-@@ -3741,6 +3746,12 @@ nsresult nsGlobalWindowInner::GetInnerHeight(CallerType aCallerType,
+@@ -3736,6 +3737,13 @@ nsresult nsGlobalWindowInner::GetInnerHeight(CallerType aCallerType,
  
  int32_t nsGlobalWindowInner::GetOuterWidth(CallerType aCallerType,
                                             ErrorResult& aError) {
-+  // Camoufox: window.outerWidth/outerHeight are deliberately NOT read from
-+  // MaskConfig. browser-init.js resizes the real window to the drawn size, and
-+  // innerWidth/innerHeight report the real content area, so a fixed outer size
-+  // contradicted inner whenever the window ended up a different size: the WM
-+  // clamped or auto-maximized it, or Juggler resized it for a viewport. Pages
-+  // then saw innerWidth > outerWidth (measured 1853 > 1680 on GNOME).
++  // Camoufox: the inner and outer sizes are deliberately NOT read from
++  // MaskConfig. CamoufoxWindow.sys.mjs sizes the real window and content area
++  // to the drawn ones, so the real values are the identity's. A fixed value
++  // contradicted the real window whenever it ended up a different size (the WM
++  // clamped it, Juggler resized it for a viewport: innerWidth 1853 > outerWidth
++  // 1680 on GNOME), and every iframe and page-opened popup reported the main
++  // window's content size (#963).
    FORWARD_TO_OUTER_OR_THROW(GetOuterWidthOuter, (aCallerType, aError), aError,
                              0);
  }
-@@ -3761,11 +3772,13 @@ double nsGlobalWindowInner::ScreenEdgeSlopY() const {
+@@ -3756,11 +3764,13 @@ double nsGlobalWindowInner::ScreenEdgeSlopY() const {
  
  int32_t nsGlobalWindowInner::GetScreenX(CallerType aCallerType,
                                          ErrorResult& aError) {
@@ -67,7 +50,7 @@ index 4bc8548e31..2bea4b618a 100644
    FORWARD_TO_OUTER_OR_THROW(GetScreenYOuter, (aCallerType, aError), aError, 0);
  }
  
-@@ -3799,6 +3812,8 @@ static nsPresContext* GetPresContextForRatio(Document* aDoc) {
+@@ -3794,6 +3804,8 @@ static nsPresContext* GetPresContextForRatio(Document* aDoc) {
  double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
                                                  ErrorResult& aError) {
    ENSURE_ACTIVE_DOCUMENT(aError, 0.0);
@@ -114,6 +97,7 @@ index 3b48a7f1e2..4b989dd48a 100644
    if (ShouldResistFingerprinting(RFPTarget::ScreenAvailRect)) {
      return GetTopWindowInnerRectForRFP();
 diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
+index 50dbb0847d..567e832a35 100644
 --- a/dom/workers/WorkerNavigator.cpp
 +++ b/dom/workers/WorkerNavigator.cpp
 @@ -3,6 +3,7 @@

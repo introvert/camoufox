@@ -35,6 +35,9 @@ npx camoufox fetch
 
 `camoufox fetch` installs the browser build this release is paired with.
 Without it, the first launch downloads it.
+It reads the build's release with one GitHub API call and exits non-zero
+when it installs nothing. On a shared CI runner, set `GITHUB_TOKEN` to raise
+GitHub's API rate limit.
 
 ## Usage
 
@@ -89,7 +92,7 @@ await context.close();
 ### One browser, many identities
 
 `NewContext()` gives each context its own identity (navigator, screen, WebGL,
-fonts, voices, audio seed, timezone, WebRTC IP), applied through
+fonts, voices, timezone, WebRTC IP), applied through
 `addInitScript` before any page script runs.
 Each call draws a new identity the way a launch does, from the same fpgen model
 and font and voice pools, and a page in the context reads what a browser
@@ -131,6 +134,16 @@ Canvas noise belongs to the browser, not the context (see
 every context claims the host's OS and GPU too, since its canvas renders there.
 Contexts with other OSes, like the ones above, need `canvas_noise: true`.
 
+The browser's own OS also decides some things for all its contexts. A browser
+launched as Windows on a Linux or macOS host (`os: "windows"`, or drawn so)
+computes `Math` as the Windows CRT does and uses Windows' keyboard shortcuts
+(on a Linux host; on macOS only the editor caret style), middle-click and
+scrollbars ([docs/HOST-PARITY.md](../docs/HOST-PARITY.md)).
+Those are browser settings, so a macOS context on it has them too, and a
+Windows context on a browser launched as another OS has the host's. `NewContext`
+does not refuse the mix. Pass `os` at launch for the OS whose behaviour matters,
+or use one browser per OS.
+
 ### The canvas on another OS
 
 A page can draw a canvas or a WebGL scene and read the pixels back. Those pixels
@@ -164,7 +177,27 @@ host's only when the identity claims the host's GPU. Otherwise
 |---|---|---|
 | `false` (default) | A normal window | Needs a display. |
 | `true` | Firefox headless | Camoufox patches the headless tells it knows about. |
-| `"virtual"` | A headed browser on a private Xvfb display | Linux only, needs `Xvfb` and `setpriv` (util-linux). Handled by `Camoufox()`, `NewBrowser()` and `launchServer()`. The display is 1x1 unless `CAMOUFOX_VIRTUAL_DISPLAY_SIZE` (e.g. `1920x1080x24`) says otherwise. |
+| `"virtual"` | A headed browser on a private Xvfb display | Linux only, needs `Xvfb` and `setpriv` (util-linux). Handled by `Camoufox()`, `NewBrowser()` and `launchServer()`. The display is 1x1 unless `CAMOUFOX_VIRTUAL_DISPLAY_SIZE` (e.g. `1920x1080x24`) says otherwise. Xvfb has no GPU: canvas and WebGL render in software. |
+| `"virtual-gpu"` | A headed browser on a private, headless Xorg server bound to one GPU | Linux only, needs Xorg and the card's driver. Canvas and WebGL render on the card. Handled like `"virtual"`. |
+
+```javascript
+import { Camoufox } from "camoufox";
+
+const browser = await Camoufox({ headless: "virtual-gpu", gpu: "0000:01:00.0", os: "linux" });
+```
+
+The card is named by `gpu` or `CAMOUFOX_GPU`, never guessed. Without root,
+set the machine up once per card. This installs Xorg and its setuid wrapper,
+lets the wrapper start Xorg for any user and installs the card's config. A
+launch that fails for want of it ends its error with this command:
+
+```bash
+npx camoufox gpu-setup 0000:01:00.0 | sudo sh
+```
+
+The launch checks that the browser renders on the card, and the identity claims
+that card. The Python README explains the selectors, the checks and the
+errors: [The GPU display](https://github.com/daijro/camoufox/blob/main/python/README.md#the-gpu-display).
 
 Every page is its own window, and headed windows stack, so all but the newest
 page's window are covered. Camoufox keeps covered windows rendering, as headless
@@ -207,7 +240,7 @@ window size is spoofed, and to the host's own color scheme and motion settings.
 It also allows the first launch five minutes instead of Playwright's 30 seconds,
 because that launch builds fontconfig's cache of the bundled fonts. A `timeout`
 you pass is kept. `launchOptions()` returns Playwright's camelCase keys (`executablePath`,
-`firefoxUserPrefs`), and does not handle `headless: "virtual"`.
+`firefoxUserPrefs`), and does not handle `headless: "virtual"` or `"virtual-gpu"`.
 
 ## Launch options
 
@@ -219,7 +252,9 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | Option | Type | Default | Effect |
 |---|---|---|---|
 | `os` | `string \| string[]` | fpgen's real-world mix | `"windows"`, `"macos"`, `"linux"`, `"android"`, or a list to pick from. A `navigator.userAgent` in `config` overrides it with the user agent's OS (a `LeakWarning` when they disagree). See [Firefox for Android](#firefox-for-android). |
-| `headless` | `boolean \| "virtual"` | `false` | See [Headless modes](#headless-modes). |
+| `headless` | `boolean \| "virtual" \| "virtual-gpu"` | `false` | See [Headless modes](#headless-modes). |
+| `gpu` | `string \| number` | `CAMOUFOX_GPU`, or the only GPU | The card for `headless: "virtual-gpu"`. Not taken by `launchOptions()`. |
+| `require_gpu` | `boolean` | `true` | With `headless: "virtual-gpu"`, fail the launch when the browser does not render on the card; `false` warns. Not taken by `launchOptions()`. |
 | `proxy` | `{ server, username?, password?, bypass? }` | none | Playwright proxy. |
 | `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. |
 | `geoip_db` | `string` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
@@ -298,7 +333,7 @@ field and how to set it:
 
 | Command | Options | What it does |
 |---|---|---|
-| `fetch [version]` | | Install the paired build (or, after `set`, the latest in the chosen channel), or `version` without making it active. Syncs first. |
+| `fetch [version]` | | Install the paired build (or, after `set`, the latest in the chosen channel), or `version` without making it active. A named or paired build is read from its own release; anything else syncs first. Exits non-zero when nothing is installed. |
 | `sync` | `--spoof-os auto\|mac\|win\|lin`, `--spoof-arch auto\|x86_64\|i686\|arm64` | Refresh the list of available builds. |
 | `set [specifier]` | `--geoip`, `--release` | Pin a build (`official/stable/134.0.2-beta.20`) or follow a channel (`official/stable`). No specifier opens a picker. `--geoip` picks the GeoIP database instead; `--release` goes back to the paired build. |
 | `active` | | Print the active build. A build that is chosen but not downloaded is marked `(not fetched)`. |
@@ -308,6 +343,8 @@ field and how to set it:
 | `path` | | Print the data directory (`~/.cache/camoufox` on Linux). |
 | `test [url]` | `--executable-path <path>` | Open a headed browser with the Playwright inspector. |
 | `server` | | Start a Playwright server and print its websocket endpoint. |
+| `gpu-setup [gpu]` | | Print the root script that sets this machine up for `headless: "virtual-gpu"` on the card `gpu` names (or `CAMOUFOX_GPU`). Run it with `\| sudo sh`. |
+| `gpu-xorg-config [gpu]` | | Print the Xorg config `headless: "virtual-gpu"` needs for the card `gpu` names (or `CAMOUFOX_GPU`). |
 
 Each release is paired with the one browser build it was built and tested with,
 the same build as the Python release of the same version, and every launch uses

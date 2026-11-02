@@ -98,6 +98,11 @@ canvas_noise: >-
     the identity claims another OS or GPU than this machine's, whose canvas would
     show the real one. Pass `canvas_noise=False` to keep stock canvas behaviour.
 
+gpu_software_rendering: >-
+    The browser on the headless="virtual-gpu" display never rendered on the GPU, so it
+    renders canvas and WebGL in software, which a page can tell from the GPU the
+    identity claims. Pass `require_gpu=True` (the default) to fail the launch instead.
+
 block_images: >-
     Blocking image requests has been reported to cause detection issues on major WAFs.
 
@@ -138,3 +143,14 @@ geoip_frozen: >-
     The newest "{name}" GeoIP database was built {days} days ago, so its source may have
     stopped publishing and locations may be out of date. Please report this at
     https://github.com/daijro/camoufox/issues.
+
+audio_seed_removed: >-
+    `audio:seed` has been removed and is ignored. Audio is now rendered exactly as
+    stock Firefox renders it: stock gives one value per CPU architecture, so noise
+    was a tell, not a disguise (ci/tribal-rules.yml: audio-is-not-noised).
+
+addon_not_bundled: >-
+    This Camoufox build has no {addon} addon at {path}, so it launches without it.
+    Browser releases bundle their default addons; an older release or an unpackaged build does not.
+    Install a current release with `camoufox fetch` (for a local build, `make stage-ubo`),
+    or list {addon} in exclude_addons to leave it out on purpose.

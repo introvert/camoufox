@@ -10,22 +10,27 @@
  */
 import { type BrowserServer, firefox } from "playwright-core";
 import { withUnpinnedLaunch } from "./cpu_affinity.js";
+import { GpuDisplay, proveGpu } from "./gpudisplay.js";
 import { camelCase } from "./sync_api.js";
 import {
+	type GpuDisplayOptions,
+	type Headless,
 	type LaunchOptions,
 	launchOptions,
+	startVirtualDisplay,
 	withFirstLaunchTimeout,
 } from "./utils.js";
-import { VirtualDisplay } from "./virtdisplay.js";
 
-export interface LaunchServerOptions extends Omit<LaunchOptions, "headless"> {
+export interface LaunchServerOptions
+	extends Omit<LaunchOptions, "headless">,
+		GpuDisplayOptions {
 	/** Port to listen on. Defaults to a random free port. */
 	port?: number;
 	/** Path of the websocket endpoint. Defaults to a random path. */
 	ws_path?: string;
-	/** Whether to run the browser headless. `"virtual"` spawns an Xvfb display
-	 * (a TS extension: Python's launch_server passes headless through). */
-	headless?: boolean | "virtual";
+	/** Whether to run the browser headless. `"virtual"` spawns an Xvfb display,
+	 * `"virtual-gpu"` a headless Xorg server bound to one GPU. */
+	headless?: Headless;
 }
 
 /**
@@ -66,15 +71,11 @@ export async function launchServer({
 		delete options[unsupported];
 	}
 
-	let virtualDisplay: VirtualDisplay | null = null;
-	let headlessBool: boolean | undefined;
-	if (headless === "virtual") {
-		virtualDisplay = new VirtualDisplay(options.debug ?? false);
-		options.virtual_display = await virtualDisplay.get();
-		headlessBool = false;
-	} else {
-		headlessBool = headless;
-	}
+	const [virtualDisplay, headlessBool] = await startVirtualDisplay(
+		headless,
+		options.debug,
+		options,
+	);
 
 	try {
 		const config = withFirstLaunchTimeout(
@@ -90,6 +91,17 @@ export async function launchServer({
 			// BrowserServer has no "disconnected" event; "close" fires on shutdown.
 			const display = virtualDisplay;
 			server.on("close", () => display.kill());
+		}
+		if (virtualDisplay instanceof GpuDisplay) {
+			const browser = await firefox.connect(server.wsEndpoint());
+			try {
+				await proveGpu(browser, virtualDisplay);
+			} catch (error) {
+				await server.close();
+				throw error;
+			} finally {
+				await browser.close();
+			}
 		}
 
 		return server;

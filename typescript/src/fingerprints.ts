@@ -38,7 +38,12 @@ import {
 	pyTruthy,
 	ValueError,
 } from "./pycompat.js";
-import { FallbackWarning, LeakWarning } from "./warnings.js";
+import {
+	FallbackWarning,
+	LeakWarning,
+	loadWarnings,
+	warn,
+} from "./warnings.js";
 import { sampleWebglForScreen, type TargetOS, webglForGpu } from "./webgl.js";
 
 export type { TargetOS } from "./webgl.js";
@@ -242,17 +247,29 @@ export function identitySalt(pinned?: unknown): bigint {
 	return createHash("sha256").update(blob).digest().readBigUInt64BE(0);
 }
 
+/** The browser's version in a UA: "rv:158.0" and "Firefox/158.0". */
+const UA_VERSION = /(rv:|Firefox\/)[0-9][0-9.]*/g;
+
+/**
+ * The UA with the browser's version taken out, for identitySeed(). A saved
+ * identity on a newer browser claims the new engine version and nothing else
+ * changes, so the seed must not move with it (Python: versionless_ua).
+ */
+export function versionlessUa(userAgent: string): string {
+	return userAgent.replace(UA_VERSION, "$1");
+}
+
 /**
  * A seed for the per-identity draws: a pure function of the presented
- * identity (UA, platform, screen, cores) and its salt -- zlib.crc32 of the
- * values' Python str() joined by "|".
+ * identity (UA without its version, platform, screen, cores) and its salt --
+ * zlib.crc32 of the values' Python str() joined by "|".
  */
 export function identitySeed(
 	config: Config,
 	salt: number | bigint = 0,
 ): number {
 	const parts = [
-		pyStr(get(config, "navigator.userAgent", "")),
+		versionlessUa(pyStr(get(config, "navigator.userAgent", ""))),
 		pyStr(get(config, "navigator.platform", "")),
 		pyStr(get(config, "screen.width", "")),
 		pyStr(get(config, "screen.height", "")),
@@ -264,12 +281,15 @@ export function identitySeed(
 }
 
 /**
- * The audio noise seed launchOptions derives from identitySeed() (utils.py:
- * `(ident * 2654435761 + 97) & 0xFFFFFFFF or 1`), computed without losing
- * precision past 2**53.
+ * audio:seed is gone: the browser renders audio as stock Firefox does. A
+ * caller's seed is dropped with a warning rather than sent to a browser that
+ * would noise with it (a released one) or ignore it (this one).
  */
-export function audioSeedFromIdentity(ident: number): number {
-	return Number((BigInt(ident) * 2654435761n + 97n) & 0xffffffffn) || 1;
+export function dropAudioSeed(config: Record<string, unknown>): void {
+	if ("audio:seed" in config) {
+		delete config["audio:seed"];
+		warn(loadWarnings().audio_seed_removed, "FutureWarning");
+	}
 }
 
 /** A seeded generator for a draw, or a fresh OS-seeded one when unseeded. */
@@ -1538,9 +1558,6 @@ export function fromPreset(
 	if (pyTruthy(webgl.unmaskedRenderer))
 		config["webGl:renderer"] = webgl.unmaskedRenderer;
 
-	// A unique audio seed per launch.
-	config["audio:seed"] = random.randint(1, 4_294_967_295);
-
 	if (pyTruthy(preset.timezone)) config.timezone = preset.timezone;
 
 	const plat: string = nav.platform ?? "";
@@ -1607,10 +1624,10 @@ export function fromPreset(
 // ---------------------------------------------------------------------------
 
 export interface InitValues {
-	audioFingerprintSeed?: number;
 	navigatorPlatform?: string;
 	navigatorOscpu?: string;
 	navigatorUserAgent?: string;
+	navigatorAppVersion?: string;
 	hardwareConcurrency?: number;
 	webglVendor?: string;
 	webglRenderer?: string;
@@ -1635,10 +1652,10 @@ export function buildInitScript(values: InitValues): string {
 	const lines = ["(function(v) {", "  var w = window;"];
 
 	const setters: Array<[keyof InitValues, string]> = [
-		["audioFingerprintSeed", "setAudioFingerprintSeed"],
 		["navigatorPlatform", "setNavigatorPlatform"],
 		["navigatorOscpu", "setNavigatorOscpu"],
 		["navigatorUserAgent", "setNavigatorUserAgent"],
+		["navigatorAppVersion", "setNavigatorAppVersion"],
 		["hardwareConcurrency", "setNavigatorHardwareConcurrency"],
 		["webglVendor", "setWebGLVendor"],
 		["webglRenderer", "setWebGLRenderer"],
@@ -1867,9 +1884,6 @@ export function generateContextFingerprint({
 		// A fresh identity: every seeded draw below gets its own salt.
 		const salt = identitySalt();
 
-		if (!("audio:seed" in config))
-			config["audio:seed"] = random.randint(1, 4_294_967_295);
-
 		const osName = targetOsFromPlatform(
 			pyStr(get(config, "navigator.platform", "")),
 		);
@@ -2006,7 +2020,11 @@ export function generateContextFingerprint({
 		}
 	}
 
-	if (config_overrides) Object.assign(config, config_overrides);
+	if (config_overrides) {
+		const overrides = { ...config_overrides };
+		dropAudioSeed(overrides);
+		Object.assign(config, overrides);
+	}
 
 	// The window the identity claims, fitted to the screen the browser reports
 	// for it as launchOptions() fits the launch's.
@@ -2021,10 +2039,10 @@ export function generateContextFingerprint({
 		config[key] = config[key] || 0;
 
 	const initValues: InitValues = {
-		audioFingerprintSeed: config["audio:seed"],
 		navigatorPlatform: nav.platform,
 		navigatorOscpu: config["navigator.oscpu"],
 		navigatorUserAgent: config["navigator.userAgent"],
+		navigatorAppVersion: config["navigator.appVersion"],
 		hardwareConcurrency: pyTruthy(nav.hardwareConcurrency)
 			? nav.hardwareConcurrency
 			: config["navigator.hardwareConcurrency"],

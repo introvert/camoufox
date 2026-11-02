@@ -53,22 +53,19 @@ const HOST_DEPENDENT_EXTENSIONS: ReadonlySet<string> = new Set([
 	"OVR_multiview2",
 ]);
 
-// Extensions the claimed OS's backend exposes on every GPU in the running
-// Firefox, which fpgen's Firefox 146 records lack. ANGLE's D3D11 backend sets
-// depthClampEXT unconditionally and polygonOffsetClampEXT from feature level
-// 10_0, which every WebGL2 GPU has (renderer11_utils.cpp); Firefox exposes
-// them from 156 and 158.
+// Extensions the claimed OS's backend exposes on every GPU in Firefox 156,
+// which fpgen's Firefox 146 records lack. ANGLE sets depthClampEXT
+// unconditionally on D3D11 (renderer11_utils.cpp); 146's ANGLE did not.
 const BACKEND_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
-	win: ["EXT_depth_clamp", "EXT_polygon_offset_clamp"],
+	win: ["EXT_depth_clamp"],
 };
 
-// Firefox 158 exposes EXT_polygon_offset_clamp where the driver has GL 4.6 or
-// ARB/EXT_polygon_offset_clamp (GLContextFeatures.cpp): Linux's desktop GL
-// drivers, Mesa's and NVIDIA's, but not Apple's GL 4.1. A Linux record with
-// EXT_depth_clamp came from a desktop GL driver; one without, from GLES.
-const DESKTOP_GL_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
-	lin: ["EXT_polygon_offset_clamp"],
-};
+// Firefox 158 (bug 1854003) exposes EXT_polygon_offset_clamp wherever the GL
+// backend clamps polygon offsets: ANGLE's D3D11 backend from feature level 10_0,
+// which WebGL2 needs, and Linux desktop GL drivers (ARB_polygon_offset_clamp,
+// core in GL 4.6), whose recordings have EXT_depth_clamp. macOS release builds
+// run WebGL on CGL's GL 4.1, which lacks it.
+const POLYGON_OFFSET_CLAMP = "EXT_polygon_offset_clamp";
 
 const ALIASED_LINE_WIDTH_RANGE = "33902";
 
@@ -143,19 +140,34 @@ export function firefoxGpus(targetOs: string): Array<[string, string]> {
 	]);
 }
 
+/** The extensions the shipped Firefox adds on this device's backend. */
+function backendExtensions(
+	targetOs: string,
+	webgl: Record<string, any>,
+	hasWebgl2: boolean,
+): readonly string[] {
+	const extensions = BACKEND_EXTENSIONS[targetOs] ?? [];
+	if (
+		(targetOs === "win" && hasWebgl2) ||
+		(targetOs === "lin" &&
+			(webgl.supportedExtensions as string[]).includes("EXT_depth_clamp"))
+	) {
+		return [...extensions, POLYGON_OFFSET_CLAMP];
+	}
+	return extensions;
+}
+
 function contextConfig(
 	prefix: string,
 	webgl: Record<string, any>,
 	targetOs: string,
+	backend: readonly string[],
 ): Record<string, any> {
 	const blocked = filteredExtensions(targetOs);
 	const extensions = (webgl.supportedExtensions as string[]).filter(
 		(extension) => !blocked.has(extension),
 	);
-	const added = [...(BACKEND_EXTENSIONS[targetOs] ?? [])];
-	if (extensions.includes("EXT_depth_clamp"))
-		added.push(...(DESKTOP_GL_EXTENSIONS[targetOs] ?? []));
-	for (const extension of added) {
+	for (const extension of backend) {
 		if (extensions.includes(extension)) continue;
 		// Firefox lists them in WebGLExtensionID order: alphabetical, ignoring case.
 		const at = extensions.findIndex(
@@ -196,14 +208,15 @@ export function toConfig(
 	const hasWebgl2 = Array.isArray(webgl2)
 		? webgl2.length > 0
 		: Object.keys(webgl2 ?? {}).length > 0;
+	const backend = backendExtensions(targetOs, webgl, hasWebgl2);
 	const config: Record<string, any> = {
 		"webGl:vendor": webgl.vendor,
 		"webGl:renderer": webgl.renderer,
-		...contextConfig("webGl", webgl, targetOs),
+		...contextConfig("webGl", webgl, targetOs, backend),
 		webGl2Enabled: hasWebgl2,
 	};
 	if (hasWebgl2) {
-		Object.assign(config, contextConfig("webGl2", webgl2, targetOs));
+		Object.assign(config, contextConfig("webGl2", webgl2, targetOs, backend));
 		// Firefox 156 creates WebGL1 on the same GL profile as WebGL2, so both
 		// report one line width range. 146 forced WebGL1 onto a compatibility
 		// profile, and fpgen recorded that profile's driver range.
