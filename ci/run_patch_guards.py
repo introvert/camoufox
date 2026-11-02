@@ -106,6 +106,7 @@ GROUPS: Dict[str, Tuple[str, ...]] = {
         "search-service-init",
         "stock-gpu-parity",
         "stock-parity-probes",
+        "tls-client-hello-parity",
         "viewport-no-rdm",
         "webgl-headless-parity",
         "windows-crt-math",
