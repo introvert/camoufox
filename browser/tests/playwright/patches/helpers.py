@@ -179,4 +179,11 @@ class Marionette:
 
 
 def marionette_args() -> List[str]:
-    return ["--marionette", "--remote-allow-system-access"]
+    """Arguments for a launch these guards drive through Marionette's chrome context.
+
+    Chrome context needs system access, which Firefox 159 grants only through
+    this variable (the --remote-allow-system-access flag is gone). The launch
+    inherits the process environment.
+    """
+    os.environ["MOZ_REMOTE_ALLOW_SYSTEM_ACCESS"] = "1"
+    return ["--marionette"]

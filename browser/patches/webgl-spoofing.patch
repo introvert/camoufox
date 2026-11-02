@@ -207,18 +207,16 @@ index 84339e3417..4ab5c50a32 100644
    void Alert(nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aError);
    void Alert(const nsAString& aMessage, nsIPrincipal& aSubjectPrincipal,
 diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.cpp
-index 097d202297..c96d8f8c24 100644
+index 097d202297..c5377d05b3 100644
 --- a/dom/canvas/ClientWebGLContext.cpp
 +++ b/dom/canvas/ClientWebGLContext.cpp
-@@ -3,6 +3,15 @@
+@@ -3,6 +3,13 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  #include "ClientWebGLContext.h"
 +#include "MaskConfig.hpp"
 +#include "WebGLParamsManager.h"
-+#include "mozilla/StaticMutex.h"
 +#include <memory>
-+#include <unordered_map>
 +#include "mozilla/dom/WorkerPrivate.h"
 +#include "nsPIDOMWindow.h"
 +#include <algorithm>
@@ -226,7 +224,7 @@ index 097d202297..c96d8f8c24 100644
  
  #include <fmt/format.h>
  
-@@ -781,6 +790,69 @@ void ClientWebGLContext::SetUnpackColorSpace(
+@@ -781,6 +788,74 @@ void ClientWebGLContext::SetUnpackColorSpace(
    Run<RPROC(SetUnpackColorSpace)>(*mUnpackColorSpace);
  }
  
@@ -254,49 +252,54 @@ index 097d202297..c96d8f8c24 100644
 +  explicit CamouWebGLTables(uint32_t aUserContextId)
 +      : mOwn(Parsed(aUserContextId)) {}
 +  const nlohmann::json& operator*() const {
-+    return mOwn ? *mOwn : MaskConfig::GetJson();
++    return mOwn ? mOwn->data : MaskConfig::GetJson();
++  }
++  const nlohmann::json* FindGLParam(uint32_t aPname, bool aIsWebGL2) const {
++    return mOwn ? mOwn->FindGLParam(aPname, aIsWebGL2)
++                : MaskConfig::FindGLParam(aPname, aIsWebGL2);
 +  }
 +
 + private:
-+  // Parsed once per context and storage generation: getParameter() reads it
-+  // on every call, from windows and from workers' OffscreenCanvas.
-+  static std::shared_ptr<const nlohmann::json> Parsed(uint32_t aId) {
-+    struct Entry {
-+      uint64_t mGeneration;
-+      std::shared_ptr<const nlohmann::json> mTables;
++  // Parsed once per thread, context and storage generation: getParameter()
++  // reads it on every call, from windows and from workers' OffscreenCanvas.
++  // Per thread, because a lock and a shared map cost every call more than the
++  // lookup itself; a process rarely serves more contexts than the memo holds.
++  static std::shared_ptr<const MaskConfig::WebGLTables> Parsed(uint32_t aId) {
++    struct Memo {
++      uint32_t mId = 0;
++      uint64_t mGeneration = 0;  // Generation() starts at 1
++      std::shared_ptr<const MaskConfig::WebGLTables> mTables;
 +    };
-+    static StaticMutex sMutex MOZ_UNANNOTATED;
-+    static std::unordered_map<uint32_t, Entry> sParsed;
++    static thread_local std::array<Memo, 4> tMemo;
++    static thread_local size_t tNext = 0;
 +
 +    const uint64_t generation = dom::RoverfoxStorageManager::Generation();
-+    {
-+      StaticMutexAutoLock lock(sMutex);
-+      const auto found = sParsed.find(aId);
-+      if (found != sParsed.end() && found->second.mGeneration == generation) {
-+        return found->second.mTables;
++    for (const Memo& memo : tMemo) {
++      if (memo.mGeneration == generation && memo.mId == aId) {
++        return memo.mTables;
 +      }
 +    }
-+    std::shared_ptr<const nlohmann::json> tables;
++    std::shared_ptr<const MaskConfig::WebGLTables> tables;
 +    nsAutoString stored;
 +    if (dom::WebGLParamsManager::GetConfig(aId, stored)) {
 +      auto parsed = nlohmann::json::parse(
 +          NS_ConvertUTF16toUTF8(stored).get(), nullptr, false);
 +      if (parsed.is_object()) {
-+        tables = std::make_shared<const nlohmann::json>(std::move(parsed));
++        tables = std::make_shared<const MaskConfig::WebGLTables>(
++            std::move(parsed));
 +      }
 +    }
-+    StaticMutexAutoLock lock(sMutex);
-+    sParsed.insert_or_assign(aId, Entry{generation, tables});
++    tMemo[tNext++ % tMemo.size()] = Memo{aId, generation, tables};
 +    return tables;
 +  }
 +
-+  std::shared_ptr<const nlohmann::json> mOwn;
++  std::shared_ptr<const MaskConfig::WebGLTables> mOwn;
 +};
 +
  void ClientWebGLContext::GetContextAttributes(
      dom::Nullable<dom::WebGLContextAttributes>& retval) {
    retval.SetNull();
-@@ -794,6 +866,9 @@ void ClientWebGLContext::GetContextAttributes(
+@@ -794,6 +869,9 @@ void ClientWebGLContext::GetContextAttributes(
  
    const auto& options = notLost->info.options;
  
@@ -306,7 +309,7 @@ index 097d202297..c96d8f8c24 100644
    result.mAlpha.Construct(options.alpha);
    result.mDepth = options.depth;
    result.mStencil = options.stencil;
-@@ -2179,6 +2254,108 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2179,6 +2257,108 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
    const auto& state = State();
  
    // -
@@ -387,7 +390,7 @@ index 097d202297..c96d8f8c24 100644
 +      std::variant<int64_t, bool, double, std::string, std::nullptr_t>>
 +      data;
 +  if (fromTable) {
-+    data = MaskConfig::GLParam(pname, mIsWebGL2, *tables);
++    data = MaskConfig::GLParam(tables.FindGLParam(pname, mIsWebGL2));
 +  }
 +
 +  if (data.has_value()) {
@@ -415,7 +418,7 @@ index 097d202297..c96d8f8c24 100644
  
    const auto fnSetRetval_Buffer = [&](const GLenum target) {
      const auto buffer = *MaybeFind(state.mBoundBufferByTarget, target);
-@@ -2288,13 +2465,19 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2288,13 +2468,19 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
        return;
  
      case LOCAL_GL_ALIASED_POINT_SIZE_RANGE:
@@ -424,7 +427,7 @@ index 097d202297..c96d8f8c24 100644
 +      retval.set(Create<dom::Float32Array>(
 +          cx, this,
 +          MaskConfig::MParamGL<std::array<float, 2UL>>(
-+              pname, limits.pointSizeRange, mIsWebGL2, *tables),
++              tables.FindGLParam(pname, mIsWebGL2), limits.pointSizeRange),
 +          rv));
        return;
  
@@ -434,25 +437,25 @@ index 097d202297..c96d8f8c24 100644
 +      retval.set(Create<dom::Float32Array>(
 +          cx, this,
 +          MaskConfig::MParamGL<std::array<float, 2UL>>(
-+              pname, limits.lineWidthRange, mIsWebGL2, *tables),
++              tables.FindGLParam(pname, mIsWebGL2), limits.lineWidthRange),
 +          rv));
        return;
  
      // 4 floats
-@@ -2310,7 +2493,11 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2310,7 +2496,11 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
      case LOCAL_GL_MAX_VIEWPORT_DIMS: {
        auto maxViewportDim = BitwiseCast<int32_t>(limits.maxViewportDim);
        const auto dims = std::array<int32_t, 2>{maxViewportDim, maxViewportDim};
 -      retval.set(Create<dom::Int32Array>(cx, this, dims, rv));
 +      retval.set(Create<dom::Int32Array>(
 +          cx, this,
-+          MaskConfig::MParamGL<std::array<int32_t, 2UL>>(pname, dims,
-+                                                         mIsWebGL2, *tables),
++          MaskConfig::MParamGL<std::array<int32_t, 2UL>>(
++              tables.FindGLParam(pname, mIsWebGL2), dims),
 +          rv));
        return;
      }
  
-@@ -2438,6 +2625,31 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2438,6 +2628,31 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
    // -
  
    if (!debug) {
@@ -484,7 +487,7 @@ index 097d202297..c96d8f8c24 100644
      const auto GetUnmaskedRenderer = [&]() {
        const auto prefLock = StaticPrefs::webgl_override_unmasked_renderer();
        if (!prefLock->IsEmpty()) {
-@@ -2470,9 +2682,12 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2470,9 +2685,12 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
            allowRenderer = false;
          }
          if (allowRenderer) {
@@ -500,7 +503,7 @@ index 097d202297..c96d8f8c24 100644
            }
          }
          if (!ret) {
-@@ -2510,9 +2725,12 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2510,9 +2728,12 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
                  ShouldResistFingerprinting(RFPTarget::WebGLRendererConstant)) {
                ret = Some("Mozilla"_ns);
              } else {
@@ -516,7 +519,7 @@ index 097d202297..c96d8f8c24 100644
                }
              }
              break;
-@@ -2542,10 +2760,13 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+@@ -2542,10 +2763,13 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
                             RFPTarget::WebGLVendorConstant)) {
                ret = Some("Mozilla"_ns);
              } else {
@@ -534,7 +537,7 @@ index 097d202297..c96d8f8c24 100644
                }
              }
              break;
-@@ -3020,6 +3241,26 @@ ClientWebGLContext::GetShaderPrecisionFormat(const GLenum shadertype,
+@@ -3020,6 +3244,26 @@ ClientWebGLContext::GetShaderPrecisionFormat(const GLenum shadertype,
      return nullptr;
    }
  
@@ -561,7 +564,7 @@ index 097d202297..c96d8f8c24 100644
    const auto& shaderPrecisions = *notLost->info.shaderPrecisions;
    const auto args =
        webgl::GetShaderPrecisionFormatArgs{shadertype, precisiontype};
-@@ -6409,6 +6650,17 @@ bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
+@@ -6409,6 +6653,17 @@ bool ClientWebGLContext::IsSupported(const WebGLExtensionID ext,
      return false;
    }
  
@@ -579,7 +582,7 @@ index 097d202297..c96d8f8c24 100644
    const auto& limits = Limits();
    return limits.supportedExtensions[ext];
  }
-@@ -6423,6 +6675,18 @@ void ClientWebGLContext::GetSupportedExtensions(
+@@ -6423,6 +6678,18 @@ void ClientWebGLContext::GetSupportedExtensions(
    }
  
    auto& retarr = retval.SetValue();

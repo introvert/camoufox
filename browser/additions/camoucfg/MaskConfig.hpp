@@ -496,7 +496,7 @@ inline const nlohmann::json* FindGLParam(uint32_t pname, bool isWebGL2) {
   return (isWebGL2 ? index.gl2Params : index.glParams).Find(pname);
 }
 
-// The same lookups in `data`: the launch's config through the indexes above,
+// The same lookup in `data`: the launch's config through the indexes above,
 // or a context's own WebGL tables (WebGLParamsManager::GetConfig).
 inline const nlohmann::json* FindNested(std::string_view domain,
                                         std::string_view key,
@@ -506,12 +506,30 @@ inline const nlohmann::json* FindNested(std::string_view domain,
   return table ? Find(*table, key) : nullptr;
 }
 
-inline const nlohmann::json* FindGLParam(uint32_t pname, bool isWebGL2,
-                                         const nlohmann::json& data) {
-  if (&data == &GetJson()) return FindGLParam(pname, isWebGL2);
-  return FindNested(isWebGL2 ? "webGl2:parameters" : "webGl:parameters",
-                    std::to_string(pname), data);
-}
+// A context's own WebGL tables, with its parameters indexed by enum as the
+// launch's are: a lookup that formatted the enum and searched two JSON maps
+// cost a context's MAX_TEXTURE_SIZE 134 ns against stock's 12 ns.
+struct WebGLTables {
+  explicit WebGLTables(nlohmann::json aData)
+      : data(std::move(aData)),
+        glParams(Table(data, "webGl:parameters")),
+        gl2Params(Table(data, "webGl2:parameters")) {}
+
+  const nlohmann::json* FindGLParam(uint32_t pname, bool isWebGL2) const {
+    return (isWebGL2 ? gl2Params : glParams).Find(pname);
+  }
+
+  const nlohmann::json data;
+
+ private:
+  static EnumIndex Table(const nlohmann::json& aData, const char* aName) {
+    auto it = aData.find(aName);
+    return it != aData.end() && it->is_object() ? EnumIndex(*it) : EnumIndex();
+  }
+
+  const EnumIndex glParams;
+  const EnumIndex gl2Params;
+};
 
 inline std::optional<nlohmann::json> GetNested(std::string_view domain,
                                                std::string_view keyStr) {
@@ -519,10 +537,10 @@ inline std::optional<nlohmann::json> GetNested(std::string_view domain,
   return std::nullopt;
 }
 
+// A webGl[2]:parameters entry (FindGLParam) as a getParameter() value.
 inline std::optional<
     std::variant<int64_t, bool, double, std::string, std::nullptr_t>>
-GLParam(uint32_t pname, bool isWebGL2, const nlohmann::json& data = GetJson()) {
-  const auto* value = FindGLParam(pname, isWebGL2, data);
+GLParam(const nlohmann::json* value) {
   if (!value) return std::nullopt;
   const auto& entry = *value;
   if (entry.is_null()) return std::nullptr_t();
@@ -534,12 +552,8 @@ GLParam(uint32_t pname, bool isWebGL2, const nlohmann::json& data = GetJson()) {
 }
 
 template <typename T>
-inline T MParamGL(uint32_t pname, T defaultValue, bool isWebGL2,
-                  const nlohmann::json& data = GetJson()) {
-  if (const auto* value = FindGLParam(pname, isWebGL2, data)) {
-    return value->get<T>();
-  }
-  return defaultValue;
+inline T MParamGL(const nlohmann::json* value, T defaultValue) {
+  return value ? value->get<T>() : defaultValue;
 }
 
 inline std::optional<std::array<int32_t, 3UL>> MShaderData(

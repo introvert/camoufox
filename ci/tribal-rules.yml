@@ -419,6 +419,7 @@ rules:
       - "fpgen Linux WebGL2 records: [1, 1] on 97%, the driver's range on the 3% without EXT_depth_clamp (GLES drivers, where Firefox reads it)"
       - "browser/tests/playwright/patches/stock-gpu-parity.py fails on the 146-style WebGL1 range on Linux, on a hardware GPU and on llvmpipe, and passes with the fix"
       - "Firefox 158 adds EXT_polygon_offset_clamp (dom/canvas/WebGLExtensions.cpp), supported where gfx/gl/GLContextFeatures.cpp finds GL 4.6 or ARB/EXT_polygon_offset_clamp. ANGLE's renderer11_utils.cpp:1333 sets polygonOffsetClampEXT from D3D11 feature level 10_0. stock-gpu-parity on 158 found stock exposing it in WebGL1 and WebGL2 on Linux llvmpipe, where no fpgen record has it"
+      - "Firefox 159 adds EXT_clip_control (GLContextFeatures.cpp: GL 4.5 or ARB/EXT_clip_control) and EXT_texture_mirror_clamp_to_edge (GL 4.4 or ARB/EXT_texture_mirror_clamp_to_edge), and moves EXT_texture_norm16 out of the drafts on WebGL2 (GL 3.1, or EXT_texture_norm16 on GLES). ANGLE's renderer11_utils.cpp:1394 sets clipControlEXT from feature level 10_0 and :1358 textureMirrorClampToEdgeEXT on every feature level; Caps.cpp derives textureNorm16EXT from the 16-bit normalized formats D3D11 has from 10_0. stock-gpu-parity on 159 found stock exposing all three on Linux llvmpipe, where no fpgen record has them"
     rationale: >-
       fpgen's records are right for the Firefox that made them; what goes
       stale is what that Firefox decided rather than the GPU. Hardware-owned
@@ -429,7 +430,10 @@ rules:
       place in Firefox's alphabetical extension order, and from 158
       EXT_polygon_offset_clamp on every GPU with WebGL2 (feature level 10_0),
       which Linux desktop GL drivers (the records with EXT_depth_clamp) also
-      expose and Apple's GL 4.1 does not. WebGL1 now shares
+      expose and Apple's GL 4.1 does not. From 159 EXT_clip_control goes with
+      it, EXT_texture_mirror_clamp_to_edge is on every Windows GPU and Linux
+      desktop GL, and EXT_texture_norm16 is on WebGL2 there and on macOS.
+      WebGL1 now shares
       WebGL2's GL profile, so it reports the line width range the same device
       recorded for WebGL2, which is right for core profiles and GLES drivers
       alike. Live state that also changed (the stencil masks) is answered by
