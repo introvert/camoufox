@@ -80,11 +80,12 @@ def run(binary, shim, x, y):
     port = free_port()
     with tempfile.TemporaryDirectory() as profile:
         Path(profile, "user.js").write_text(f'user_pref("marionette.port", {port});\n')
+        # marionette_args() sets the system-access variable, so it comes before the copy of the environment.
+        args = [str(binary), "-no-remote", "-profile", profile, *marionette_args()]
         env = {**os.environ, "LD_PRELOAD": str(shim), "MOZ_CRASHREPORTER_DISABLE": "1"}
         log_path = Path(profile, "stderr.log")
         log = open(log_path, "wb")
-        proc = subprocess.Popen([str(binary), "-no-remote", "-profile", profile, *marionette_args()],
-                                stdout=subprocess.DEVNULL, stderr=log, env=env)
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=log, env=env)
         before = None
         try:
             m = connect(proc, port)
