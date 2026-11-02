@@ -1,5 +1,5 @@
 diff --git a/gfx/thebes/CoreTextFontList.cpp b/gfx/thebes/CoreTextFontList.cpp
-index b6696c70c4..4727cae871 100644
+index b6696c70c4..57ce1586db 100644
 --- a/gfx/thebes/CoreTextFontList.cpp
 +++ b/gfx/thebes/CoreTextFontList.cpp
 @@ -6,6 +6,7 @@
@@ -24,7 +24,55 @@ index b6696c70c4..4727cae871 100644
      auto timerId = glean::fontlist::bundledfonts_activate.Start();
      ActivateBundledFonts();
      glean::fontlist::bundledfonts_activate.StopAndAccumulate(
-@@ -1545,6 +1551,11 @@ already_AddRefed<gfxFontEntry> CoreTextFontList::LookupLocalFont(
+@@ -1136,6 +1142,26 @@ void CoreTextFontList::AddFamily(CFStringRef aFamily) {
+   AddFamily(nameUtf8, GetVisibilityForFamily(nameUtf8));
+ }
+ 
++// Camoufox: a face whose PostScript name starts with "." is a hidden macOS
++// system font. WebRender loads those by name in the GPU process and gets the
++// host's copy, while the parent shaped the text with the bundled one, so every
++// glyph id points at a different glyph (daijro/camoufox#918). Pages never see
++// hidden faces and the host always has its own. Fonts register per file, so a
++// collection holding one is skipped whole; all of those are macOS fonts.
++static bool HasHiddenSystemFace(CFArrayRef aDescriptors) {
++  const CFIndex count = aDescriptors ? CFArrayGetCount(aDescriptors) : 0;
++  for (CFIndex i = 0; i < count; ++i) {
++    AutoCFTypeRef<CFStringRef> name(
++        (CFStringRef)CTFontDescriptorCopyAttribute(
++            (CTFontDescriptorRef)CFArrayGetValueAtIndex(aDescriptors, i),
++            kCTFontNameAttribute));
++    if (name && CFStringHasPrefix(name, CFSTR("."))) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ /* static */
+ void CoreTextFontList::ActivateFontsFromDir(
+     const nsACString& aDir, nsTHashSet<nsCStringHashKey>* aLoadedFamilies) {
+@@ -1165,14 +1191,14 @@ void CoreTextFontList::ActivateFontsFromDir(
+     if (result != kCFURLEnumeratorSuccess) {
+       continue;
+     }
+-    CFArrayAppendValue(urls, url);
+-
+-    if (!aLoadedFamilies) {
+-      continue;
+-    }
+     AutoCFTypeRef<CFArrayRef> descriptors(
+         CTFontManagerCreateFontDescriptorsFromURL(url));
+-    if (!descriptors || !CFArrayGetCount(descriptors)) {
++    if (HasHiddenSystemFace(descriptors)) {
++      continue;
++    }
++    CFArrayAppendValue(urls, url);
++
++    if (!aLoadedFamilies || !descriptors || !CFArrayGetCount(descriptors)) {
+       continue;
+     }
+     CTFontDescriptorRef desc =
+@@ -1545,6 +1571,11 @@ already_AddRefed<gfxFontEntry> CoreTextFontList::LookupLocalFont(
    // Reset our string length to match the actual C string we got, which will
    // usually be much shorter than the maximal buffer we allocated.
    key.Truncate(strlen(key.get()));
@@ -36,7 +84,7 @@ index b6696c70c4..4727cae871 100644
    ToLowerCase(key);
    // If the family can't be looked up, this font is not available for use.
    FontFamily family = FindFamily(aFontVisibilityProvider, key);
-@@ -1552,9 +1563,11 @@ already_AddRefed<gfxFontEntry> CoreTextFontList::LookupLocalFont(
+@@ -1552,9 +1583,11 @@ already_AddRefed<gfxFontEntry> CoreTextFontList::LookupLocalFont(
      return nullptr;
    }
  
@@ -52,7 +100,7 @@ index b6696c70c4..4727cae871 100644
  
  static void ReleaseFontData(void* aInfo, const void* aData, size_t aSize) {
 diff --git a/gfx/thebes/gfxDWriteFontList.cpp b/gfx/thebes/gfxDWriteFontList.cpp
-index 63169b05b7..5b659113f3 100644
+index a804e7154b..ec81e42dc7 100644
 --- a/gfx/thebes/gfxDWriteFontList.cpp
 +++ b/gfx/thebes/gfxDWriteFontList.cpp
 @@ -5,6 +5,7 @@
@@ -63,16 +111,16 @@ index 63169b05b7..5b659113f3 100644
  #include "SharedFontList-impl.h"
  #include "gfxDWriteCommon.h"
  #include "gfxDWriteFonts.h"
-@@ -1634,6 +1635,8 @@ void gfxDWriteFontList::InitSharedFontListForPlatform() {
+@@ -1675,6 +1676,8 @@ void gfxDWriteFontList::InitSharedFontListForPlatform() {
    // We activate bundled fonts if the pref is > 0 (on) or < 0 (auto), only an
    // explicit value of 0 (off) will disable them.
    TimeStamp start1 = TimeStamp::Now();
 +  // Camoufox: a native Windows identity keeps only the fonts stock Firefox
 +  // bundles (BundledFontFileEnumerator filters the directory).
    if (StaticPrefs::gfx_bundled_fonts_activate_AtStartup() != 0) {
+     RefPtr<IDWriteFactory> factory = Factory::EnsureDWriteFactory();
      mBundledFonts = CreateBundledFontsCollection(factory);
-   }
-@@ -2627,22 +2630,48 @@ class BundledFontFileEnumerator : public IDWriteFontFileEnumerator {
+@@ -2647,22 +2650,48 @@ class BundledFontFileEnumerator : public IDWriteFontFileEnumerator {
    nsCOMPtr<nsIFile> mFontDir;
    nsCOMPtr<nsIDirectoryEnumerator> mEntries;
    nsCOMPtr<nsISupports> mCurrent;
@@ -128,7 +176,7 @@ index 63169b05b7..5b659113f3 100644
    }
    *aHasCurrentFile = hasMore;
 diff --git a/gfx/thebes/gfxPlatformFontList.cpp b/gfx/thebes/gfxPlatformFontList.cpp
-index 2ea46a9810..039316b8d6 100644
+index 849b3af462..164c33448d 100644
 --- a/gfx/thebes/gfxPlatformFontList.cpp
 +++ b/gfx/thebes/gfxPlatformFontList.cpp
 @@ -6,6 +6,7 @@
@@ -139,7 +187,7 @@ index 2ea46a9810..039316b8d6 100644
  #include "SharedFontList-impl.h"
  #include "base/eintr_wrapper.h"
  #include "gfxScriptItemizer.h"
-@@ -900,6 +901,29 @@ void gfxPlatformFontList::GenerateFontListKey(nsACString& aKeyName) {
+@@ -897,6 +898,29 @@ void gfxPlatformFontList::GenerateFontListKey(nsACString& aKeyName) {
    ToLowerCase(aKeyName);
  }
  
@@ -169,7 +217,7 @@ index 2ea46a9810..039316b8d6 100644
  // Used if a stylo thread wants to trigger InitOtherFamilyNames in the main
  // process: we can't do IPC from the stylo thread so we post this to the main
  // thread instead.
-@@ -1428,6 +1452,17 @@ already_AddRefed<gfxFont> gfxPlatformFontList::GlobalFontFallback(
+@@ -1425,6 +1449,17 @@ already_AddRefed<gfxFont> gfxPlatformFontList::GlobalFontFallback(
      uint32_t aNextCh, Script aRunScript, FontPresentation aPresentation,
      const gfxFontStyle* aMatchStyle, uint32_t& aCmapCount,
      FontFamily& aMatchedFamily) {
@@ -187,7 +235,7 @@ index 2ea46a9810..039316b8d6 100644
    bool useCmaps = IsFontFamilyWhitelistActive() ||
                    gfxPlatform::GetPlatform()->UseCmapsDuringSystemFallback();
    FontVisibility level = aFontVisibilityProvider
-@@ -1437,7 +1472,22 @@ already_AddRefed<gfxFont> gfxPlatformFontList::GlobalFontFallback(
+@@ -1434,7 +1469,22 @@ already_AddRefed<gfxFont> gfxPlatformFontList::GlobalFontFallback(
      // Allow platform-specific fallback code to try and find a usable font
      gfxFontEntry* fe = PlatformGlobalFontFallback(
          aFontVisibilityProvider, aCh, aRunScript, aMatchStyle, aMatchedFamily);
@@ -211,7 +259,7 @@ index 2ea46a9810..039316b8d6 100644
        if (aMatchedFamily.mShared) {
          if (IsVisibleToCSS(*aMatchedFamily.mShared, level)) {
            RefPtr<gfxFont> font = fe->FindOrMakeFont(aMatchStyle);
-@@ -1478,6 +1528,11 @@ already_AddRefed<gfxFont> gfxPlatformFontList::GlobalFontFallback(
+@@ -1475,6 +1525,11 @@ already_AddRefed<gfxFont> gfxPlatformFontList::GlobalFontFallback(
          if (!IsVisibleToCSS(family, level)) {
            continue;
          }
@@ -223,7 +271,7 @@ index 2ea46a9810..039316b8d6 100644
          if (!family.IsFullyInitialized() &&
              StaticPrefs::gfx_font_rendering_fallback_async() &&
              !XRE_IsParentProcess()) {
-@@ -1504,6 +1559,13 @@ already_AddRefed<gfxFont> gfxPlatformFontList::GlobalFontFallback(
+@@ -1501,6 +1556,13 @@ already_AddRefed<gfxFont> gfxPlatformFontList::GlobalFontFallback(
        if (!IsVisibleToCSS(*family, level)) {
          continue;
        }
@@ -237,7 +285,7 @@ index 2ea46a9810..039316b8d6 100644
        // evaluate all fonts in this family for a match
        family->FindFontForChar(&data);
        if (data.mMatchDistance == 0.0) {
-@@ -1732,6 +1794,11 @@ bool gfxPlatformFontList::FindAndAddFamiliesLocked(
+@@ -1729,6 +1791,11 @@ bool gfxPlatformFontList::FindAndAddFamiliesLocked(
        aFontVisibilityProvider ? aFontVisibilityProvider->GetFontVisibility()
                                : FontVisibility::User;
  
@@ -250,10 +298,10 @@ index 2ea46a9810..039316b8d6 100644
    // font-family request by the page), and RFP settings allow generics to be
    // unrestricted, bump the effective visibility level applied here so as to
 diff --git a/gfx/thebes/gfxPlatformFontList.h b/gfx/thebes/gfxPlatformFontList.h
-index 66290cd704..bdd4b52666 100644
+index 4719c99e05..7c4948214f 100644
 --- a/gfx/thebes/gfxPlatformFontList.h
 +++ b/gfx/thebes/gfxPlatformFontList.h
-@@ -649,6 +649,19 @@ class gfxPlatformFontList : public gfxFontInfoLoader {
+@@ -654,6 +654,19 @@ class gfxPlatformFontList : public gfxFontInfoLoader {
      return mFontFamilyWhitelistActive;
    };
  
@@ -274,7 +322,7 @@ index 66290cd704..bdd4b52666 100644
  
    bool AddWithLegacyFamilyName(const nsACString& aLegacyName,
 diff --git a/gfx/thebes/gfxUserFontSet.cpp b/gfx/thebes/gfxUserFontSet.cpp
-index 084c269bde..4507ab9927 100644
+index 54433dc950..ef04e92585 100644
 --- a/gfx/thebes/gfxUserFontSet.cpp
 +++ b/gfx/thebes/gfxUserFontSet.cpp
 @@ -473,6 +473,24 @@ void gfxUserFontEntry::DoLoadNextSrc(bool aIsContinue) {
@@ -303,9 +351,10 @@ index 084c269bde..4507ab9927 100644
          // as this means we are dependent on any updates to the font list.
          mSeenLocalSource = true;
 diff --git a/gfx/thebes/moz.build b/gfx/thebes/moz.build
+index ab172d9588..182d793f6b 100644
 --- a/gfx/thebes/moz.build
 +++ b/gfx/thebes/moz.build
-@@ -310,3 +310,6 @@ LICENSED_UNDER["gfx-font-list"].paths = [
+@@ -295,3 +295,6 @@ LICENSED_UNDER["gfx-font-list"].paths = [
      "gfxMacPlatformFontList.mm",
      "gfxPlatformFontList.cpp",
  ]

@@ -7,7 +7,6 @@ export interface PhaseResult {
 }
 
 const SELF_DESTRUCT_FUNCTIONS = [
-  "setAudioFingerprintSeed",
   "setTimezone",
   "setScreenDimensions",
   "setScreenColorDepth",
@@ -15,6 +14,7 @@ const SELF_DESTRUCT_FUNCTIONS = [
   "setNavigatorPlatform",
   "setNavigatorOscpu",
   "setNavigatorHardwareConcurrency",
+  "setNavigatorAppVersion",
   "setNavigatorUserAgent",
   "setWebGLVendor",
   "setWebGLRenderer",

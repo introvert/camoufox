@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -270,6 +271,90 @@ def test_kill_sigkills_reaps_and_unlinks():
         "kill() no longer removes the X11 lock and socket files, so the display number "
         "stays blocked for every later process." + explain("xvfb-sigkill-and-socket-cleanup")
     )
+
+
+def _gpu_display(monkeypatch, tmp_path):
+    """A GPU display whose config is installed, run as an unprivileged user."""
+    from camoufox import gpudisplay
+
+    gpu = gpudisplay.GpuDevice("0000:01:00.0", "/dev/dri/renderD129", None, "0x10de", "0x2c02", "nvidia")
+    monkeypatch.setattr(gpudisplay, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(gpudisplay, "SYSTEM_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(gpudisplay.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(gpudisplay, "ACTIVE_VT", tmp_path / "no-vt")
+    (tmp_path / gpudisplay.config_name(gpu)).write_text(gpudisplay.xorg_config(gpu))
+    return gpudisplay.GpuDisplay(gpu)
+
+
+def test_the_gpu_display_claims_its_display_with_displayfd(monkeypatch, tmp_path):
+    from camoufox import virtdisplay
+
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            self.pid = 424242
+
+        def poll(self):
+            return None
+
+    display = _gpu_display(monkeypatch, tmp_path)
+    monkeypatch.setattr(virtdisplay.subprocess, "Popen", FakePopen)
+    # The fake never reports a display; the bounded read makes that safe.
+    monkeypatch.setattr(virtdisplay, "DISPLAYFD_READ_TIMEOUT_S", 0.2)
+    with pytest.raises(Exception):
+        display.get()
+
+    assert "-displayfd" in captured.get("cmd", []), (
+        f"the GPU display's Xorg is no longer launched with -displayfd: {captured.get('cmd')}"
+        + explain("displayfd-not-lockfile-scan")
+    )
+
+
+def test_the_gpu_display_shares_the_vt(monkeypatch, tmp_path):
+    argv = _gpu_display(monkeypatch, tmp_path)._command()
+    for flag in ("-sharevts", "-novtswitch"):
+        assert flag in argv, (
+            f"the GPU display's Xorg runs without {flag}, so it can switch the console "
+            "away from the user's desktop." + explain("gpu-display-shares-the-vt")
+        )
+
+
+def test_the_gpu_display_terminates_with_its_last_client(monkeypatch, tmp_path):
+    from camoufox import gpudisplay
+
+    argv = _gpu_display(monkeypatch, tmp_path)._command()
+    assert "-terminate" in argv and "-noreset" not in argv, (
+        f"the GPU display's Xorg no longer exits on its own: {argv}"
+        + explain("gpu-display-terminates-with-its-last-client")
+    )
+    assert "X11_SETUP" in inspect.getsource(gpudisplay.GpuDisplay._ready), (
+        "the launcher no longer holds a client on the GPU display, so a server no "
+        "client reached never terminates." + explain("gpu-display-terminates-with-its-last-client")
+    )
+
+
+def test_the_gpu_is_bound_by_pci_address():
+    from camoufox import gpudisplay
+
+    gpu = gpudisplay.GpuDevice("0000:6f:00.0", "/dev/dri/renderD128", None, "0x1002", "0x744c", "amdgpu")
+    config = gpudisplay.xorg_config(gpu)
+    assert 'BusID       "PCI:111:0:0"' in config and "renderD" not in config, (
+        "the GPU display's config no longer binds the card by PCI address."
+        + explain("gpu-selected-by-pci-address")
+    )
+    assert "0000_6f_00_0" in gpudisplay.config_name(gpu), explain("gpu-selected-by-pci-address")
+
+
+def test_an_open_render_node_is_not_gpu_use():
+    from camoufox import gpudisplay
+
+    assert not gpudisplay.drew_on_gpu("drm-driver:\tamdgpu\ndrm-engine-gfx:\t0 ns\ndrm-engine-capacity-gfx:\t1\n"), (
+        "an idle render node now counts as rendering, and Firefox holds one in software too."
+        + explain("gpu-use-is-read-from-the-kernel")
+    )
+    assert gpudisplay.drew_on_gpu("drm-engine-gfx:\t39907610 ns\n"), explain("gpu-use-is-read-from-the-kernel")
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +681,35 @@ def test_no_glyph_spacing_seed_anywhere():
         )
 
 
+def test_no_audio_noise_anywhere():
+    """No live config key, no patch hooking the render, no setter, no seed sent,
+    and a guard holding the build to stock's recorded values."""
+    rule_id = "audio-is-not-noised"
+    assert "audio:seed" not in _live_properties(), explain(rule_id)
+    patches = BROWSER / "patches"
+    assert not (patches / "audio-fingerprint-manager.patch").exists(), explain(rule_id)
+    for source in sorted(patches.rglob("*.patch")):
+        text = source.read_text(encoding="utf-8", errors="ignore")
+        for marker in ("AudioFingerprintManager", "SetAudioFingerprintSeed", "audio:seed"):
+            assert marker not in text, (
+                f"{source.relative_to(REPO_ROOT)} still carries {marker}" + explain(rule_id)
+            )
+    for launcher in ("python/src/camoufox/fingerprints.py", "typescript/src/fingerprints.ts",
+                     "python/src/camoufox/utils.py", "typescript/src/utils.ts"):
+        text = (REPO_ROOT / launcher).read_text(encoding="utf-8")
+        assert "setAudioFingerprintSeed" not in text, (
+            f"{launcher} still calls setAudioFingerprintSeed" + explain(rule_id)
+        )
+        assert not re.search(r"""config\[["']audio:seed["']\]\s*=""", text), (
+            f"{launcher} still generates audio:seed" + explain(rule_id)
+        )
+    guard = BROWSER / "tests" / "playwright" / "patches" / "audio-matches-stock.py"
+    assert guard.exists(), explain(rule_id)
+    assert '"audio-matches-stock"' in (REPO_ROOT / "ci" / "run_patch_guards.py").read_text(), (
+        "the audio-matches-stock guard is not registered" + explain(rule_id)
+    )
+
+
 def test_no_canvas_seed_is_declared_or_sent():
     """Nothing in the browser reads a canvas seed, so neither launcher sends one."""
     declared = _live_properties()
@@ -685,7 +799,7 @@ def test_webgl_browser_owned_values_follow_firefox():
         assert config["webGl:parameters"]["33902"] == [1, 1], why
         assert ("EXT_depth_clamp" in config["webGl:supportedExtensions"]) == (target_os == "win"), why
     ts = (REPO_ROOT / "typescript" / "src" / "webgl.ts").read_text(encoding="utf-8")
-    for line in ('win: ["EXT_depth_clamp", "EXT_polygon_offset_clamp"]', 'lin: ["EXT_polygon_offset_clamp"]', 'ALIASED_LINE_WIDTH_RANGE = "33902"'):
+    for line in ('win: ["EXT_depth_clamp", "EXT_texture_mirror_clamp_to_edge"]', 'ALIASED_LINE_WIDTH_RANGE = "33902"'):
         assert line in ts, why
 
     assert (BROWSER / "tests" / "playwright" / "patches" / "stock-gpu-parity.py").exists(), why
@@ -787,6 +901,32 @@ def test_pages_see_an_official_firefox_build():
     jar = (BROWSER / "additions" / "browser" / "branding" / "camoufox" / "content" / "jar.mn").read_text(encoding="utf-8")
     entries = [line for line in jar.splitlines() if line.startswith("  content/branding/")]
     assert entries and all("(../../official/" in line for line in entries), explain("pages-see-firefox-not-camoufox")
+
+
+# ---------------------------------------------------------------------------
+# build
+# ---------------------------------------------------------------------------
+
+
+def test_every_build_is_optimized_like_stock():
+    """Rule: builds-are-optimized-like-stock."""
+    base = (BROWSER / "assets" / "base.mozconfig").read_text(encoding="utf-8").splitlines()
+    for option in (
+        "  x86_64-pc-linux-gnu|x86_64-pc-windows-msvc) ac_add_options --enable-lto=cross,full ;;",
+        "  *) ac_add_options --enable-lto=cross ;;",
+        "ac_add_options --enable-profile-use=cross",
+        'ac_add_options --with-pgo-profile-path="$CAMOUFOX_PGO_PROFILE/merged.profdata"',
+        'ac_add_options --with-pgo-jarlog="$CAMOUFOX_PGO_PROFILE/en-US.log"',
+        "ac_add_options --enable-rust-simd",
+    ):
+        assert option in base, explain("builds-are-optimized-like-stock")
+    # Only base.mozconfig decides it, so no target or workflow builds differently.
+    others = [*(BROWSER / "assets").glob("*.mozconfig"), *(REPO_ROOT / ".github" / "workflows").glob("*.yml")]
+    for path in others:
+        if path.name != "base.mozconfig":
+            text = path.read_text(encoding="utf-8")
+            for marker in ("-lto", "MOZ_LTO", "profile-use", "profile-generate", "MOZ_PGO"):
+                assert marker not in text, f"{path.name}" + explain("builds-are-optimized-like-stock")
 
 
 # ---------------------------------------------------------------------------

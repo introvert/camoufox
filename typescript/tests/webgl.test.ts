@@ -83,15 +83,24 @@ describe.skipIf(!MODEL.ok)("webgl (test_webgl.py)", () => {
 			).filter(([key]) => !removed.has(key)),
 		);
 		// WebGL1's line width range is WebGL2's since Firefox 156, and Firefox
-		// 158 adds EXT_polygon_offset_clamp.
+		// 158 and 159 add extensions on this desktop GL device.
 		old["webGl:parameters"]["33902"] = old["webGl2:parameters"]["33902"];
-		for (const key of [
-			"webGl:supportedExtensions",
-			"webGl2:supportedExtensions",
-		])
-			old[key] = [...old[key], "EXT_polygon_offset_clamp"].sort((a, b) =>
-				a.toLowerCase() < b.toLowerCase() ? -1 : 1,
-			);
+		const added = [
+			"EXT_clip_control",
+			"EXT_polygon_offset_clamp",
+			"EXT_texture_mirror_clamp_to_edge",
+		];
+		const firefoxOrder = (exts: string[]) =>
+			exts.sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : 1));
+		old["webGl:supportedExtensions"] = firefoxOrder([
+			...old["webGl:supportedExtensions"],
+			...added,
+		]);
+		old["webGl2:supportedExtensions"] = firefoxOrder([
+			...old["webGl2:supportedExtensions"],
+			...added,
+			"EXT_texture_norm16",
+		]);
 		const fresh = JSON.parse(
 			orjsonDumps(webglForGpu("lin", ...GTX_980_LINUX, 0), false),
 		);
@@ -263,24 +272,81 @@ describe.skipIf(!MODEL.ok)("webgl (test_webgl.py)", () => {
 		}
 	});
 
-	it("EXT_polygon_offset_clamp follows the GL backend", () => {
-		// Firefox 158 exposes it through ANGLE on Windows and through a desktop
-		// GL driver on Linux; Apple's GL 4.1 lacks it, and a Linux GLES record
-		// (no EXT_depth_clamp) is not given it.
-		for (const key of [
-			"webGl:supportedExtensions",
-			"webGl2:supportedExtensions",
-		]) {
-			for (const exts of extensions("win", key)) {
-				if (exts.size)
-					expect(exts.has("EXT_polygon_offset_clamp"), key).toBe(true);
+	it("EXT_polygon_offset_clamp follows the backend", () => {
+		// Firefox 158 exposes it on ANGLE's D3D11 backend from feature level 10_0
+		// (every device with WebGL2) and on Linux desktop GL (the recordings with
+		// EXT_depth_clamp), never on macOS's GL 4.1; fpgen's Firefox 146 records
+		// predate it.
+		for (const os of OSES) {
+			for (let s = 0; s < 100; s++) {
+				const config = sampleWebglForScreen(os, 1920, 1080, s);
+				const desktopGl = (
+					config["webGl:supportedExtensions"] as string[]
+				).includes("EXT_depth_clamp");
+				const want = { win: config.webGl2Enabled, lin: desktopGl, mac: false }[
+					os
+				];
+				for (const key of [
+					"webGl:supportedExtensions",
+					"webGl2:supportedExtensions",
+				]) {
+					if (key in config) {
+						expect(
+							(config[key] as string[]).includes("EXT_polygon_offset_clamp"),
+							`${os} ${s} ${key}`,
+						).toBe(want);
+					}
+				}
 			}
-			for (const exts of extensions("mac", key))
-				expect(exts.has("EXT_polygon_offset_clamp"), key).toBe(false);
-			for (const exts of extensions("lin", key))
-				expect(exts.has("EXT_polygon_offset_clamp"), key).toBe(
-					exts.has("EXT_depth_clamp"),
-				);
+		}
+	});
+
+	it("Firefox 159's extensions follow the backend", () => {
+		// EXT_clip_control where polygon offsets clamp,
+		// EXT_texture_mirror_clamp_to_edge on every Windows device and on Linux
+		// desktop GL, and EXT_texture_norm16 on WebGL2 except on Linux GLES
+		// drivers. macOS's GL 4.1 has only the last; fpgen's Firefox 146 records
+		// predate all three.
+		for (const os of OSES) {
+			for (let s = 0; s < 100; s++) {
+				const config = sampleWebglForScreen(os, 1920, 1080, s);
+				const webgl1 = config["webGl:supportedExtensions"] as string[];
+				const desktopGl = webgl1.includes("EXT_depth_clamp");
+				const want: Record<string, boolean> = {
+					EXT_clip_control: {
+						win: !!config.webGl2Enabled,
+						lin: desktopGl,
+						mac: false,
+					}[os],
+					EXT_texture_mirror_clamp_to_edge: {
+						win: true,
+						lin: desktopGl,
+						mac: false,
+					}[os],
+				};
+				for (const [extension, expected] of Object.entries(want)) {
+					for (const key of [
+						"webGl:supportedExtensions",
+						"webGl2:supportedExtensions",
+					]) {
+						if (key in config) {
+							expect(
+								(config[key] as string[]).includes(extension),
+								`${os} ${s} ${key} ${extension}`,
+							).toBe(expected);
+						}
+					}
+				}
+				expect(webgl1.includes("EXT_texture_norm16")).toBe(false);
+				if (config.webGl2Enabled) {
+					expect(
+						(config["webGl2:supportedExtensions"] as string[]).includes(
+							"EXT_texture_norm16",
+						),
+						`${os} ${s}`,
+					).toBe(os !== "lin" || desktopGl);
+				}
+			}
 		}
 	});
 
@@ -335,7 +401,7 @@ it("an extension the backend adds takes Firefox's position", () => {
 		"EXT_color_buffer_half_float",
 		"EXT_depth_clamp",
 		"EXT_disjoint_timer_query",
-		"EXT_polygon_offset_clamp",
+		"EXT_texture_mirror_clamp_to_edge",
 	]);
 });
 
@@ -360,17 +426,30 @@ it("draft extensions are filtered on every OS", () => {
 			"OVR_multiview2",
 		],
 	};
+	// The recording carries no desktop GL mark, so Linux adds nothing. A device
+	// with WebGL2 is D3D11 feature level 10_0 or above, where ANGLE also clamps
+	// polygon offsets and controls clipping. EXT_texture_norm16 is the
+	// backend's from Firefox 159, never the recording's.
+	const windows = [
+		"EXT_clip_control",
+		"EXT_depth_clamp",
+		"EXT_polygon_offset_clamp",
+		"EXT_texture_mirror_clamp_to_edge",
+	];
+	const expected: Record<string, [string[], string[]]> = {
+		win: [
+			["ANGLE_instanced_arrays", ...windows],
+			[...windows, "EXT_texture_norm16", "OVR_multiview2"],
+		],
+		mac: [["ANGLE_instanced_arrays"], ["EXT_texture_norm16"]],
+		lin: [["ANGLE_instanced_arrays"], []],
+	};
 	for (const os of OSES) {
 		const config = toConfig(recorded, webgl2, os);
-		const backend =
-			os === "win" ? ["EXT_depth_clamp", "EXT_polygon_offset_clamp"] : [];
-		expect(config["webGl:supportedExtensions"]).toEqual([
-			"ANGLE_instanced_arrays",
-			...backend,
-		]);
-		expect(config["webGl2:supportedExtensions"]).toEqual(
-			os === "win" ? [...backend, "OVR_multiview2"] : [],
-		);
+		expect([
+			config["webGl:supportedExtensions"],
+			config["webGl2:supportedExtensions"],
+		]).toEqual(expected[os]);
 	}
 });
 

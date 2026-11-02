@@ -152,8 +152,15 @@ make package-linux arch=x86_64 # or package-macos / package-windows
 python3 multibuild.py --target linux windows macos --arch x86_64 arm64
 ```
 
-Install `ccache`. A cold build takes about 40 minutes, and an incremental one
-about 5.
+Every build, a local one included, is optimized as stock is
+([`builds-are-optimized-like-stock`](ci/tribal-rules.yml)): with the PGO
+profile Mozilla trained for the same Firefox, cross-language LTO (full on
+x86_64 Linux and Windows, thin elsewhere) and Rust SIMD, from
+`browser/assets/base.mozconfig`. `make dir` installs the Rust release Mozilla
+builds the tree with and fetches the profile pinned in
+`browser/scripts/data/pgo-profiles.json`; after bumping `upstream.sh`, run
+`python3 scripts/pgo.py pin`. Install `ccache`. It caches compiles but not the
+LTO link, so an incremental build still relinks libxul across C++ and Rust.
 
 ## Changing a patch
 
@@ -231,7 +238,8 @@ this section in step with the launcher options.
 - **Leave the viewport alone.** When the window size is spoofed, new pages default to `no_viewport=True`; forcing a `viewport` asks the window to resize to something the identity does not claim.
 - **`is_mobile` warns on a desktop identity** and stays out of Responsive Design Mode. Only an Android identity (`os="android"`, this fork's mobile mode) is a phone.
 - **Persistent contexts** need `persistent_context=True` and `user_data_dir`, and cannot be served by `launch_server`.
-- **`headless="virtual"`** needs Linux, `Xvfb` and `setpriv` from util-linux (`CannotFindXvfb`, `VirtualDisplayNotSupported` otherwise).
+- **`headless="virtual"`** needs Linux, `Xvfb` and `setpriv` from util-linux (`CannotFindXvfb`, `VirtualDisplayNotSupported` otherwise). Xvfb has no GPU, so canvas and WebGL render in software.
+- **`headless="virtual-gpu"`** renders on one GPU, named by `gpu=` or `CAMOUFOX_GPU` (a PCI address is the stable choice); several GPUs and no selector raise `AmbiguousGpuSelection`. Without root it needs Xorg.wrap allowed to start Xorg as root for any user, and the card's config in `/etc/X11`; `python -m camoufox gpu-setup <gpu> | sudo sh` does both, and every failure that setup would fix ends with that command. A browser that does not render on the card raises `GpuSoftwareFallback` (`require_gpu=False` warns). Every error is a `VirtualDisplayError`. `gpu` and `require_gpu` are not `launch_options()` arguments.
 - **`os` values are lowercase** `windows`, `macos`, `linux`, `android` (this fork); anything else raises `InvalidOS`.
 - **`geoip` in Python needs the extra**: `pip install "camoufox[geoip]"`, else `NotInstalledGeoIPExtra`.
 - **`InvalidIP`** is raised when the public-IP or proxy exit-IP lookup fails, or when `webrtc_ip` is not a valid IPv4/IPv6 address. Pass `webrtc_ip`, `timezone_id`, `locale` and `geolocation` to `NewContext` to skip the lookup.
@@ -241,3 +249,4 @@ this section in step with the launcher options.
 - **Each package release is paired with one browser build.** `camoufox set` overrides it (with a warning at launch), the `browser` option overrides it for one launch, and `camoufox set --release` restores it.
 - **`browser` and `executable_path` are exclusive**: passing `browser` with `executable_path`, or while `CAMOUFOX_EXECUTABLE_PATH` is set, raises `ValueError`.
 - **Canvas is not noised on the host's OS**: the identity claims the host's GPU, and the canvas hash is stable per machine. An identity on another OS, or claiming a GPU that is not the host's (`webgl_config`, a preset's GPU, or a host GPU fpgen never recorded), gets `privacy.resistFingerprinting`'s random canvas readback (as in LibreWolf), with a `LeakWarning`; `canvas_noise=True`/`False` forces it. It is per browser: contexts of a browser without it claim the host's OS and GPU, and `NewContext` raises for another OS or GPU.
+- **A Windows launch on another host is Windows for every context.** The Windows CRT math, the Windows keyboard (GTK only: on a macOS host just the editor caret style), the behaviour prefs and the scrollbars (docs/HOST-PARITY.md) are prefs and launch config, so they belong to the browser, not the context. A `macos` or `linux` context on that browser has them too; a Windows context on a browser launched as macOS or Linux has the host's. `NewContext` does not refuse either, because a launch without `os` draws its OS, and the refusal would depend on that draw. To mix OSes, pass `os` at launch for the one whose behaviour matters, or use one browser per OS.

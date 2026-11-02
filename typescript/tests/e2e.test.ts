@@ -326,14 +326,14 @@ function expectMatchesConfig(
 	expect(probe.historyLength).toBe(1);
 	// The storage quota is the stock-profile disk's, not the temp dir's.
 	expect(typeof probe.storageQuota).toBe("number");
-	// Before a grant Firefox lists one device per input kind the machine has,
-	// and no output; a machine with neither lists nothing.
-	expect(probe.mediaDevices).toEqual(
-		[
-			config["mediaDevices:micros"] > 0 && "audioinput",
-			config["mediaDevices:webcams"] > 0 && "videoinput",
-		].filter(Boolean),
-	);
+	// Media devices: the identity's, never the host's. Before any grant stock
+	// Firefox lists one entry per input kind the machine has and no outputs,
+	// so a speaker-only identity lists nothing.
+	expect(config["mediaDevices:enabled"]).toBe(true);
+	const inputKinds: string[] = [];
+	if (config["mediaDevices:micros"] > 0) inputKinds.push("audioinput");
+	if (config["mediaDevices:webcams"] > 0) inputKinds.push("videoinput");
+	expect(probe.mediaDevices).toEqual(inputKinds);
 }
 
 describe.runIf(ENABLED)("e2e: the TS launcher drives a real Camoufox", () => {

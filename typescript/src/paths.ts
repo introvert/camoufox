@@ -117,12 +117,13 @@ export interface LauncherConstants {
 	mobileFontPrefs: Record<string, any>;
 	androidFonts: string[];
 	cachePrefs: Record<string, any>;
+	windowsBehaviourPrefs: Record<string, any>;
 }
 export const LAUNCHER_CONSTANTS: Readonly<LauncherConstants> = loadDataFile(
 	"launcher-constants.json",
 );
 
-// Camoufox keeps the fpgen model in its cache, beside the browsers and addons.
+// Camoufox keeps the fpgen model in its cache, beside the browsers.
 setModelDir(process.env.CAMOUFOX_FPGEN_DATA || path.join(INSTALL_DIR, "fpgen"));
 
 export const OS_ARCH_MATRIX: Record<string, string[]> = {

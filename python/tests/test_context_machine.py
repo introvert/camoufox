@@ -51,3 +51,13 @@ def test_a_phone_context_is_the_launch_device(api):
 def test_no_phone_renders_at_a_desktop_ratio():
     with pytest.raises(ValueError, match="pixel ratio of 1"):
         generate_context_fingerprint(os="android", device_pixel_ratio=1, i_know_what_im_doing=True)
+
+
+def test_a_context_identity_is_as_coherent_as_a_launch():
+    # A context drew its own GPU but skipped the whole-identity repairs a launch
+    # applies, so an Apple Silicon context reported the drawn colour depth of 24
+    # where a relaunch with its identity reports 30.
+    for _ in range(20):
+        script = generate_context_fingerprint(
+            os="macos", webgl_config=("Apple", "Apple M1, or similar"))["init_script"]
+        assert "setScreenColorDepth(30)" in script

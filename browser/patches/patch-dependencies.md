@@ -32,7 +32,6 @@ be listed there.
 | Patch | Config keys |
 |-------|-------------|
 | `audio-context-spoofing.patch` | `AudioContext:sampleRate`, `AudioContext:outputLatency`, `AudioContext:maxChannelCount` |
-| `audio-fingerprint-manager.patch` | `audio:seed` |
 | `chromeutil.patch` | `debug` |
 | `fingerprint-injection.patch` | `navigator.*`, `screen.*`, `window.*` |
 | `font-hijacker.patch` | `fonts`, `navigator.platform` |
@@ -57,6 +56,8 @@ be listed there.
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
 | `window-orientation.patch` | `mobile` (builds `window.orientation` / `onorientationchange` everywhere and exposes them for a phone: mobile mode or an Android `isMobile` context) |
+| `windows-keyboard.patch` | `input:windowsKeyboard` (launch-wide: the shortcut tables and GTK's key handling are process-level) |
+| `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*`, `window.screenX`, `window.screenY` (re-orders the getters above so stock's work runs first) |
 
 To regenerate the list: `grep -l 'MaskConfig::' patches/*.patch`.
 
@@ -73,12 +74,15 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `touchscreen-fingerprint-spoofing.patch` | `navigator-spoofing.patch` for `MaskConfig.hpp` in `dom/base/Navigator.cpp` |
 | `font-list-spoofing.patch` | `anti-font-fingerprinting.patch` for `gfxFontGroup::mUserContextId`; `font-hijacker.patch` for `gfxPlatformFontList::MaskedFontListBlocks`, which it extends with the context's own list |
 | `timezone-spoofing.patch`, `webrtc-ip-spoofing.patch` | `audio-fingerprint-manager.patch` for `RoverfoxStorageManager.h` in `dom/base/nsGlobalWindowInner.cpp` |
-| `font-system-fonts-css2.patch`, `system-ui-font-spoofing.patch`, `webrtc-ip-spoofing.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
+| `font-system-fonts-css2.patch`, `system-ui-font-spoofing.patch`, `webrtc-ip-spoofing.patch`, `zz-stock-cost-parity.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
 | `per-context-consistency.patch` | `navigator-spoofing.patch` for `NavigatorManager` and its includes in `dom/base/Navigator.cpp` and `dom/workers/WorkerNavigator.cpp` |
+| `webgl-spoofing.patch` | `zz-stock-cost-parity.patch` for `RoverfoxStorageManager::Generation()`, which keys its parsed per-context tables (it compiles only with the whole stack) |
+| `windows-keyboard.patch` | `touchscreen-fingerprint-spoofing.patch` for `/camoucfg` in `dom/events/moz.build` |
+| `zz-stock-cost-parity.patch` | `cross-process-storage.patch` for `RoverfoxStorageManager::Generation()`; `screen-spoofing.patch` for `ScreenDimensionManager` in `dom/base/nsScreen.cpp` |
 
 ## RoverfoxStorageManager
 
-Per-context values set from Playwright (audio seed, WebRTC IP, timezone,
+Per-context values set from Playwright (WebRTC IP, timezone,
 screen, navigator, WebGL, font list, voices, ...) are kept in
 `RoverfoxStorageManager`, which `cross-process-storage.patch` adds under
 `dom/base/` with its cross-process put/get IPC. Every content process reads it:
@@ -93,6 +97,15 @@ at hand. A browsing context is not used, because a document created by
 `document.implementation.createHTMLDocument()` or `DOMParser` has none, while it
 shares its creator's principal. A value is stored only under its own context;
 nothing writes a fallback copy under context 0.
+
+## Backports
+
+These patches carry upstream Firefox changes that `browser/upstream.sh`'s
+version does not have yet. Drop each one when the Firefox it moves to ships
+the change.
+
+None: Firefox 159.0 ships the last one, the startup import of the bundled
+OneCRL list ([Bug 2084311](https://bugzilla.mozilla.org/show_bug.cgi?id=2084311)).
 
 ## Playwright
 

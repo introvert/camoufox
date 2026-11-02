@@ -13,22 +13,13 @@ diff --git a/dom/base/NavigatorManager.h b/dom/base/NavigatorManager.h
  namespace MaskConfig {
  enum class SpoofedOS;
  }
-@@ -81,12 +82,56 @@ class NavigatorManager {
-     return RoverfoxStorageManager::GetContextString(sCache, "nav_ua_", aId,
-                                                     aOut);
+@@ -93,12 +94,46 @@ class NavigatorManager {
+     return RoverfoxStorageManager::GetString(key, aOut);
    }
  
-   static bool IsUaFunctionEnabledForWebIDL(JSContext* aCx, JSObject* aObj);
+   static bool IsAppVersionFunctionEnabledForWebIDL(JSContext* aCx,
+                                                    JSObject* aObj);
  
-+  // The appVersion Firefox reports for a browser that sends `aUserAgent`:
-+  // "5.0 (<OS tokens>)" without rv, the architecture or the Windows build
-+  // ("5.0 (Windows)", "5.0 (Macintosh)", "5.0 (X11)", "5.0 (Android 16)"), as
-+  // the launchers derive navigator.appVersion. False if the UA has no such
-+  // part. A per-context user agent brings its own, or appVersion keeps naming
-+  // the launch's OS next to it.
-+  static bool AppVersionFromUserAgent(const nsAString& aUserAgent,
-+                                      nsAString& aOut);
-+
 +  // The language list behind a per-context locale (Playwright's `locale`,
 +  // which Juggler sets as the browsing context's languageOverride). Firefox
 +  // used the override verbatim, so a context created with "de-DE" sent
@@ -48,22 +39,21 @@ diff --git a/dom/base/NavigatorManager.h b/dom/base/NavigatorManager.h
 +    if (GetLocale(aId, stored) ? stored.Equals(aLocale) : aLocale.IsEmpty()) {
 +      return false;
 +    }
-+    RoverfoxStorageManager::PutString(
-+        RoverfoxStorageManager::ContextKey("nav_locale_", aId),
-+        NS_ConvertUTF8toUTF16(aLocale));
++    nsAutoString key;
++    key.AppendPrintf("nav_locale_%u", aId);
++    RoverfoxStorageManager::PutString(key, NS_ConvertUTF8toUTF16(aLocale));
 +    return true;
 +  }
 +
 +  static bool GetLocale(uint32_t aId, nsACString& aOut) {
-+    static RoverfoxStorageManager::Cache<std::u16string> sCache;
 +    nsAutoString locale;
-+    if (!RoverfoxStorageManager::GetContextString(sCache, "nav_locale_", aId,
-+                                                  locale)) {
++    if (!RoverfoxStorageManager::GetString("nav_locale_", aId, locale)) {
 +      return false;
 +    }
 +    CopyUTF16toUTF8(locale, aOut);
 +    return true;
 +  }
++
  };
  
  }  // namespace dom
@@ -73,66 +63,13 @@ diff --git a/dom/base/NavigatorManager.h b/dom/base/NavigatorManager.h
 diff --git a/dom/base/NavigatorManager.cpp b/dom/base/NavigatorManager.cpp
 --- a/dom/base/NavigatorManager.cpp
 +++ b/dom/base/NavigatorManager.cpp
-@@ -1,9 +1,11 @@
- /* Camoufox: Per-context navigator property manager */
- #include "NavigatorManager.h"
- #include "MaskConfig.hpp"
-+#include "nsCharSeparatedTokenizer.h"
-+#include "nsReadableUtils.h"
- 
- namespace mozilla {
- namespace dom {
- 
+@@ -41,8 +41,22 @@ bool NavigatorManager::IsUaFunctionEnabledForWebIDL(JSContext* aCx,
  /* static */
- MaskConfig::SpoofedOS NavigatorManager::GetSpoofedOS(uint32_t aId) {
-@@ -35,8 +37,63 @@ bool NavigatorManager::IsHwcFunctionEnabledForWebIDL(JSContext* aCx,
- /* static */
- bool NavigatorManager::IsUaFunctionEnabledForWebIDL(JSContext* aCx,
-                                                     JSObject* aObj) {
-   return RoverfoxStorageManager::IsSetterOffered(aObj, "nav_ua");
+ bool NavigatorManager::IsAppVersionFunctionEnabledForWebIDL(JSContext* aCx,
+                                                             JSObject* aObj) {
+   return RoverfoxStorageManager::IsSetterOffered(aObj, "nav_appver");
  }
  
-+/* static */
-+bool NavigatorManager::AppVersionFromUserAgent(const nsAString& aUserAgent,
-+                                               nsAString& aOut) {
-+  constexpr auto kPrefix = u"Mozilla/5.0 ("_ns;
-+  if (!StringBeginsWith(aUserAgent, kPrefix)) {
-+    return false;
-+  }
-+  const int32_t close = aUserAgent.FindChar(u')', kPrefix.Length());
-+  if (close < 0) {
-+    return false;
-+  }
-+  const nsDependentSubstring block =
-+      Substring(aUserAgent, kPrefix.Length(), close - kPrefix.Length());
-+
-+  nsAutoString kept;
-+  for (const auto& token : nsCharSeparatedTokenizer(block, u';').ToRange()) {
-+    if (token.IsEmpty() || StringBeginsWith(token, u"rv:"_ns) ||
-+        token.EqualsLiteral("Win64") || token.EqualsLiteral("x64") ||
-+        token.EqualsLiteral("Mobile") || token.EqualsLiteral("Tablet") ||
-+        StringBeginsWith(token, u"Linux "_ns) ||
-+        StringBeginsWith(token, u"Intel Mac OS X"_ns)) {
-+      continue;
-+    }
-+    if (!kept.IsEmpty()) {
-+      kept.AppendLiteral(u"; ");
-+    }
-+    if (StringBeginsWith(token, u"Windows"_ns)) {
-+      kept.AppendLiteral(u"Windows");
-+    } else {
-+      kept.Append(token);
-+    }
-+  }
-+  if (kept.IsEmpty()) {
-+    return false;
-+  }
-+  aOut.AssignLiteral(u"5.0 (");
-+  aOut.Append(kept);
-+  aOut.Append(u')');
-+  return true;
-+}
-+
 +/* static */
 +void NavigatorManager::ExpandLanguageOverride(const nsACString& aOverride,
 +                                              nsACString& aOut) {
@@ -152,30 +89,7 @@ diff --git a/dom/base/NavigatorManager.cpp b/dom/base/NavigatorManager.cpp
 diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
 --- a/dom/base/Navigator.cpp
 +++ b/dom/base/Navigator.cpp
-@@ -331,12 +331,22 @@ void Navigator::GetAppCodeName(nsAString& aAppCodeName, ErrorResult& aRv) {
- 
-   CopyASCIItoUTF16(appName, aAppCodeName);
- }
- 
- void Navigator::GetAppVersion(nsAString& aAppVersion, CallerType aCallerType,
-                               ErrorResult& aRv) const {
-+  // Camoufox: a per-context user agent brings its own appVersion
-+  if (mWindow) {
-+    const uint32_t userContextId =
-+        RoverfoxStorageManager::UserContextId(mWindow);
-+    nsAutoString stored;
-+    if (NavigatorManager::GetUserAgent(userContextId, stored) &&
-+        NavigatorManager::AppVersionFromUserAgent(stored, aAppVersion)) {
-+      return;
-+    }
-+  }
-   // Camoufox: global config fallback for appVersion
-   if (auto value = MaskConfig::GetString("navigator.appVersion")) {
-     aAppVersion.Assign(NS_ConvertUTF8toUTF16(value.value()));
-     return;
-   }
-   nsCOMPtr<Document> doc = mWindow->GetExtantDoc();
-@@ -379,13 +389,14 @@ void Navigator::GetAcceptLanguages(nsTArray<nsString>& aLanguages,
+@@ -381,13 +381,14 @@ void Navigator::GetAcceptLanguages(nsTArray<nsString>& aLanguages,
  
    aLanguages.Clear();
  
@@ -191,36 +105,10 @@ diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
  
    // Split values on commas.
    for (nsDependentCSubstring lang :
-diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
---- a/dom/workers/WorkerNavigator.cpp
-+++ b/dom/workers/WorkerNavigator.cpp
-@@ -169,12 +169,22 @@ void WorkerNavigator::SetLanguages(const nsTArray<nsString>& aLanguages) {
-   mProperties.mLanguages = aLanguages.Clone();
- }
- 
- void WorkerNavigator::GetAppVersion(nsString& aAppVersion,
-                                     CallerType aCallerType,
-                                     ErrorResult& aRv) const {
-+  // Camoufox: a per-context user agent brings its own appVersion
-+  if (WorkerPrivate* wp = GetCurrentThreadWorkerPrivate()) {
-+    nsAutoString stored;
-+    if (mozilla::dom::NavigatorManager::GetUserAgent(
-+            wp->GetOriginAttributes().mUserContextId, stored) &&
-+        mozilla::dom::NavigatorManager::AppVersionFromUserAgent(stored,
-+                                                                aAppVersion)) {
-+      return;
-+    }
-+  }
-   if (auto value = MaskConfig::GetString("navigator.appVersion"))
-     return aAppVersion.Assign(NS_ConvertUTF8toUTF16(value.value()));
-   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
-   MOZ_ASSERT(workerPrivate);
- 
-   if (aCallerType != CallerType::System) {
 diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/HttpBaseChannel.cpp
 --- a/netwerk/protocol/http/HttpBaseChannel.cpp
 +++ b/netwerk/protocol/http/HttpBaseChannel.cpp
-@@ -38,12 +38,13 @@
+@@ -39,12 +39,13 @@
  #include "mozilla/dom/BrowsingContext.h"
  #include "mozilla/dom/CanonicalBrowsingContext.h"
  #include "mozilla/dom/ContentChild.h"
@@ -303,7 +191,7 @@ diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsH
  #include "mozilla/glean/NetwerkProtocolHttpMetrics.h"
  #include "mozilla/intl/LocaleService.h"
  #include "mozilla/ipc/URIUtils.h"
-@@ -735,12 +736,15 @@ nsresult nsHttpHandler::AddAcceptAndDictionaryHeaders(
+@@ -744,12 +745,15 @@ nsresult nsHttpHandler::AddAcceptAndDictionaryHeaders(
      }
    }
    // guard may call aCallback here
@@ -319,7 +207,7 @@ diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsH
      const nsCString& aLanguageOverride) {
    nsresult rv;
  
-@@ -773,14 +777,21 @@ nsresult nsHttpHandler::AddStandardRequestHeaders(
+@@ -782,14 +786,21 @@ nsresult nsHttpHandler::AddStandardRequestHeaders(
  
    rv = request->SetHeader(nsHttp::Accept, accept, false,
                            nsHttpHeaderArray::eVarietyRequestOverride);
@@ -388,7 +276,7 @@ diff --git a/docshell/base/BrowsingContext.cpp b/docshell/base/BrowsingContext.c
  #include "mozilla/StaticPrefs_fission.h"
  #include "mozilla/StaticPrefs_media.h"
  #include "mozilla/StaticPrefs_page_load.h"
-@@ -3591,12 +3595,34 @@ void BrowsingContext::DidSet(FieldIndex<IDX_AnimationsPlayBackRateMultiplier>,
+@@ -3580,12 +3584,34 @@ void BrowsingContext::DidSet(FieldIndex<IDX_AnimationsPlayBackRateMultiplier>,
  void BrowsingContext::DidSet(FieldIndex<IDX_LanguageOverride>,
                               nsCString&& aOldValue) {
    MOZ_ASSERT(IsTop());
@@ -479,7 +367,7 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
  #include "mozilla/dom/ParentProcessMessageManager.h"
  #include "mozilla/dom/PermissionObserver.h"
  #include "mozilla/dom/PermissionStatusBinding.h"
-@@ -190,12 +191,13 @@
+@@ -191,12 +192,13 @@
  #include "nsAnonymousTemporaryFile.h"
  #include "nsAppRunner.h"
  #include "nsCExternalHandlerService.h"
@@ -493,10 +381,10 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
  #include "nsContentPermissionHelper.h"
  #include "nsContentUtils.h"
  #include "nsDNSService2.h"
-@@ -1215,12 +1217,58 @@ mozilla::ipc::IPCResult ContentParent::RecvRoverfoxStorageGet(
-     return IPC_OK();
-   }
-   Preferences::GetCString(aPrefName.get(), *aOutValue, PrefValueKind::Default);
+@@ -1205,12 +1207,59 @@ mozilla::ipc::IPCResult ContentParent::RecvRoverfoxStoragePut(
+   // Default branch: session state, never written to prefs.js (see
+   // RoverfoxStorageManager.cpp).
+   Preferences::SetCString(aPrefName.get(), aValue, PrefValueKind::Default);
    return IPC_OK();
  }
  
@@ -546,13 +434,14 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
 +  }
 +}
 +
++
  static mozilla::glean::security::FissionPrincipalsExtra
  GetAndLogPrincipalValidationFailure(nsIPrincipal* aPrincipal,
                                      const char* aMethod) {
    mozilla::glean::security::FissionPrincipalsExtra extra = {};
    extra.value = Some(aMethod);
  
-@@ -1475,12 +1523,16 @@ void ContentParent::GetAllEvenIfDead(nsTArray<ContentParent*>& aArray) {
+@@ -1465,12 +1514,16 @@ void ContentParent::GetAllEvenIfDead(nsTArray<ContentParent*>& aArray) {
    }
  }
  
@@ -569,7 +458,7 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
      (void)cp->SendRegisterStringBundles(std::move(array));
    }
  }
-@@ -2741,13 +2793,13 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
+@@ -2730,13 +2783,13 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
    MOZ_ASSERT(spellChecker, "No spell checker?");
  
    spellChecker->GetDictionaryList(&xpcomInit.dictionaries());
@@ -584,7 +473,7 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
    L10nRegistry::GetParentProcessFileSourceDescriptors(
        xpcomInit.l10nFileSources());
  
-@@ -2884,15 +2936,17 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
+@@ -2873,15 +2926,17 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
  
    nsCOMPtr<nsIChromeRegistry> registrySvc = nsChromeRegistry::GetService();
    nsChromeRegistryChrome* chromeRegistry =
@@ -651,7 +540,7 @@ diff --git a/dom/ipc/ContentChild.cpp b/dom/ipc/ContentChild.cpp
  #include "mozilla/ipc/Endpoint.h"
  #include "mozilla/ipc/FileDescriptorUtils.h"
  #include "mozilla/ipc/GeckoChildProcessHost.h"
-@@ -2475,12 +2478,20 @@ mozilla::ipc::IPCResult ContentChild::RecvFontListShmBlockAdded(
+@@ -2476,12 +2479,20 @@ mozilla::ipc::IPCResult ContentChild::RecvFontListShmBlockAdded(
    return IPC_OK();
  }
  
@@ -792,7 +681,7 @@ diff --git a/chrome/nsChromeRegistryChrome.h b/chrome/nsChromeRegistryChrome.h
 diff --git a/dom/base/nsContentUtils.cpp b/dom/base/nsContentUtils.cpp
 --- a/dom/base/nsContentUtils.cpp
 +++ b/dom/base/nsContentUtils.cpp
-@@ -5765,12 +5765,19 @@ void nsContentUtils::AsyncPrecreateStringBundles() {
+@@ -5766,12 +5766,19 @@ void nsContentUtils::AsyncPrecreateStringBundles() {
                                 }),
          EventQueuePriority::Idle);
      (void)NS_WARN_IF(NS_FAILED(rv));
@@ -815,7 +704,7 @@ diff --git a/dom/base/nsContentUtils.cpp b/dom/base/nsContentUtils.cpp
 diff --git a/dom/base/nsContentUtils.h b/dom/base/nsContentUtils.h
 --- a/dom/base/nsContentUtils.h
 +++ b/dom/base/nsContentUtils.h
-@@ -3544,12 +3544,16 @@ class nsContentUtils {
+@@ -3551,12 +3551,16 @@ class nsContentUtils {
     * @param aMsg  The message to check
     */
    static bool IsMessageCriticalInputEvent(const IPC::Message& aMsg);
@@ -849,7 +738,7 @@ diff --git a/js/src/jsapi.cpp b/js/src/jsapi.cpp
  
  #include "builtin/AtomicsObject.h"
  #include "builtin/Eval.h"
-@@ -1811,14 +1812,19 @@ static RefCountedString* CopyStringZ(const char* str) {
+@@ -1822,14 +1823,19 @@ static RefCountedString* CopyStringZ(const char* str) {
    memcpy(strPtr, str, size);
  
    return new (memoryPtr) RefCountedString(strPtr);
