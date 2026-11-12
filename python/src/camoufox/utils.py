@@ -22,7 +22,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import Screen, platform_to_os, _set_app_version, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, voice_pool, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts, android_gpu, android_gpus
+from .fingerprints import Screen, host_architecture, platform_to_os, _set_app_version, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, voice_pool, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts, android_gpu, android_gpus
 from . import coherence
 from .coherence import is_mobile_config, is_mobile_user_agent
 from .geolocation import geoip_allowed, get_geolocation
@@ -1423,6 +1423,7 @@ def launch_options(
             screen=screen_cons,
             window=window,
             os=os,
+            arch=host_architecture(),
         )
 
     if not _used_preset and fingerprint is not None:
@@ -1889,6 +1890,7 @@ def launch_options(
                 target_os, config.get('screen.width'), config.get('screen.height'),
                 seed=identity_seed(config, _identity_salt),
                 cores=config.get('navigator.hardwareConcurrency'),
+                arch=host_architecture(),
             )
         enable_webgl2 = webgl_fp.pop('webGl2Enabled')
 
@@ -1913,6 +1915,8 @@ def launch_options(
     if _incoherent and debug:
         for _violation in _incoherent:
             print(f'Incoherent identity ({_violation.rule}): {_violation.detail}')
+    if coherence.identity_architecture(config) != host_architecture():
+        LeakWarning.warn('audio_architecture', i_know_what_im_doing)
 
     # Render at the claimed display scale, so (resolution) and the CSS geometry
     # agree with devicePixelRatio as on the real machine (#933). That includes 1:

@@ -16,7 +16,7 @@ from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 import orjson
 
-from .coherence import gpu_fits_machine, gpu_fits_os
+from .coherence import gpu_architecture, gpu_fits_machine, gpu_fits_os
 from .fingerprints import _FPGEN_OS, gpu_screen_is_plausible, is_software_renderer
 from .fpgen_model import load_fpgen
 
@@ -230,9 +230,15 @@ def sample_webgl_for_screen(
     height: Optional[int] = None,
     seed: Optional[int] = None,
     cores: Optional[int] = None,
+    arch: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Draw a GPU for a synthetic identity, weighted as fpgen records Firefox
     on `target_os`, and its WebGL config.
+
+    With `arch`, only GPUs of machines with that CPU architecture are drawn
+    when any fits, because the audio render shows the real one
+    (coherence.gpu_architecture). When none does, as for Windows on ARM, the
+    draw is left alone and the launch warns (audio_architecture).
 
     Only GPUs the rest of the identity can stand beside are drawn: never a
     software rasteriser, a GPU the OS cannot report, the resistFingerprinting
@@ -257,5 +263,10 @@ def sample_webgl_for_screen(
     )
     if not candidates:
         raise ValueError(f'No recorded {target_os} GPU fits a {width}x{height} screen')
+    same_arch = tuple(
+        result for result in candidates
+        if gpu_architecture(result.value['vendor'], result.value['renderer']) == arch
+    )
+    candidates = same_arch or candidates
     rng = Random(seed)
     return _webgl_config(target_os, _choose(rng, candidates), rng)

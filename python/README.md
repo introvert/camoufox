@@ -184,6 +184,17 @@ claimed device has it (Windows and Apple Silicon Macs), and the adapter is the
 host's only when the identity claims the host's GPU. Otherwise
 `requestAdapter()` returns `null`, as Firefox does for a blocked or software GPU.
 
+Audio is rendered as stock Firefox renders it, and stock Firefox gives one
+result on x86 CPUs and another on ARM, whatever the OS. So a drawn identity has
+the host's architecture: on an x86 host a Mac is an Intel Mac, on an ARM host an
+Apple Silicon Mac. A phone on an x86 host, or Windows or Linux on an ARM host,
+has no recorded machine to draw, so the launch prints a `LeakWarning`. Run
+those identities on a host of their architecture.
+
+Identities on one machine also share its canvas, WebGL and audio output, as two
+accounts on one real computer do. Accounts that must not be linked belong on
+different hardware: other machines, or `headless="virtual-gpu"` on another GPU.
+
 ### Headless modes
 
 | `headless=` | What runs | Notes |

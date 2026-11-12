@@ -710,6 +710,22 @@ def test_no_audio_noise_anywhere():
     )
 
 
+def test_drawn_identities_follow_the_hosts_architecture():
+    rule_id = "identity-claims-the-hosts-cpu-architecture"
+    for launcher, calls in (
+        ("python/src/camoufox/utils.py", ("arch=host_architecture()",)),
+        ("python/src/camoufox/fingerprints.py", ("arch=host_architecture()",)),
+        ("typescript/src/utils.ts", ("arch: utilsDeps.hostArchitecture()", "utilsDeps.hostArchitecture(),")),
+        ("typescript/src/fingerprints.ts", ("arch: hostArchitecture()", "hostArchitecture(),")),
+    ):
+        text = (REPO_ROOT / launcher).read_text(encoding="utf-8")
+        for call in calls:
+            assert call in text, f"{launcher} no longer passes the host architecture ({call})" + explain(rule_id)
+        assert '"audio_architecture"' in text or "'audio_architecture'" in text, (
+            f"{launcher} no longer warns about an architecture mismatch" + explain(rule_id)
+        )
+
+
 def test_no_canvas_seed_is_declared_or_sent():
     """Nothing in the browser reads a canvas seed, so neither launcher sends one."""
     declared = _live_properties()

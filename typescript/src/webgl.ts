@@ -10,7 +10,12 @@ import {
 	traceWithEvidence,
 } from "fpgen-js";
 import { Random, type Seed } from "python-random";
-import { gpuFitsMachine, gpuFitsOs } from "./coherence.js";
+import {
+	type Architecture,
+	gpuArchitecture,
+	gpuFitsMachine,
+	gpuFitsOs,
+} from "./coherence.js";
 import {
 	FPGEN_OS,
 	gpuScreenIsPlausible,
@@ -306,6 +311,11 @@ export function webglForGpu(
  * cores or a panel no Intel Mac has. The screen is left alone:
  * it has already been reconciled with the real display and the window (#499).
  *
+ * With `arch`, only GPUs of machines with that CPU architecture are drawn when
+ * any fits, because the audio render shows the real one (gpuArchitecture).
+ * When none does, as for Windows on ARM, the draw is left alone and the launch
+ * warns (audio_architecture).
+ *
  * @throws ValueError when no recorded GPU fits.
  */
 export function sampleWebglForScreen(
@@ -314,8 +324,9 @@ export function sampleWebglForScreen(
 	height?: number | null,
 	seed?: Seed,
 	cores?: number | null,
+	arch?: Architecture | null,
 ): WebGLData {
-	const candidates = trace("gpu", targetOs).filter(
+	const fitting = trace("gpu", targetOs).filter(
 		(result) =>
 			!isSoftwareRenderer(result.value.renderer) &&
 			result.value.renderer !== RFP_RENDERER &&
@@ -323,11 +334,16 @@ export function sampleWebglForScreen(
 			gpuFitsMachine(result.value.renderer, targetOs, cores, width, height) &&
 			gpuScreenIsPlausible(result.value.renderer, width, height),
 	);
-	if (!candidates.length) {
+	if (!fitting.length) {
 		throw new ValueError(
 			`No recorded ${targetOs} GPU fits a ${pyStr(width)}x${pyStr(height)} screen`,
 		);
 	}
+	const sameArch = fitting.filter(
+		(result) =>
+			gpuArchitecture(result.value.vendor, result.value.renderer) === arch,
+	);
+	const candidates = sameArch.length ? sameArch : fitting;
 	const rng = new Random(seed);
 	return webglConfig(targetOs, choose(rng, candidates).text, rng);
 }
