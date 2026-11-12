@@ -503,6 +503,7 @@ grep -r "class Navigator" . --include="*.h"
 - [ ] `make build`, then run the patch guards; `firefox-version-pin` checks that the build and every identity are the new Firefox
 - [ ] Run `stock-gpu-parity` on Linux, Windows and macOS ([Browser-Owned GPU Values](#browser-owned-gpu-values))
 - [ ] `tls-client-hello-parity` passes: the ClientHello a server fingerprints (JA3/JA4) is the new stock Firefox's, so a Firefox upgrade that changes it moves Camoufox with it
+- [ ] `http2-frames-parity` passes: the SETTINGS, WINDOW_UPDATE and pseudo-header order a server fingerprints on a new HTTP/2 connection are the new stock Firefox's
 
 ---
 
