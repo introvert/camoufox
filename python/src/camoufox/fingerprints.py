@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 import re
 import secrets
 import unicodedata
@@ -732,6 +733,11 @@ def host_cpu_count() -> Optional[int]:
         return os.cpu_count()
 
 
+def host_architecture() -> str:
+    """'arm' or 'x86': the CPU family that renders this machine's audio."""
+    return 'arm' if platform.machine().lower() in ('arm64', 'aarch64') else 'x86'
+
+
 # Core counts real desktop machines ship with, from the recorded presets. 2 is
 # excluded although the scraped corpus has it: no Apple Silicon part has fewer
 # than 8 cores, so 2 beside the common "Apple M1" renderer is a machine that
@@ -830,7 +836,10 @@ MOBILE_FIREFOX_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['mobilePrefs']
 # to Roboto, serif to Noto Serif, emoji to Noto Color Emoji. A desktop build
 # defaults to serif, so unstyled text measured desktop-wide without them.
 # Families the bundle lacks (Google Sans, Droid Sans, Charis SIL Compact) are
-# skipped by the browser, as on a phone that does not ship them.
+# skipped by the browser, as on a phone that does not ship them. Droid Sans
+# Mono is followed by DejaVu Sans Mono in each monospace list: when every
+# family in a list is missing, Gecko falls back to the proportional default
+# font, not to fontconfig's monospace.
 MOBILE_FONT_PREFS: Dict[str, Any] = LAUNCHER_CONSTANTS['mobileFontPrefs']
 # The families of a stock Android install that the Linux bundle can render:
 # Roboto, the Noto script and CJK families, Noto Color Emoji and Droid Sans
@@ -1655,7 +1664,7 @@ def generate_context_fingerprint(
         # pixel ratio whatever the context claims (layout.css.devPixelsPerPx
         # is the whole browser's), so its text measured as another device's.
         fp = (_generate_android_fingerprint(device_pixel_ratio)
-              if os == 'android' and device_pixel_ratio else generate_fingerprint(os=os))
+              if os == 'android' and device_pixel_ratio else generate_fingerprint(os=os, arch=host_architecture()))
         config = from_fpgen(fp, ff_version)
         # fpgen's Linux pool now and then pairs the Linux UA with a Windows
         # platform and oscpu. launch_options() corrects that; this path did
@@ -1714,6 +1723,7 @@ def generate_context_fingerprint(
                 webgl_fp = sample_webgl_for_screen(
                     _target_os, config.get('screen.width'), config.get('screen.height'),
                     cores=config.get('navigator.hardwareConcurrency'),
+                    arch=host_architecture(),
                 )
             webgl_fp.pop('webGl2Enabled')
             config.update(webgl_fp)
@@ -1822,6 +1832,8 @@ def generate_context_fingerprint(
     sw = screen.get('width')
     sh = screen.get('height')
     mobile = is_mobile_config(config)
+    if coherence.identity_architecture(config) != host_architecture():
+        LeakWarning.warn('audio_architecture', i_know_what_im_doing)
     if mobile:
         # The launch-wide `mobile` switch cannot differ per context, but
         # Playwright's own options reach the same places through Juggler:
@@ -2034,10 +2046,16 @@ def _generate_android_fingerprint(device_pixel_ratio: Optional[float] = None) ->
     }
 
 
+# About half of fpgen's Macs have a panel only Apple Silicon ships, so a draw
+# for an Intel Mac misses that often; forty misses in a row is about 1e-13.
+_INTEL_MAC_DRAWS = 40
+
+
 def generate_fingerprint(
     window: Optional[Tuple[int, int]] = None,
     screen: Optional[Screen] = None,
     os: Optional[Any] = None,
+    arch: Optional[str] = None,
     **conditions: Any,
 ) -> Dict[str, Any]:
     """
@@ -2048,6 +2066,9 @@ def generate_fingerprint(
     'windows', 'android', or several); anything else is passed to fpgen as a
     condition. fpgen has no Firefox for Android, so 'android' draws a phone from
     android-devices.json, and a list naming it picks one OS uniformly first.
+    With `arch` 'x86', a Mac is redrawn until its screen is one an Intel Mac
+    can have, since the audio render rules out Apple Silicon there
+    (coherence.gpu_architecture).
     """
     names = ([os] if isinstance(os, str) else list(os)) if os else []
     if 'android' in names:
@@ -2063,15 +2084,22 @@ def generate_fingerprint(
             # fpgen takes one value or a predicate, not a list of alternatives.
             conditions['os'] = resolved[0] if len(resolved) == 1 else (lambda v: v in set(resolved))
         screen_conditions = screen.as_conditions() if screen is not None else {}
-        try:
-            fingerprint = _generator().generate(browser='Firefox', **conditions, **screen_conditions)
-        except Exception as exc:  # fpgen.exceptions.InvalidConstraints
-            if not screen_conditions or type(exc).__name__ != 'InvalidConstraints':
-                raise
-            # The screen bound is best-effort: a display the model has nothing to
-            # fit (a 1x1 Xvfb, a small panel) must not stop generation, and
-            # clamp_screen_to_display() still bounds the result afterwards.
-            fingerprint = _generator().generate(browser='Firefox', **conditions)
+        for _ in range(_INTEL_MAC_DRAWS if arch == 'x86' else 1):
+            try:
+                fingerprint = _generator().generate(browser='Firefox', **conditions, **screen_conditions)
+            except Exception as exc:  # fpgen.exceptions.InvalidConstraints
+                if not screen_conditions or type(exc).__name__ != 'InvalidConstraints':
+                    raise
+                # The screen bound is best-effort: a display the model has nothing to
+                # fit (a 1x1 Xvfb, a small panel) must not stop generation, and
+                # clamp_screen_to_display() still bounds the result afterwards.
+                fingerprint = _generator().generate(browser='Firefox', **conditions)
+            fp_screen = fingerprint.get('screen') or {}
+            if (
+                fingerprint.get('navigator', {}).get('platform') != 'MacIntel'
+                or (fp_screen.get('width'), fp_screen.get('height')) not in coherence.APPLE_SILICON_PANELS
+            ):
+                break
 
     if window:  # User-specified outer window size
         handle_window_size(fingerprint, *window)

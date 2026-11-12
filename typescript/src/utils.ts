@@ -39,6 +39,7 @@ import {
 	generateRandomVoiceSubset,
 	getRandomPreset,
 	gpuScreenIsPlausible,
+	hostArchitecture,
 	identitySalt,
 	identitySeed,
 	isSoftwareRenderer,
@@ -231,6 +232,7 @@ export const utilsDeps = {
 	selectedLaunchPath,
 	identitySalt,
 	identitySeed,
+	hostArchitecture,
 	generateFingerprint: async (
 		options: Parameters<typeof generateFingerprint>[0],
 	): Promise<Record<string, any>> => {
@@ -1826,6 +1828,7 @@ export async function launchOptions({
 			screen: screenCons ?? undefined,
 			window,
 			os: targetOsOption,
+			arch: utilsDeps.hostArchitecture(),
 		});
 	}
 
@@ -2317,6 +2320,7 @@ export async function launchOptions({
 				config["screen.height"],
 				seed(),
 				config["navigator.hardwareConcurrency"],
+				utilsDeps.hostArchitecture(),
 			);
 		}
 		const enableWebgl2 = webglFp.webGl2Enabled;
@@ -2341,6 +2345,9 @@ export async function launchOptions({
 				`Incoherent identity (${violation.rule}): ${violation.detail}`,
 			);
 		}
+	}
+	if (coherence.identityArchitecture(config) !== utilsDeps.hostArchitecture()) {
+		LeakWarning.warn("audio_architecture", i_know_what_im_doing);
 	}
 
 	// Render at the claimed display scale, so (resolution) and the CSS geometry

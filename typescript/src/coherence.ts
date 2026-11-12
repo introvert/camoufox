@@ -142,7 +142,7 @@ export function gpuFitsOs(
 	return true;
 }
 
-function isAppleSiliconPanel(width: unknown, height: unknown): boolean {
+export function isAppleSiliconPanel(width: unknown, height: unknown): boolean {
 	const w = num(width);
 	const h = num(height);
 	return (
@@ -150,6 +150,42 @@ function isAppleSiliconPanel(width: unknown, height: unknown): boolean {
 		typeof h === "number" &&
 		APPLE_SILICON_PANELS.has(`${w}x${h}`)
 	);
+}
+
+/**
+ * Vendors whose GPUs ship only beside an ARM CPU. Firefox reports every Apple
+ * Silicon GPU as "Apple M1, or similar".
+ */
+const ARM_GPU_VENDORS: ReadonlySet<string> = new Set([
+	"ARM",
+	"Broadcom",
+	"Imagination Technologies",
+	"Qualcomm",
+]);
+
+export type Architecture = "arm" | "x86";
+
+/**
+ * 'arm' or 'x86': the CPU a machine with this GPU has. The audio render shows
+ * the CPU's architecture to any page (audio-is-not-noised), so the GPU an
+ * identity claims has to come from a machine of the architecture the browser
+ * really runs on.
+ */
+export function gpuArchitecture(
+	vendor: unknown,
+	rendererString: unknown,
+): Architecture {
+	const r = pyTruthy(rendererString) ? pyStr(rendererString) : "";
+	if (r.includes("Apple M") || ARM_GPU_VENDORS.has(String(vendor ?? ""))) {
+		return "arm";
+	}
+	return "x86";
+}
+
+/** The CPU architecture an identity claims: a phone's is ARM, a desktop's its GPU's. */
+export function identityArchitecture(config: Config): Architecture {
+	if (isMobileConfig(config)) return "arm";
+	return gpuArchitecture(config["webGl:vendor"], config["webGl:renderer"]);
 }
 
 /** Why no Intel Mac reports this GPU beside these cores and this screen. */

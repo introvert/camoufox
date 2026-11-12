@@ -859,6 +859,11 @@ export function normalizePresetVoices(
  * Logical CPUs this process may run on (affinity aware), as they were before
  * any launch pinned it: see cpu_affinity.hostCoreCount().
  */
+/** 'arm' or 'x86': the CPU family that renders this machine's audio. */
+export function hostArchitecture(): coherence.Architecture {
+	return process.arch === "arm64" ? "arm" : "x86";
+}
+
 export function hostCpuCount(): number | null {
 	return hostCoreCount() || null;
 }
@@ -948,7 +953,10 @@ export const MOBILE_FIREFOX_PREFS: Readonly<Record<string, any>> =
  * to Roboto, serif to Noto Serif, emoji to Noto Color Emoji. A desktop build
  * defaults to serif, so unstyled text measured desktop-wide without them.
  * Families the bundle lacks (Google Sans, Droid Sans, Charis SIL Compact) are
- * skipped by the browser, as on a phone that does not ship them.
+ * skipped by the browser, as on a phone that does not ship them. Droid Sans
+ * Mono is followed by DejaVu Sans Mono in each monospace list: when every
+ * family in a list is missing, Gecko falls back to the proportional default
+ * font, not to fontconfig's monospace.
  */
 export const MOBILE_FONT_PREFS: Readonly<Record<string, any>> =
 	LAUNCHER_CONSTANTS.mobileFontPrefs;
@@ -1871,7 +1879,10 @@ export function generateContextFingerprint({
 		const fp =
 			os === "android" && device_pixel_ratio
 				? generateAndroidFingerprint(device_pixel_ratio)
-				: generateFingerprint({ os: os ?? undefined });
+				: generateFingerprint({
+						os: os ?? undefined,
+						arch: hostArchitecture(),
+					});
 		config = fromFpgen(fp, ff_version);
 		// fpgen's Linux pool now and then pairs the Linux UA with a Windows
 		// platform and oscpu. launchOptions() corrects that; this path did not,
@@ -1958,6 +1969,7 @@ export function generateContextFingerprint({
 					config["screen.height"],
 					undefined,
 					config["navigator.hardwareConcurrency"],
+					hostArchitecture(),
 				);
 			}
 			delete webglFp.webGl2Enabled;
@@ -2084,6 +2096,9 @@ export function generateContextFingerprint({
 	const sw = screen.width;
 	const sh = screen.height;
 	const mobile = isMobileConfig(config);
+	if (coherence.identityArchitecture(config) !== hostArchitecture()) {
+		LeakWarning.warn("audio_architecture", i_know_what_im_doing);
+	}
 	if (mobile) {
 		// The launch-wide `mobile` switch cannot differ per context, but
 		// Playwright's own options reach the same places through Juggler:
@@ -2250,6 +2265,12 @@ export interface GenerateFingerprintOptions {
 	screen?: Screen | null;
 	/** Camoufox OS name(s): 'linux', 'macos', 'windows', 'android' (or lin/mac/win). */
 	os?: string | readonly string[] | null;
+	/**
+	 * The host's CPU architecture. With 'x86', a Mac is redrawn until its screen
+	 * is one an Intel Mac can have, since the audio render rules out Apple
+	 * Silicon there (coherence.gpuArchitecture).
+	 */
+	arch?: coherence.Architecture | null;
 	/** Any other fpgen conditions. */
 	[condition: string]: any;
 }
@@ -2328,10 +2349,17 @@ function generateAndroidFingerprint(
  * 'android' draws a phone from android-devices.json, and a list naming it
  * picks one OS uniformly first.
  */
+/**
+ * About half of fpgen's Macs have a panel only Apple Silicon ships, so a draw
+ * for an Intel Mac misses that often; forty misses in a row is about 1e-13.
+ */
+const INTEL_MAC_DRAWS = 40;
+
 export function generateFingerprint({
 	window,
 	screen,
 	os,
+	arch,
 	...conditions
 }: GenerateFingerprintOptions = {}): Record<string, any> {
 	let names = os?.length ? (typeof os === "string" ? [os] : [...os]) : [];
@@ -2340,7 +2368,18 @@ export function generateFingerprint({
 	if (names.length === 1 && names[0] === "android") {
 		fingerprint = generateAndroidFingerprint();
 	} else {
-		fingerprint = generateFpgenFingerprint(names, screen, conditions);
+		let draws = arch === "x86" ? INTEL_MAC_DRAWS : 1;
+		do {
+			fingerprint = generateFpgenFingerprint(names, screen, conditions);
+			draws--;
+		} while (
+			draws > 0 &&
+			fingerprint.navigator?.platform === "MacIntel" &&
+			coherence.isAppleSiliconPanel(
+				fingerprint.screen?.width,
+				fingerprint.screen?.height,
+			)
+		);
 	}
 	if (window) handleWindowSize(fingerprint, window[0], window[1]);
 	return fingerprint;

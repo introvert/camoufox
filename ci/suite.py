@@ -87,7 +87,9 @@ def make_venv(checkout: Path, tag: str, *, reuse: bool = True) -> Path:
         return python
 
     run([sys.executable, "-m", "venv", str(venv)], check=True)
-    run([str(python), "-m", "pip", "install", "--quiet", "--upgrade", "pip"], check=True)
+    # pip 26.3 refuses a PyPI package whose metadata names a direct URL, and the
+    # suite pins autobahn 23.1.2, whose "all" extra does (web3 from git).
+    run([str(python), "-m", "pip", "install", "--quiet", "pip<26.3"], check=True)
 
     # Install the suite's own pins. Hand-picked ones once paired pytest-asyncio
     # 0.21 with a suite needing 1.4, and every test errored at setup with

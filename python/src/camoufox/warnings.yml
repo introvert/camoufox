@@ -91,6 +91,13 @@ webgl_unknown_pair: >-
     (limits, extensions, precision formats) is the host's own, and a page that compares
     them with the named GPU can see they do not belong together.
 
+audio_architecture: >-
+    The identity claims a machine with another CPU architecture than this one: a
+    phone or an Apple Silicon Mac on an x86 host, or an x86 machine on an ARM host.
+    Stock Firefox renders audio one way on x86 and another on ARM, whatever the OS,
+    so any page that renders an OfflineAudioContext reads this machine's
+    architecture. Run the identity on a host of its architecture.
+
 canvas_noise: >-
     Canvas and WebGL readback return random data, as privacy.resistFingerprinting
     does in LibreWolf, Tor Browser and Mullvad Browser. Stock Firefox does not

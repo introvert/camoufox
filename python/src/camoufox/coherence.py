@@ -187,6 +187,30 @@ def gpu_fits_os(renderer: Optional[str], target_os: str) -> bool:
     return True
 
 
+# Vendors whose GPUs ship only beside an ARM CPU. Firefox reports every Apple
+# Silicon GPU as "Apple M1, or similar".
+_ARM_GPU_VENDORS = frozenset({'ARM', 'Broadcom', 'Imagination Technologies', 'Qualcomm'})
+
+
+def gpu_architecture(vendor: Optional[str], renderer: Optional[str]) -> str:
+    """'arm' or 'x86': the CPU a machine with this GPU has.
+
+    The audio render shows the CPU's architecture to any page
+    (audio-is-not-noised), so the GPU an identity claims has to come from a
+    machine of the architecture the browser really runs on.
+    """
+    if 'Apple M' in str(renderer or '') or vendor in _ARM_GPU_VENDORS:
+        return 'arm'
+    return 'x86'
+
+
+def identity_architecture(config: Dict[str, Any]) -> str:
+    """The CPU architecture an identity claims: a phone's is ARM, a desktop's its GPU's."""
+    if is_mobile_config(config):
+        return 'arm'
+    return gpu_architecture(config.get('webGl:vendor'), config.get('webGl:renderer'))
+
+
 def _intel_mac_misfit(renderer: Optional[str], cores: Any, width: Any, height: Any) -> Optional[str]:
     """Why no Intel Mac reports this GPU beside these cores and this screen."""
     renderer = str(renderer or '')

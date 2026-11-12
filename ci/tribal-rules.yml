@@ -353,6 +353,44 @@ rules:
       the audio hash with the values that must match across contexts, and the
       audio-matches-stock guard checks the build against the recorded values.
 
+  - id: identity-claims-the-hosts-cpu-architecture
+    title: A drawn identity has the host's CPU architecture; one that cannot warns
+    check: automated
+    evidence:
+      - "audio-is-not-noised: the audio render is x86-64's or ARM64's, whatever the OS, and is not spoofed"
+      - "fpgen model-2/2026, Firefox on macOS: 'Apple M1, or similar' is 93.2% of GPU weight; the Intel and AMD Mac GPUs are the other 6.8%"
+      - "300 fpgen macOS draws, 2026-11-12: 140 had a screen in launcher-constants.json's appleSiliconPanels, which no Intel Mac has"
+      - "fpgen Linux GPUs: Broadcom (a Raspberry Pi) is 2.25% of weight, and its records carry a 'Linux x86_64' user agent, which a Pi does not send"
+      - "fpgen records no Firefox on Windows on ARM, and android-devices.json holds only ARM phones"
+    rationale: >-
+      Most Macs fpgen recorded are Apple Silicon, so an x86 host drew Macs that
+      render x86 audio beside an ARM GPU, a pair no real machine produces. The
+      synthetic draw now keeps to GPUs of the host's architecture when one
+      fits (coherence.gpu_architecture): an x86 host draws Intel Macs, redrawing
+      Mac screens only Apple Silicon has, and never a Pi; an ARM host draws
+      Apple Silicon Macs. Where nothing recorded fits, a phone on x86 or
+      Windows and Linux on ARM, the identity is drawn as before and the launch
+      warns (audio_architecture), because refusing would make the launch depend
+      on the host and silence would hide the tell. Rendering the other
+      architecture's audio would need the claimed CPU's floating-point paths in
+      the browser; run such identities on a host of their architecture instead.
+
+  - id: identities-on-one-host-share-its-rendering
+    title: Identities on one machine share its canvas, WebGL and audio output; nothing per identity varies them
+    check: manual
+    evidence:
+      - "canvas-is-not-noised, audio-is-not-noised, no-glyph-spacing-noise: per-identity noise put every identity on values no real machine produces"
+      - "24 profiles across 3 runs on v152.0.4-beta.30: canvas 16 distinct of 24, audio 24 of 24 while noised"
+    rationale: >-
+      The other side of matching stock: every identity on the host's own OS
+      renders the host's canvas, WebGL readback, fonts and audio, so a site that
+      sees two accounts with the same hashes can link them whatever their user
+      agents say. This is not to be fixed in the browser, since any variation
+      per identity is off the real distribution. Accounts that must not be
+      linked belong on different hardware: separate machines, or
+      headless="virtual-gpu" on different GPUs, which changes the GPU the canvas
+      renders on and the identity claims.
+
   - id: cross-os-canvas-is-the-rfp-placeholder
     title: On the host's OS the identity claims the host's GPU; on another OS or GPU canvas readback is RFP's random placeholder
     check: automated
