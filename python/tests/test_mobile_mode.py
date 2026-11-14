@@ -279,6 +279,7 @@ class TestLaunchOptions:
         assert prefs['media.setsinkid.enabled'] is False
         assert prefs['webgl.default-antialias'] is False
         assert prefs['dom.webmidi.enabled'] is False
+        assert prefs['media.webspeech.recognition.enable'] is False
         assert prefs['dom.disable_window_move_resize'] is True
         assert prefs['browser.tabs.remote.coep.credentialless'] is False
         assert prefs['browser.link.open_newwindow.restriction'] == 0

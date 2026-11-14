@@ -239,12 +239,13 @@ async def read_viewports(page, window_width: int, mobile: bool) -> Dict[str, Any
 
 # What a Firefox for Android page sees before any getUserMedia grant: one
 # device per input kind (a phone has cameras; no audiooutput without setSinkId),
-# no Web MIDI, no COEP credentialless on a release build, Playwright's tap()
+# no Web MIDI or speech recognition, no COEP credentialless on a release build, Playwright's tap()
 # delivered as touch, and window.open() as a tab of the phone's size whatever
 # features it asks for.
 PHONE_SURFACE: Dict[str, Any] = {
     "enumerateDevices kinds": ["audioinput", "videoinput"],
     "'requestMIDIAccess' in navigator": False,
+    "'SpeechRecognition' in window": False,
     "COEP credentialless isolates": False,
     "page.tap() fires touchstart": True,
     "window.open() popup is the opener's size": True,
@@ -290,6 +291,7 @@ async def probe_phone_surface(page) -> Dict[str, Any]:
         got.update(await page.evaluate("""async () => ({
           "enumerateDevices kinds": (await navigator.mediaDevices.enumerateDevices()).map(d => d.kind).sort(),
           "'requestMIDIAccess' in navigator": 'requestMIDIAccess' in navigator,
+          "'SpeechRecognition' in window": 'SpeechRecognition' in window,
         })"""))
         try:
             await page.tap("#b", timeout=5000)

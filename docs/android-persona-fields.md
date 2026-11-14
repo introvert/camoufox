@@ -36,6 +36,7 @@ hand through `config=` (or `CAMOU_CONFIG` for the raw binary), or through
 | `navigator.getBattery` | absent (chrome-only) | nothing to set | absent |
 | `navigator.share` | present (`dom.webshare.enabled`, geckoview-prefs.js) | pref `dom.webshare.enabled` | auto |
 | `navigator.requestMIDIAccess` | absent (`dom.webmidi.enabled` is `@IS_NOT_MOBILE@`) | pref `dom.webmidi.enabled` | auto (off) |
+| `SpeechRecognition` | absent (`media.webspeech.recognition.enable` is `@IS_NOT_ANDROID@` from Firefox 160, which exposes it on desktop) | pref `media.webspeech.recognition.enable` | auto (off) |
 | `navigator.mediaDevices.enumerateDevices()` | one microphone, `Default audio input device` (cubeb cannot enumerate on Android, `CubebDeviceEnumerator.cpp`), and the cameras as `Facing front:1`, `Facing back:0`, front first (`VideoCaptureDeviceInfoAndroid.java`); no `audiooutput` (`media.setsinkid.enabled` is off) | `mediaDevices:*` | auto (`android` in `media-devices.json`) |
 | `navigator.standalone` | absent (Safari only) | nothing to set | absent |
 | `screen.width` × `height` | the device, portrait | `screen.width`, `screen.height` | auto (`android-devices.json`) |

@@ -1,8 +1,8 @@
 diff --git a/xpfe/appshell/AppWindow.cpp b/xpfe/appshell/AppWindow.cpp
-index ff293fde9f..54fec820cb 100644
+index 33bd818a97..281e16dc06 100644
 --- a/xpfe/appshell/AppWindow.cpp
 +++ b/xpfe/appshell/AppWindow.cpp
-@@ -2441,8 +2441,25 @@ void AppWindow::SizeShell() {
+@@ -2430,8 +2430,25 @@ void AppWindow::SizeShell() {
    // on the resolution of the screen we're on. But positioning needs to
    // know the size so that it can constrain to screen bounds.... as an
    // initial guess here, we'll use the specified size (if any).
@@ -29,4 +29,4 @@ index ff293fde9f..54fec820cb 100644
 +  }
  
    if (gotSize) {
-     SetSpecifiedSize(specWidth, specHeight);
+     SetSpecifiedSize(CSSIntSize(specWidth, specHeight));
