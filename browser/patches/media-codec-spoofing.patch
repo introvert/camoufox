@@ -37,7 +37,7 @@ index 88956ccea8..296b168ded 100644
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
 diff --git a/dom/media/webm/MatroskaDecoder.cpp b/dom/media/webm/MatroskaDecoder.cpp
-index ca63eb884a..a2b99cfdcb 100644
+index 46cfa2ce92..602a4cdaf4 100644
 --- a/dom/media/webm/MatroskaDecoder.cpp
 +++ b/dom/media/webm/MatroskaDecoder.cpp
 @@ -8,6 +8,7 @@
@@ -48,7 +48,7 @@ index ca63eb884a..a2b99cfdcb 100644
  #include "VideoUtils.h"
  #include "mozilla/StaticPrefs_media.h"
  #include "nsMimeTypes.h"
-@@ -124,6 +125,12 @@ bool MatroskaDecoder::IsSupportedType(const MediaContainerType& aContainerType,
+@@ -143,6 +144,12 @@ bool MatroskaDecoder::IsSupportedType(const MediaContainerType& aContainerType,
  
    if (!tracks.IsEmpty()) {
      // Look for exact match as we know the codecs used.
@@ -62,13 +62,13 @@ index ca63eb884a..a2b99cfdcb 100644
        if (!track || PDMFactorySupport::IsSupported(SupportDecoderParams(*track),
                                                     aDiagnostics)
 diff --git a/dom/media/webm/moz.build b/dom/media/webm/moz.build
-index 46749416af..0f58406576 100644
+index ef13aa4876..52cd337854 100644
 --- a/dom/media/webm/moz.build
 +++ b/dom/media/webm/moz.build
-@@ -31,3 +31,6 @@ FINAL_LIBRARY = "xul"
- 
- # Add libFuzzer configuration directives
- include("/tools/fuzzing/libfuzzer-config.mozbuild")
+@@ -35,3 +35,6 @@ include("/tools/fuzzing/libfuzzer-config.mozbuild")
+ SOURCE_HEADERS += [
+     "EbmlComposer.h",
+ ]
 +
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
