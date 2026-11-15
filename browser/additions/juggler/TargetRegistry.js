@@ -875,7 +875,12 @@ export class PageTarget {
       // A window shorter than the claim would report outer - inner below it,
       // where a relaunch with the same identity reports the claim.
       const toolbarTop = Math.max(stackRect.y, CLAIMED_CHROME_HEIGHT);
-      this._window.resizeBy(width - this._window.innerWidth, height + toolbarTop - this._window.innerHeight);
+      // An absolute size: resizeBy adds to the widget's current size, which can
+      // still be a pending resize the window's innerWidth has not caught up
+      // with, and leaves the window a few device pixels off the viewport.
+      const chromeWidth = Math.round(this._window.outerWidth - this._window.innerWidth);
+      const chromeHeight = Math.round(this._window.outerHeight - this._window.innerHeight + toolbarTop);
+      this._window.resizeTo(width + chromeWidth, height + chromeHeight);
 
       await this._channel.connect('').send('awaitViewportDimensions', { width: width / this._zoom, height: height / this._zoom });
     } else {
