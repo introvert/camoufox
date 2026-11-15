@@ -133,12 +133,13 @@ PROBES = """async (port) => {
     out.gumFake = 'rejected ' + e.name;
   }
 
+  // No timer of its own: a cross-site frame starts a content process, and on a
+  // loaded runner that outran a 5 s timer. The 60 s wait for the result bounds it.
   out.storageAccess = await new Promise(r => {
     addEventListener('message', e => r(e.data.hasStorageAccess), {once: true});
     const f = document.createElement('iframe');
     f.src = `http://127.0.0.1:${port}/frame`;
     document.body.appendChild(f);
-    setTimeout(() => r('timeout'), 5000);
   });
 
   // The result of every read is accumulated into `sink`, and `sink` is returned.
