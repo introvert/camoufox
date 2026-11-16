@@ -10,12 +10,14 @@ Runtime._awaitPromise with no error, no timeout and no protocol traffic:
     page.evaluate("({ok: 42})")          # returned
     page.evaluate("(async () => 42)()")  # hung until the caller's timeout
 
-Runtime.js now attaches reactions inside the debuggee that run a `debugger;`
+Runtime.js now reacts to the promise itself. In a window it calls the realm's
+own Promise.prototype.then through the promise's Xray, which runs neither a
+`then` nor a constructor getter the page installed. A worker has no Xrays, so
+there it attaches reactions inside the debuggee that run a `debugger;`
 statement when the promise settles, and sweeps the pending set from
-onDebuggerStatement. Because page.evaluate() runs in Camoufox's isolated world,
-those reactions use the sandbox's own Promise and never touch the page's -- the
-page sees neither the `then` call nor the callbacks. That part is asserted here
-too: with the default world isolation on, attaching them must stay invisible.
+onDebuggerStatement. Either way the page sees neither the `then` call nor the
+callbacks. That part is asserted here too: with the default world isolation on,
+attaching them must stay invisible.
 
 Run against a specific build:
     python browser/tests/playwright/patches/promise-evaluate.py --binary /path/to/camoufox-bin

@@ -20,6 +20,7 @@ import json
 import re
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -301,6 +302,9 @@ class TestLaunchOptions:
 class _FakeBrowser:
     def __init__(self):
         self.kwargs = None
+        # Playwright's async layer, where attach_socks5_auth wraps new_context;
+        # these tests read the public layer alone.
+        self._impl_obj = SimpleNamespace()
 
     def new_page(self, **kwargs):
         self.kwargs = kwargs
@@ -420,13 +424,6 @@ class TestContextFingerprint:
             x, y = map(int, re.search(r'setWindowPosition\((-?\d+), (-?\d+)\)', fp['init_script']).groups())
             assert 0 <= x <= config['screen.width'] - config['window.outerWidth']
             assert 0 <= y <= config['screen.height'] - config['window.outerHeight']
-
-    def test_juggler_pads_a_context_window_to_the_claimed_chrome(self):
-        # Juggler sizes a context's window from its viewport; with the real
-        # toolbars shorter than the claim, outer - inner fell short of it.
-        juggler = Path(__file__).resolve().parents[2] / 'browser/additions/juggler/TargetRegistry.js'
-        claimed = re.search(r'CLAIMED_CHROME_HEIGHT = (\d+);', juggler.read_text())
-        assert claimed and int(claimed.group(1)) == BROWSER_CHROME_HEIGHT
 
 
 

@@ -49,10 +49,17 @@ def test_new_context_draws_for_its_locale(api):
 
 @pytest.mark.parametrize('target_os', ['windows', 'macos', 'linux', 'android'])
 def test_context_voices_are_registered(target_os):
-    """The browser registers the launch's voices and voices:pool; a context's
-    list only selects among them, so a voice outside both is never shown."""
-    pool = {v['voiceUri'] for v in voice_pool([POOL_KEYS[target_os]])}
+    """The browser registers the launch's voices and the pool; a context's
+    list only selects among them, so a voice outside both is never shown. A
+    Linux list is its release's speech-dispatcher grid, which the pool holds
+    whole."""
+    pool = voice_pool([POOL_KEYS[target_os]])
+    uris = {v['voiceUri'] for v in pool.get('voices:pool', [])}
+    grids = pool.get('voices:pool:speechd', [])
     for locale in ('de-DE', 'fr-FR', 'ja-JP', 'en-GB'):
         for _ in range(5):
-            fp = generate_context_fingerprint(os=target_os, locale=locale, i_know_what_im_doing=True)
-            assert {v['voiceUri'] for v in fp['config']['voices']} <= pool
+            config = generate_context_fingerprint(os=target_os, locale=locale, i_know_what_im_doing=True)['config']
+            if 'voices:speechd' in config:
+                assert config['voices:speechd'] in grids
+            else:
+                assert {v['voiceUri'] for v in config['voices']} <= uris

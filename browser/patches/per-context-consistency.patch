@@ -89,7 +89,7 @@ diff --git a/dom/base/NavigatorManager.cpp b/dom/base/NavigatorManager.cpp
 diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
 --- a/dom/base/Navigator.cpp
 +++ b/dom/base/Navigator.cpp
-@@ -381,13 +381,14 @@ void Navigator::GetAcceptLanguages(nsTArray<nsString>& aLanguages,
+@@ -383,13 +383,14 @@ void Navigator::GetAcceptLanguages(nsTArray<nsString>& aLanguages,
  
    aLanguages.Clear();
  
@@ -108,7 +108,7 @@ diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
 diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/HttpBaseChannel.cpp
 --- a/netwerk/protocol/http/HttpBaseChannel.cpp
 +++ b/netwerk/protocol/http/HttpBaseChannel.cpp
-@@ -39,12 +39,13 @@
+@@ -40,12 +40,13 @@
  #include "mozilla/dom/BrowsingContext.h"
  #include "mozilla/dom/CanonicalBrowsingContext.h"
  #include "mozilla/dom/ContentChild.h"
@@ -122,7 +122,7 @@ diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/H
  #include "mozilla/dom/PolicyContainer.h"
  #include "mozilla/dom/ProcessIsolation.h"
  #include "mozilla/dom/RequestBinding.h"
-@@ -397,15 +398,21 @@ nsresult HttpBaseChannel::Init(nsIURI* aURI, uint32_t aCaps,
+@@ -398,15 +399,21 @@ nsresult HttpBaseChannel::Init(nsIURI* aURI, uint32_t aCaps,
    RefPtr<mozilla::dom::BrowsingContext> browsingContext;
    mLoadInfo->GetBrowsingContext(getter_AddRefs(browsingContext));
    if (!browsingContext) {
@@ -147,33 +147,6 @@ diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/H
        nsContentUtils::ShouldResistFingerprinting(this,
                                                   RFPTarget::HttpUserAgent),
        languageOverride);
-@@ -535,12 +542,26 @@ HttpBaseChannel::SetTRRMode(nsIRequest::TRRMode aTRRMode) {
- 
- NS_IMETHODIMP
- HttpBaseChannel::SetDocshellUserAgentOverride() {
-   RefPtr<dom::BrowsingContext> bc;
-   MOZ_ALWAYS_SUCCEEDS(mLoadInfo->GetBrowsingContext(getter_AddRefs(bc)));
-   if (!bc) {
-+    // Camoufox: worker and service worker requests have no browsing context
-+    // to carry the page's user agent override, so they went out with the
-+    // launch-wide one -- a Windows UA from an Android context's service
-+    // worker. Send the user agent the request's user context was given.
-+    const uint32_t userContextId =
-+        mLoadInfo->GetOriginAttributes().mUserContextId;
-+    nsAutoString contextUserAgent;
-+    if (userContextId &&
-+        dom::NavigatorManager::GetUserAgent(userContextId, contextUserAgent) &&
-+        !contextUserAgent.IsEmpty()) {
-+      return SetRequestHeaderInternal(
-+          "User-Agent"_ns, NS_ConvertUTF16toUTF8(contextUserAgent), false,
-+          nsHttpHeaderArray::eVarietyRequestEnforceDefault);
-+    }
-     return NS_OK;
-   }
- 
-   nsAutoCString customUserAgent;
-   bc->GetCustomUserAgent(customUserAgent);
-   if (customUserAgent.IsEmpty() || customUserAgent.IsVoid()) {
 diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
 --- a/netwerk/protocol/http/nsHttpHandler.cpp
 +++ b/netwerk/protocol/http/nsHttpHandler.cpp
@@ -276,7 +249,7 @@ diff --git a/docshell/base/BrowsingContext.cpp b/docshell/base/BrowsingContext.c
  #include "mozilla/StaticPrefs_fission.h"
  #include "mozilla/StaticPrefs_media.h"
  #include "mozilla/StaticPrefs_page_load.h"
-@@ -3580,12 +3584,34 @@ void BrowsingContext::DidSet(FieldIndex<IDX_AnimationsPlayBackRateMultiplier>,
+@@ -3609,12 +3613,34 @@ void BrowsingContext::DidSet(FieldIndex<IDX_AnimationsPlayBackRateMultiplier>,
  void BrowsingContext::DidSet(FieldIndex<IDX_LanguageOverride>,
                               nsCString&& aOldValue) {
    MOZ_ASSERT(IsTop());
@@ -367,7 +340,7 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
  #include "mozilla/dom/ParentProcessMessageManager.h"
  #include "mozilla/dom/PermissionObserver.h"
  #include "mozilla/dom/PermissionStatusBinding.h"
-@@ -191,12 +192,13 @@
+@@ -194,12 +195,13 @@
  #include "nsAnonymousTemporaryFile.h"
  #include "nsAppRunner.h"
  #include "nsCExternalHandlerService.h"
@@ -381,7 +354,7 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
  #include "nsContentPermissionHelper.h"
  #include "nsContentUtils.h"
  #include "nsDNSService2.h"
-@@ -1205,12 +1207,59 @@ mozilla::ipc::IPCResult ContentParent::RecvRoverfoxStoragePut(
+@@ -1209,12 +1211,59 @@ mozilla::ipc::IPCResult ContentParent::RecvRoverfoxStoragePut(
    // Default branch: session state, never written to prefs.js (see
    // RoverfoxStorageManager.cpp).
    Preferences::SetCString(aPrefName.get(), aValue, PrefValueKind::Default);
@@ -441,7 +414,7 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
    mozilla::glean::security::FissionPrincipalsExtra extra = {};
    extra.value = Some(aMethod);
  
-@@ -1465,12 +1514,16 @@ void ContentParent::GetAllEvenIfDead(nsTArray<ContentParent*>& aArray) {
+@@ -1469,12 +1518,16 @@ void ContentParent::GetAllEvenIfDead(nsTArray<ContentParent*>& aArray) {
    }
  }
  
@@ -458,7 +431,7 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
      (void)cp->SendRegisterStringBundles(std::move(array));
    }
  }
-@@ -2730,13 +2783,13 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
+@@ -2733,13 +2786,13 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
    MOZ_ASSERT(spellChecker, "No spell checker?");
  
    spellChecker->GetDictionaryList(&xpcomInit.dictionaries());
@@ -473,7 +446,7 @@ diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
    L10nRegistry::GetParentProcessFileSourceDescriptors(
        xpcomInit.l10nFileSources());
  
-@@ -2873,15 +2926,17 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
+@@ -2876,15 +2929,17 @@ bool ContentParent::InitInternal(ProcessPriority aInitialPriority) {
  
    nsCOMPtr<nsIChromeRegistry> registrySvc = nsChromeRegistry::GetService();
    nsChromeRegistryChrome* chromeRegistry =
@@ -540,7 +513,7 @@ diff --git a/dom/ipc/ContentChild.cpp b/dom/ipc/ContentChild.cpp
  #include "mozilla/ipc/Endpoint.h"
  #include "mozilla/ipc/FileDescriptorUtils.h"
  #include "mozilla/ipc/GeckoChildProcessHost.h"
-@@ -2476,12 +2479,20 @@ mozilla::ipc::IPCResult ContentChild::RecvFontListShmBlockAdded(
+@@ -2481,12 +2484,20 @@ mozilla::ipc::IPCResult ContentChild::RecvFontListShmBlockAdded(
    return IPC_OK();
  }
  
@@ -681,7 +654,7 @@ diff --git a/chrome/nsChromeRegistryChrome.h b/chrome/nsChromeRegistryChrome.h
 diff --git a/dom/base/nsContentUtils.cpp b/dom/base/nsContentUtils.cpp
 --- a/dom/base/nsContentUtils.cpp
 +++ b/dom/base/nsContentUtils.cpp
-@@ -5766,12 +5766,19 @@ void nsContentUtils::AsyncPrecreateStringBundles() {
+@@ -5767,12 +5767,19 @@ void nsContentUtils::AsyncPrecreateStringBundles() {
                                 }),
          EventQueuePriority::Idle);
      (void)NS_WARN_IF(NS_FAILED(rv));
@@ -704,7 +677,7 @@ diff --git a/dom/base/nsContentUtils.cpp b/dom/base/nsContentUtils.cpp
 diff --git a/dom/base/nsContentUtils.h b/dom/base/nsContentUtils.h
 --- a/dom/base/nsContentUtils.h
 +++ b/dom/base/nsContentUtils.h
-@@ -3551,12 +3551,16 @@ class nsContentUtils {
+@@ -3555,12 +3555,16 @@ class nsContentUtils {
     * @param aMsg  The message to check
     */
    static bool IsMessageCriticalInputEvent(const IPC::Message& aMsg);

@@ -52,7 +52,7 @@ every command in this guide that does not say otherwise, from `browser/`:
 
 | Target | What it does |
 |---|---|
-| `make dir` | Fetches and extracts Firefox if the tree is missing. Otherwise resets it to `unpatched`, runs `mach clobber` and `git clean -fdx` (the object directory goes too), re-copies additions, then applies every patch and lists the ones that left rejects. |
+| `make dir` | Fetches and extracts Firefox if the tree is missing. Otherwise resets it to `unpatched` and runs `git clean -fdx`, keeping the object directory so the next build recompiles only what the patches touch (`CAMOUFOX_CLOBBER=1` runs `mach clobber` and removes it too), re-copies additions, writes the mozconfig for `BUILD_TARGET` (the host when unset; `CAMOUFOX_DEV_BUILD=1` leaves out `--enable-release`, never for a shipped build), then applies every patch and lists the ones that left rejects. |
 | `make revert` | `git reset --hard unpatched`. Untracked files stay, including new files that patches created. |
 | `make clean` | `mach clobber`, `git clean -fdx`, then `make revert`: unpatched Firefox with nothing left over, without re-fetching. |
 | `make patch ./patches/x.patch` | Applies one patch (`patch -p1`). |
@@ -63,6 +63,12 @@ every command in this guide that does not say otherwise, from `browser/`:
 | `make checkpoint` | Commits tracked changes, keeping the `first-checkpoint` tag where it is. |
 | `make grep <text>` | Searches the top-level patches for a string. |
 | `make build` | `./mach build` (runs `make dir` first if the tree was never prepared). |
+| `make sync` | Copies `additions/` and the settings files into the tree, writing only the files that changed. |
+| `make build-js` | `make sync`, then `./mach build faster`: Juggler, prefs and the other non-compiled files, in seconds. |
+| `make build-cpp` | `./mach build binaries`: C++ and Rust only. |
+| `make verify-patches` | Replays the patch stack onto clean upstream copies of the files it touches, without `make dir`; `compare=true` also fails when the tree holds an edit no patch records. |
+| `make set-target` | Rewrites the mozconfig for `BUILD_TARGET`. The sources and every object directory are left as they are. |
+| `make preflight` | Checks that `BUILD_TARGET` builds without building it: configure, the export tiers, and the object of every source file a patch or an addition touches. |
 | `make run` | Runs the build with `debug` on in `CAMOU_CONFIG`; wipes `~/.camoufox`. `args="..."` passes arguments. |
 | `make path` | Prints the built `camoufox-bin`. |
 | `make stage-fonts` | Stages the font bundle into the unpackaged build, which tests through the launchers need. |
@@ -80,10 +86,12 @@ the patch.
 ### Step 1: Bump the Version and Find the Broken Patches
 
 Update `version` and `release` in `browser/upstream.sh`, pin the PGO profiles
-Mozilla trained for that release, then:
+Mozilla trained for that release and the Remote Settings collections a page can
+see of it, then:
 
 ```bash
 python3 scripts/pgo.py pin
+python3 scripts/remote_settings.py pin
 make dir
 ```
 
@@ -421,11 +429,13 @@ WebGL1's `ALIASED_LINE_WIDTH_RANGE` at `[1, 1]` on Linux
 ([`webgl-browser-owned-values-follow-firefox`](../ci/tribal-rules.yml)).
 Firefox 158 added `EXT_polygon_offset_clamp` on Windows devices with WebGL2
 (ANGLE's D3D11 backend at feature level 10_0 and above) and on Linux desktop GL,
-but not on macOS, where release builds use CGL's GL 4.1. Firefox 159 added
-`EXT_clip_control` in the same places, `EXT_texture_mirror_clamp_to_edge` on
-every Windows device and on Linux desktop GL, and `EXT_texture_norm16` on WebGL2
-on all three, short of Linux GLES drivers. The
-`stock-gpu-parity` guard finds them. It runs stock Firefox of the new version,
+but not on macOS, where release builds use CGL's GL 4.1. Firefox 159 exposes
+`EXT_texture_norm16` on WebGL2 wherever the GL has 16-bit normalized textures,
+which is every macOS and x86_64 Linux WebGL2 context; on Windows, ANGLE decides
+per device. It also adds `EXT_clip_control` and `EXT_texture_mirror_clamp_to_edge`
+to both contexts on Linux desktop GL and on Windows (clip control from feature
+level 10_0), but not on macOS.
+The `stock-gpu-parity` guard finds them. It runs stock Firefox of the new version,
 stock Firefox of the release fpgen's model recorded, and Camoufox claiming the
 machine's GPU, and fails where the two stock releases differ and Camoufox does
 not follow the new one. From the repository root:
@@ -493,7 +503,7 @@ grep -r "class Navigator" . --include="*.h"
 
 ## Checklist
 
-- [ ] Bump `browser/upstream.sh`, run `python3 scripts/pgo.py pin`, and run `make dir` to list the failing patches
+- [ ] Bump `browser/upstream.sh`, run `python3 scripts/pgo.py pin` and `python3 scripts/remote_settings.py pin`, and run `make dir` to list the failing patches
 - [ ] Delete the [backports](../browser/patches/patch-dependencies.md#backports) the new Firefox ships
 - [ ] For each: `make clean`, apply its dependencies, `make first-checkpoint`, `make patch` it
 - [ ] Port each reject to the new Firefox code

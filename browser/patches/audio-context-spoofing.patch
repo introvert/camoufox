@@ -1,5 +1,4 @@
 diff --git a/dom/media/CubebUtils.cpp b/dom/media/CubebUtils.cpp
-index 959ce56d65..a48768f8e3 100644
 --- a/dom/media/CubebUtils.cpp
 +++ b/dom/media/CubebUtils.cpp
 @@ -46,6 +46,7 @@
@@ -20,7 +19,6 @@ index 959ce56d65..a48768f8e3 100644
      return 44100;
    }
 diff --git a/dom/media/moz.build b/dom/media/moz.build
-index c2073164ee..423a266a71 100644
 --- a/dom/media/moz.build
 +++ b/dom/media/moz.build
 @@ -445,6 +445,8 @@ if CONFIG["CC_TYPE"] in ("clang", "gcc"):
@@ -33,7 +31,6 @@ index c2073164ee..423a266a71 100644
  SPHINX_TREES["/media"] = "docs"
  
 diff --git a/dom/media/webaudio/AudioContext.cpp b/dom/media/webaudio/AudioContext.cpp
-index 4c9157247f..bdd628858b 100644
 --- a/dom/media/webaudio/AudioContext.cpp
 +++ b/dom/media/webaudio/AudioContext.cpp
 @@ -6,6 +6,7 @@
@@ -53,17 +50,19 @@ index 4c9157247f..bdd628858b 100644
    double latency_s = 0.0;
    if (mShouldResistFingerprinting) {
  #ifdef XP_MACOSX
-@@ -716,6 +719,8 @@ void AudioContext::UnregisterActiveNode(AudioNode* aNode) {
+@@ -716,6 +719,11 @@ void AudioContext::UnregisterActiveNode(AudioNode* aNode) {
  }
  
  uint32_t AudioContext::MaxChannelCount() const {
-+  if (auto value = MaskConfig::GetUint32("AudioContext:maxChannelCount"))
++  // Camoufox: the identity's count is the output device's. An offline context
++  // has no device: its destination takes the channel count it was made with.
++  if (auto value = MaskConfig::GetUint32("AudioContext:maxChannelCount");
++      value && !mIsOffline)
 +    return value.value();
    if (mShouldResistFingerprinting) {
      return 2;
    }
 diff --git a/dom/media/webaudio/moz.build b/dom/media/webaudio/moz.build
-index 85c386ed6f..a0c59ff0b0 100644
 --- a/dom/media/webaudio/moz.build
 +++ b/dom/media/webaudio/moz.build
 @@ -160,3 +160,6 @@ SOURCE_HEADERS += [

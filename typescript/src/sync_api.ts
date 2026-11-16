@@ -17,6 +17,7 @@ import {
 	firefox,
 } from "playwright-core";
 import * as cpuAffinity from "./cpu_affinity.js";
+import { attachDriverDefaults } from "./driver_defaults.js";
 import { generateContextFingerprint } from "./fingerprints.js";
 import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
 import { SELECTOR } from "./locales.js";
@@ -24,6 +25,7 @@ import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
 	attachNoViewportDefault,
+	attachSocks5Auth,
 	attachStockMediaDefaults,
 	attachTouchDefault,
 	attachVirtualDisplay,
@@ -205,12 +207,14 @@ async function launchWith(
 			userDataDir ?? "",
 			options,
 		);
+		attachDriverDefaults(context);
 		return attachVirtualDisplay(context, virtualDisplay);
 	}
 
 	// Browser
 	const identity = await hostIdentity(fromOptions, canvasNoise);
 	const browser = await playwright.launch(fromOptions);
+	attachSocks5Auth(browser);
 	if (noViewportDefault) {
 		attachNoViewportDefault(browser);
 	}
@@ -219,6 +223,7 @@ async function launchWith(
 	}
 	attachStockMediaDefaults(browser);
 	attachDesktopOnlyWarning(browser);
+	attachDriverDefaults(browser);
 	(browser as any)._camoufoxHostIdentity = identity;
 	(browser as any)._camoufoxMachine = launchMachine(fromOptions);
 	return attachVirtualDisplay(browser, virtualDisplay);
@@ -288,9 +293,8 @@ export async function NewContext(
 	const ffVersion = ff_version || browser.version().split(".", 1)[0];
 
 	// Put a context behind a proxy where the proxy exits, as geoip places a
-	// launch: its WebRTC IP, clock, locale and position. A clock that moved
-	// without the locale and position named two places at once. A value the
-	// caller gave is kept.
+	// launch: its WebRTC IP, clock, locale and position. A value the caller
+	// gave is kept.
 	let webrtcIp = webrtc_ip;
 	let position = geolocation;
 	if (
@@ -338,6 +342,8 @@ export async function NewContext(
 		opts.permissions ??= ["geolocation"];
 	}
 
+	// A browser launched elsewhere takes SOCKS5 credentials too.
+	attachSocks5Auth(browser);
 	const context = await browser.newContext(opts);
 	await context.addInitScript(fp.init_script);
 	return context;

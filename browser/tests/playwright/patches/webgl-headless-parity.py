@@ -16,10 +16,10 @@ context there is nothing to rewrite, and a browser that claims a GPU in every
 other signal while having no WebGL at all is a louder tell than any renderer
 string would be.
 
-patches/webgl-headless-egl.patch takes the EGL provider directly when headless
-and stops a display-less probe from vetoing WebGL. EGL reaches Mesa's swrast
-device, or EGL_PLATFORM_SURFACELESS_MESA where there is no render node, and
-either gives a real GL ES context on llvmpipe with no X server and no hardware.
+patches/headless-software-webgl.patch has a display-less headless probe ask
+Mesa's surfaceless EGL platform instead, so gfxInfo reports the software
+renderer it really has and Firefox takes the EGL provider. That gives a real GL
+ES context on llvmpipe with no X server and no hardware.
 
 Needs Mesa's EGL and DRI drivers on Linux (libegl1, libegl-mesa0 and
 libgl1-mesa-dri on Debian and Ubuntu; mesa-libEGL and mesa-dri-drivers on

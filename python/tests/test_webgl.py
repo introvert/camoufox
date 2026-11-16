@@ -43,10 +43,12 @@ def test_converter_reproduces_the_recorded_device():
     value, less the UNMASKED_* strings, which the browser takes from
     webGl:vendor/renderer rather than the table. Keys since marked removed
     (contextAttributes) are no longer sent. WebGL1's line width range is
-    WebGL2's since Firefox 156 (test_webgl1_line_width_range_is_webgl2s), and
-    Firefox 158 and 159 add extensions on this desktop GL device
-    (test_polygon_offset_clamp_follows_the_backend,
-    test_firefox_159_extensions_follow_the_backend)."""
+    WebGL2's since Firefox 156 (test_webgl1_line_width_range_is_webgl2s),
+    Firefox 158 adds EXT_polygon_offset_clamp on this desktop GL device
+    (test_polygon_offset_clamp_follows_the_backend), and Firefox 159 adds
+    EXT_clip_control and EXT_texture_mirror_clamp_to_edge to both contexts
+    (test_clip_control_and_mirror_clamp_follow_the_backend) and
+    EXT_texture_norm16 to its WebGL2 (test_texture_norm16_follows_the_backend)."""
     removed = {
         entry["property"]
         for entry in json.loads(PROPERTIES.read_text())
@@ -55,10 +57,13 @@ def test_converter_reproduces_the_recorded_device():
     old = json.loads((Path(__file__).parent / "data" / "webgl-gtx980-linux.json").read_text())
     old = {key: value for key, value in old.items() if key not in removed}
     old["webGl:parameters"]["33902"] = old["webGl2:parameters"]["33902"]
-    added = ["EXT_clip_control", "EXT_polygon_offset_clamp", "EXT_texture_mirror_clamp_to_edge"]
-    old["webGl:supportedExtensions"] = sorted([*old["webGl:supportedExtensions"], *added], key=str.casefold)
+    for key in ("webGl:supportedExtensions", "webGl2:supportedExtensions"):
+        old[key] = sorted(
+            [*old[key], "EXT_clip_control", "EXT_polygon_offset_clamp", "EXT_texture_mirror_clamp_to_edge"],
+            key=str.casefold,
+        )
     old["webGl2:supportedExtensions"] = sorted(
-        [*old["webGl2:supportedExtensions"], *added, "EXT_texture_norm16"], key=str.casefold
+        [*old["webGl2:supportedExtensions"], "EXT_texture_norm16"], key=str.casefold
     )
     new = webgl_for_gpu("lin", *_GTX_980_LINUX, seed=0)
 
@@ -203,24 +208,21 @@ def test_draft_extensions_filtered_on_every_os():
         "supportedExtensions": ["ANGLE_instanced_arrays", "WEBGL_multi_draw", "WEBGL_compressed_texture_etc1"],
     }
     webgl2 = {**recorded, "supportedExtensions": ["EXT_texture_norm16", "WEBGL_clip_cull_distance", "OVR_multiview2"]}
-    # The recording carries no desktop GL mark, so Linux adds nothing. A device
-    # with WebGL2 is D3D11 feature level 10_0 or above, where ANGLE also clamps
-    # polygon offsets and controls clipping. EXT_texture_norm16 is the
-    # backend's from Firefox 159, never the recording's.
-    windows = [
-        "EXT_clip_control",
-        "EXT_depth_clamp",
-        "EXT_polygon_offset_clamp",
-        "EXT_texture_mirror_clamp_to_edge",
-    ]
-    expected = {
-        "win": (["ANGLE_instanced_arrays", *windows], [*windows, "EXT_texture_norm16", "OVR_multiview2"]),
-        "mac": (["ANGLE_instanced_arrays"], ["EXT_texture_norm16"]),
-        "lin": (["ANGLE_instanced_arrays"], []),
-    }
     for target_os in OSES:
         config = webgl.to_config(recorded, webgl2, target_os)
-        assert (config["webGl:supportedExtensions"], config["webGl2:supportedExtensions"]) == expected[target_os]
+        # A device with WebGL2 is D3D11 feature level 10_0 or above, where ANGLE
+        # also clamps polygon offsets and has clip control; the recording
+        # carries no desktop GL mark.
+        backend = (
+            ["EXT_clip_control", "EXT_depth_clamp", "EXT_polygon_offset_clamp", "EXT_texture_mirror_clamp_to_edge"]
+            if target_os == "win"
+            else []
+        )
+        assert config["webGl:supportedExtensions"] == ["ANGLE_instanced_arrays", *backend]
+        # The recorded EXT_texture_norm16 is dropped; Firefox 159 exposes it on
+        # every WebGL2 context (test_texture_norm16_follows_the_backend).
+        webgl2_exts = backend + ["EXT_texture_norm16", "OVR_multiview2"] if target_os == "win" else ["EXT_texture_norm16"]
+        assert config["webGl2:supportedExtensions"] == webgl2_exts
 
 
 def test_windows_exposes_ext_depth_clamp_on_every_device():
@@ -245,28 +247,40 @@ def test_polygon_offset_clamp_follows_the_backend():
                     assert ("EXT_polygon_offset_clamp" in config[key]) == want, (target_os, s, key)
 
 
-def test_firefox_159_extensions_follow_the_backend():
-    """Firefox 159 adds EXT_clip_control where it clamps polygon offsets,
-    EXT_texture_mirror_clamp_to_edge on every Windows device and on Linux
-    desktop GL, and EXT_texture_norm16 on WebGL2 except on Linux GLES drivers.
-    macOS's GL 4.1 has only the last; fpgen's Firefox 146 records predate all
-    three."""
+def test_texture_norm16_follows_the_backend():
+    """Firefox 159 exposes EXT_texture_norm16 on WebGL2 wherever the GL has
+    16-bit normalized textures (core in desktop GL 3.1): every macOS and Linux
+    device with WebGL2, never WebGL1. Measured on stock 159.0 on macOS (Apple
+    M1) and Linux (llvmpipe); 158.0.1 and fpgen's Firefox 146 records lack it.
+    On Windows ANGLE derives it from 16-bit normalized format support, which
+    D3D11 feature level 10_0 (WebGL2's minimum) requires: stock 159.0 on a
+    GeForce GTX 980 (ANGLE D3D11) lists it on WebGL2 and not WebGL1."""
+    for target_os in OSES:
+        for s in range(100):
+            config = sample_webgl_for_screen(target_os, 1920, 1080, s)
+            assert "EXT_texture_norm16" not in config["webGl:supportedExtensions"], (target_os, s)
+            if config["webGl2Enabled"]:
+                assert "EXT_texture_norm16" in config["webGl2:supportedExtensions"], (target_os, s)
+
+
+def test_clip_control_and_mirror_clamp_follow_the_backend():
+    """Firefox 159 adds EXT_clip_control (GL 4.5) and
+    EXT_texture_mirror_clamp_to_edge (GL 4.4) to WebGL1 and WebGL2. Linux
+    desktop GL (the recordings with EXT_depth_clamp) has both: measured on stock
+    159.0 on llvmpipe, x86_64 and aarch64, where 158.0.1 has neither. ANGLE's
+    D3D11 backend has mirror clamp on every device and clip control from
+    feature level 10_0 (every device with WebGL2). macOS's GL 4.1 has neither,
+    measured on stock 159.0 on Apple M1."""
     for target_os in OSES:
         for s in range(100):
             config = sample_webgl_for_screen(target_os, 1920, 1080, s)
             desktop_gl = "EXT_depth_clamp" in config["webGl:supportedExtensions"]
-            want = {
-                "EXT_clip_control": {"win": config["webGl2Enabled"], "lin": desktop_gl, "mac": False},
-                "EXT_texture_mirror_clamp_to_edge": {"win": True, "lin": desktop_gl, "mac": False},
-            }
-            for extension, by_os in want.items():
-                for key in ("webGl:supportedExtensions", "webGl2:supportedExtensions"):
-                    if key in config:
-                        assert (extension in config[key]) == by_os[target_os], (target_os, s, key, extension)
-            assert "EXT_texture_norm16" not in config["webGl:supportedExtensions"]
-            if config["webGl2Enabled"]:
-                norm16 = target_os != "lin" or desktop_gl
-                assert ("EXT_texture_norm16" in config["webGl2:supportedExtensions"]) == norm16, (target_os, s)
+            clip = {"win": config["webGl2Enabled"], "lin": desktop_gl, "mac": False}[target_os]
+            mirror = {"win": True, "lin": desktop_gl, "mac": False}[target_os]
+            for key in ("webGl:supportedExtensions", "webGl2:supportedExtensions"):
+                if key in config:
+                    assert ("EXT_clip_control" in config[key]) == clip, (target_os, s, key)
+                    assert ("EXT_texture_mirror_clamp_to_edge" in config[key]) == mirror, (target_os, s, key)
 
 
 def test_extensions_are_in_firefoxs_order():
@@ -292,17 +306,6 @@ def test_extensions_are_in_firefoxs_order():
             for key in ("webGl:supportedExtensions", "webGl2:supportedExtensions"):
                 exts = config.get(key, [])
                 assert exts == sorted(exts, key=str.casefold), (target_os, s, key)
-
-
-def test_webgl1_line_width_range_is_webgl2s():
-    """Firefox 156 creates WebGL1 on the same GL profile as WebGL2. 146 forced
-    a compatibility profile for WebGL1, where fpgen recorded the driver's
-    wide-line range (Linux: [1, 2048], [1, 7.375], [1, 10] ...)."""
-    for target_os in OSES:
-        for s in range(100):
-            config = sample_webgl_for_screen(target_os, 1920, 1080, s)
-            if config["webGl2Enabled"]:
-                assert config["webGl:parameters"]["33902"] == config["webGl2:parameters"]["33902"], (target_os, s)
 
 
 def _context_webgl_config(fingerprint):
@@ -341,3 +344,34 @@ def test_a_phone_context_reports_the_hosts_tables_not_the_launchs():
     # the launch identity's desktop GPU from answering beside its own name.
     context = fp.generate_context_fingerprint(os='android', i_know_what_im_doing=True)
     assert _context_webgl_config(context) == {}
+
+
+def test_a_uniform_block_is_at_most_what_firefox_allows():
+    """Firefox 159 caps MAX_UNIFORM_BLOCK_SIZE at 64 KiB
+    (WebGL2ContextState.cpp, kMaxUniformBlockSize); fpgen recorded the drivers' own."""
+    def block_size(recorded):
+        record = {
+            "vendor": "v", "renderer": "r", "supportedExtensions": [], "shaderPrecisionFormats": [],
+            "params": {"33902": {"value": [1, 1]}, "35376": {"value": recorded}},
+        }
+        return webgl.to_config(record, record, "lin")["webGl2:parameters"]["35376"]
+
+    assert block_size(4120744960) == 65536
+    assert block_size(16384) == 16384
+
+
+@pytest.mark.parametrize('target_os', ['win', 'mac', 'lin'])
+def test_webgl1_reports_webgl2s_values_for_every_shared_parameter(target_os):
+    # Firefox 156+ creates WebGL1 on WebGL2's GL profile, so every parameter
+    # both report is one driver value. fpgen recorded Firefox 146, which put
+    # WebGL1 on a compatibility profile: two Linux devices carry a different
+    # ALIASED_POINT_SIZE_RANGE there. CreepJS flags any mismatch except the
+    # version strings and the line width range.
+    for vendor, renderer in webgl.firefox_gpus(target_os):
+        for config in webgl.recorded_devices(target_os, vendor, renderer):
+            if not config['webGl2Enabled']:
+                continue
+            p1, p2 = config['webGl:parameters'], config['webGl2:parameters']
+            mismatch = {k: (p1[k], p2[k]) for k in p2
+                        if k in p1 and not isinstance(p1[k], str) and p1[k] != p2[k]}
+            assert not mismatch, (renderer, mismatch)

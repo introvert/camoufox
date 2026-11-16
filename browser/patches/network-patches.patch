@@ -1,5 +1,4 @@
 diff --git a/netwerk/base/nsSocketTransport2.cpp b/netwerk/base/nsSocketTransport2.cpp
-index 440e4b8dfd..12c77533a5 100644
 --- a/netwerk/base/nsSocketTransport2.cpp
 +++ b/netwerk/base/nsSocketTransport2.cpp
 @@ -1677,7 +1677,13 @@ nsresult nsSocketTransport::InitiateSocket() {
@@ -18,7 +17,6 @@ index 440e4b8dfd..12c77533a5 100644
    if (status == PR_SUCCESS) {
      PR_SetFDInheritable(fd, false);
 diff --git a/netwerk/dns/DNS.cpp b/netwerk/dns/DNS.cpp
-index 6b8b0fea64..4722b6e93b 100644
 --- a/netwerk/dns/DNS.cpp
 +++ b/netwerk/dns/DNS.cpp
 @@ -4,6 +4,8 @@
@@ -48,7 +46,6 @@ index 6b8b0fea64..4722b6e93b 100644
    uint16_t port;
    if (this->raw.family == PR_AF_INET) {
 diff --git a/netwerk/dns/DNS.h b/netwerk/dns/DNS.h
-index 4077f003ab..44335fa1d7 100644
 --- a/netwerk/dns/DNS.h
 +++ b/netwerk/dns/DNS.h
 @@ -151,6 +151,9 @@ union NetAddr {
@@ -62,7 +59,6 @@ index 4077f003ab..44335fa1d7 100644
    bool ToStringBuffer(char* buf, uint32_t bufSize) const;
    bool ToString(nsACString& aOutput) const;
 diff --git a/netwerk/dns/moz.build b/netwerk/dns/moz.build
-index 5d862cf8c7..5fed4aecc9 100644
 --- a/netwerk/dns/moz.build
 +++ b/netwerk/dns/moz.build
 @@ -109,6 +109,7 @@ GeneratedFile(
@@ -74,7 +70,6 @@ index 5d862cf8c7..5fed4aecc9 100644
      "/netwerk/ipc",
      "/netwerk/protocol/http",
 diff --git a/netwerk/dns/nsDNSService2.cpp b/netwerk/dns/nsDNSService2.cpp
-index ff09f3d502..ae6911d702 100644
 --- a/netwerk/dns/nsDNSService2.cpp
 +++ b/netwerk/dns/nsDNSService2.cpp
 @@ -4,6 +4,8 @@
@@ -97,7 +92,6 @@ index ff09f3d502..ae6911d702 100644
    }
  
 diff --git a/netwerk/protocol/http/HttpConnectionUDP.cpp b/netwerk/protocol/http/HttpConnectionUDP.cpp
-index db77675dde..c662beac36 100644
 --- a/netwerk/protocol/http/HttpConnectionUDP.cpp
 +++ b/netwerk/protocol/http/HttpConnectionUDP.cpp
 @@ -303,6 +303,11 @@ nsresult HttpConnectionUDP::InitCommon(nsIUDPSocket* aSocket,
@@ -113,7 +107,6 @@ index db77675dde..c662beac36 100644
  
    if (mConnInfo && mConnInfo->GetIsTrrServiceChannel()) {
 diff --git a/netwerk/protocol/http/moz.build b/netwerk/protocol/http/moz.build
-index b72361e28b..e89655b919 100644
 --- a/netwerk/protocol/http/moz.build
 +++ b/netwerk/protocol/http/moz.build
 @@ -335,3 +335,6 @@ SOURCE_HEADERS += [
@@ -124,7 +117,6 @@ index b72361e28b..e89655b919 100644
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
 diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
-index e62b4d0b83..8e1acfcf91 100644
 --- a/netwerk/protocol/http/nsHttpHandler.cpp
 +++ b/netwerk/protocol/http/nsHttpHandler.cpp
 @@ -12,6 +12,7 @@
@@ -178,7 +170,7 @@ index e62b4d0b83..8e1acfcf91 100644
    nsAutoCString acceptLanguages;
    intl::LocaleService::GetInstance()->GetAcceptLanguages(acceptLanguages);
  
-@@ -2134,6 +2159,18 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
+@@ -2134,6 +2159,31 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
  
  nsresult nsHttpHandler::SetAcceptEncodings(const char* aAcceptEncodings,
                                             bool isSecure, bool isDictionary) {
@@ -188,9 +180,22 @@ index e62b4d0b83..8e1acfcf91 100644
 +  // over all three makes http:// requests claim encodings no Firefox sends
 +  // there.
 +  nsCString encodingOverride;
-+  if (isSecure && !isDictionary) {
++  if (isSecure || isDictionary) {
 +    if (auto value = MaskConfig::GetString("headers.Accept-Encoding")) {
 +      encodingOverride.Assign(value.value().c_str());
++      // Stock builds the dictionary list as the secure list plus
++      // network.http.accept-encoding.dictionary (PrefsChanged). The override
++      // stands for the secure list, so a request that offers a dictionary
++      // still names dcb/dcz after it, as stock's does.
++      if (isDictionary) {
++        nsAutoCString dictionaryEncodings;
++        if (NS_SUCCEEDED(Preferences::GetCString(
++                HTTP_PREF("accept-encoding.dictionary"), dictionaryEncodings)) &&
++            !dictionaryEncodings.IsEmpty()) {
++          encodingOverride.Append(", "_ns);
++          encodingOverride.Append(dictionaryEncodings);
++        }
++      }
 +      aAcceptEncodings = encodingOverride.get();
 +    }
 +  }
