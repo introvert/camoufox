@@ -120,9 +120,10 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && needs.tested.outputs.passed != 'true'
     permissions:
       contents: read
-      actions: read # tests.yml's resolve and summary jobs declare it, for a carried push to main
+      # tests.yml's resolve and summary jobs declare it, for a carried push to
+      # main, and the patch-guards parity leg downloads the last tag build.
+      actions: read
       pull-requests: write # tests.yml's summary job declares it; it comments on pull requests only
-      actions: read # the patch-guards parity leg downloads the last tag build
     uses: ./.github/workflows/tests.yml
     with:
       ref: ${{ github.sha }}
