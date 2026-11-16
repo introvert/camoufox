@@ -4,6 +4,7 @@ import platform
 import re
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from functools import total_ordering
 from io import BufferedWriter, BytesIO
@@ -1010,6 +1011,48 @@ def selected_launch_path(specifier: str) -> str:
 
 ProgressCallback: TypeAlias = 'Callable[[int, int], None]'
 
+# Seconds before each resume of a download whose connection broke. A break
+# that received nothing since the last one uses up the next delay.
+RESUME_DELAYS = (1, 2, 4)
+
+
+def _resume(url: str, headers: Dict[str, str], start: int, total: int) -> requests.Response:
+    """The rest of a download from byte `start`. Only a 206 for exactly that
+    range continues the buffer: any other answer would write bytes twice."""
+    response = requests.get(url, stream=True, headers={**headers, 'Range': f'bytes={start}-'})
+    response.raise_for_status()
+    content_range = response.headers.get('content-range')
+    if response.status_code != 206 or content_range != f'bytes {start}-{total - 1}/{total}':
+        raise requests.HTTPError(
+            f'Could not resume {url} at byte {start} of {total}: the server answered '
+            f'{response.status_code} with Content-Range {content_range}',
+            response=response,
+        )
+    return response
+
+
+def _body(response: requests.Response, url: str, headers: Dict[str, str], block_size: int):
+    """The response body, resumed from the bytes received so far when the
+    connection breaks partway through (GitHub's asset hosts do, mid-archive)."""
+    total = int(response.headers.get('content-length', 0))
+    received = stalls = 0
+    current: Optional[requests.Response] = response
+    while True:
+        resumed_at = received
+        try:
+            if current is None:
+                current = _resume(url, headers, received, total)
+            for data in current.iter_content(block_size):
+                received += len(data)
+                yield data
+            return
+        except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError):
+            current = None
+            stalls = 0 if received > resumed_at else stalls + 1
+            if not total or stalls == len(RESUME_DELAYS):
+                raise
+            time.sleep(RESUME_DELAYS[stalls])
+
 
 def webdl(
     url: str,
@@ -1035,7 +1078,7 @@ def webdl(
     if progress_callback:
         downloaded = 0
         last_update = 0
-        for data in response.iter_content(block_size * 4):
+        for data in _body(response, url, headers, block_size * 4):
             size = buffer.write(data)
             downloaded += size
             if downloaded - last_update >= 65536 or downloaded == total_size:
@@ -1052,12 +1095,12 @@ def webdl(
             console=console,
         ) as progress:
             task = progress.add_task(desc or "Downloading", total=total_size)
-            for data in response.iter_content(block_size):
+            for data in _body(response, url, headers, block_size):
                 size = buffer.write(data)
                 progress.update(task, advance=size)
     else:
         downloaded = 0
-        for data in response.iter_content(block_size):
+        for data in _body(response, url, headers, block_size):
             size = buffer.write(data)
             downloaded += size
             if total_size:

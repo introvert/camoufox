@@ -1323,6 +1323,75 @@ const formatBytes = (v: number, _: BarOptions, type: string) =>
 export type ProgressCallback = (downloaded: number, total: number) => void;
 
 /**
+ * Delays before each resume of a download whose connection broke. A break that
+ * received nothing since the last one uses up the next delay.
+ */
+export const RESUME_DELAYS_MS = [1000, 2000, 4000];
+
+/**
+ * The rest of a download from byte `start`. Only a 206 for exactly that range
+ * continues the buffer: any other answer would write bytes twice.
+ */
+async function resume(
+	url: string,
+	start: number,
+	total: number,
+): Promise<Response> {
+	const response = await request(url, {
+		headers: { ...githubHeaders(url), Range: `bytes=${start}-` },
+	});
+	raiseForStatus(response, url);
+	const contentRange = response.headers.get("content-range");
+	if (
+		response.status !== 206 ||
+		contentRange !== `bytes ${start}-${total - 1}/${total}`
+	) {
+		await response.body?.cancel();
+		throw new Error(
+			`Could not resume ${url} at byte ${start} of ${total}: the server answered ${response.status} with Content-Range ${contentRange}`,
+		);
+	}
+	return response;
+}
+
+/**
+ * The response body, resumed from the bytes received so far when the
+ * connection breaks partway through (GitHub's asset hosts do, mid-archive).
+ * request() retries a resume that gets no response at all.
+ */
+async function* body(
+	response: Response,
+	url: string,
+): AsyncGenerator<Uint8Array> {
+	const total = Number.parseInt(
+		response.headers.get("content-length") || "0",
+		10,
+	);
+	let current: Response | null = response;
+	let received = 0;
+	let stalls = 0;
+	for (;;) {
+		const resumedAt = received;
+		current ??= await resume(url, received, total);
+		if (!current.body) {
+			throw new Error(`Response from ${url} had no body`);
+		}
+		try {
+			for await (const chunk of current.body as unknown as AsyncIterable<Uint8Array>) {
+				received += chunk.length;
+				yield chunk;
+			}
+			return;
+		} catch (error) {
+			current = null;
+			stalls = received > resumedAt ? 0 : stalls + 1;
+			if (!total || stalls === RESUME_DELAYS_MS.length) throw error;
+			await new Promise((r) => setTimeout(r, RESUME_DELAYS_MS[stalls]));
+		}
+	}
+}
+
+/**
  * Download a file from the given URL. Streams into `buffer` when one is given,
  * otherwise accumulates and returns the bytes.
  *
@@ -1360,10 +1429,7 @@ export async function webdl(
 	let downloaded = 0;
 	let lastUpdate = 0;
 	try {
-		if (!response.body) {
-			throw new Error(`Response from ${url} had no body`);
-		}
-		for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+		for await (const chunk of body(response, url)) {
 			if (buffer) {
 				// A stream that already failed (disk full) never drains: surface
 				// its error instead of waiting on it. When it is merely slow,
