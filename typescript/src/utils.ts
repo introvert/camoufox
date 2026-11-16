@@ -2090,9 +2090,11 @@ export async function launchOptions({
 	// 1.0909 is a 1920x1080 monitor at 110%): it moves to the display's scale
 	// with the geometry rescaled, so the screen is the display it was recorded
 	// on. Here, before the display clamp and the available area are derived
-	// from it.
+	// from it. A phone's ratio is its own, not a zoom: mobile mode below places
+	// it.
 	if (
 		!usedPreset &&
+		!coherence.isMobileConfig(config) &&
 		fingerprint != null &&
 		typeof fingerprint === "object" &&
 		!userSetScreenWindow

@@ -1223,6 +1223,19 @@ describe.skipIf(!MODEL.ok)(
 			expect(config["screen.width"]).toBe(Math.round(1760 * drawn));
 		});
 
+		it("a phone's own ratio is not a zoom: headful keeps one dppx", async () => {
+			// 2.625 is no desktop display mode, but it is the phone's, and a phone
+			// moves its ratio only where no real monitor can overflow.
+			withDisplay({ maxWidth: 1920, maxHeight: 1080 });
+			const { firefoxUserPrefs } = await launch({
+				os: "android",
+				headless: false,
+				i_know_what_im_doing: true,
+				executable_path: BUNDLE_EXE,
+			});
+			expect("layout.css.devPixelsPerPx" in firefoxUserPrefs).toBe(false);
+		});
+
 		it("a real display scale from fpgen stays unmapped", async () => {
 			withDisplay({ maxWidth: 1920, maxHeight: 1080 });
 			const config = await launchConfig({

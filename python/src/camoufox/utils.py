@@ -1628,7 +1628,9 @@ def launch_options(
     # from it. A caller's layout.css.devPixelsPerPx is the scale the page
     # renders at, so the ratio moves to that instead: otherwise the page reports
     # one devicePixelRatio and matches another in matchMedia('(resolution)').
-    if not _used_preset and isinstance(fingerprint, dict) and not _user_set_screen_window:
+    # A phone's ratio is its own, not a zoom: mobile mode below places it.
+    if (not _used_preset and isinstance(fingerprint, dict) and not _user_set_screen_window
+            and not is_mobile_config(config)):
         drawn_dpr = (fingerprint.get('window') or {}).get('devicePixelRatio')
         if 'window.devicePixelRatio' not in config and coherence.is_zoomed_ratio(drawn_dpr, target_os):
             try:
