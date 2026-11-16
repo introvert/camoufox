@@ -151,7 +151,7 @@ diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
  #include "WindowDestroyedEvent.h"
  #include "WindowNamedPropertiesHandler.h"
  #include "js/ComparisonOperators.h"
-@@ -7944,6 +7945,34 @@ void nsGlobalWindowInner::SetSpeechVoices(const nsAString& aVoices,
+@@ -7956,6 +7957,34 @@ void nsGlobalWindowInner::SetSpeechVoices(const nsAString& aVoices,
    RoverfoxStorageManager::RemoveSetter("setSpeechVoices");
  }
  
@@ -372,14 +372,15 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
 +    }
 +  }();
 +
++  const CamouWebGLTables tables(GetUserContextId());
 +  std::optional<
 +      std::variant<int64_t, bool, double, std::string, std::nullptr_t>>
 +      data;
 +  if (slot >= 0) {
 +    auto& cached = mSpoofedParams[slot];
 +    if (cached.kind == SpoofedParamKind::Unread) {
-+      const auto value = MaskConfig::GLParam(
-+          CamouWebGLTables(GetUserContextId()).FindGLParam(pname, mIsWebGL2));
++      const auto value =
++          MaskConfig::GLParam(tables.FindGLParam(pname, mIsWebGL2));
 +      if (!value || std::holds_alternative<std::nullptr_t>(*value)) {
 +        cached.kind = SpoofedParamKind::Real;
 +      } else if (std::holds_alternative<int64_t>(*value)) {
@@ -448,8 +449,7 @@ diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.c
 +        retval.set(JS::BooleanValue(cached.value != 0));
 +        return;
 +      case SpoofedParamKind::Other:
-+        data = MaskConfig::GLParam(
-+            CamouWebGLTables(GetUserContextId()).FindGLParam(pname, mIsWebGL2));
++        data = MaskConfig::GLParam(tables.FindGLParam(pname, mIsWebGL2));
 +        break;
 +      default:
 +        break;
