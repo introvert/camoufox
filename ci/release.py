@@ -642,17 +642,22 @@ def cmd_check_promotable(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_stamp(args: argparse.Namespace) -> int:
-    m = _BROWSER_TAG.match(args.browser_tag)
+def write_pin(tag: str) -> None:
+    """Pin the packages to the browser release `tag` of this repository."""
+    m = _BROWSER_TAG.match(tag)
     if not m:
-        die(f"{args.browser_tag!r} is not a browser release tag")
+        die(f"{tag!r} is not a browser release tag")
     PIN_FILE.write_text(json.dumps({
-        "tag": args.browser_tag,
+        "tag": tag,
         "repo": repo_name(),
         "repo_name": "Official",
         "version": m["version"],
         "build": f"{m['prefix']}.{m['n']}",
     }, indent=2) + "\n")
+
+
+def cmd_stamp(args: argparse.Namespace) -> int:
+    write_pin(args.browser_tag)
     PYPROJECT.write_text(re.sub(r'^version = "[^"]+"', f'version = "{args.py_version}"',
                                 PYPROJECT.read_text(), count=1, flags=re.M))
     pkg = json.loads(PACKAGE_JSON.read_text())
