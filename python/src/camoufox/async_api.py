@@ -221,14 +221,25 @@ async def _resolve_proxy_geo(proxy: Dict[str, str]) -> ExitGeo:
 
 
 async def async_browser_machine(browser: Browser) -> Tuple[HostIdentity, Dict[str, Any]]:
-    """browser_machine() for the async API."""
+    """browser_machine() for the async API. Contexts opened at once share one probe."""
     if '_camoufox_machine' not in vars(browser):
-        probe = await browser.new_context()
+        if '_camoufox_probe' not in vars(browser):
+            async def probe_once() -> None:
+                probe = await browser.new_context()
+                try:
+                    facts = await (await probe.new_page()).evaluate(MACHINE_PROBE)
+                finally:
+                    await probe.close()
+                browser._camoufox_host_identity, browser._camoufox_machine = machine_from_probe(facts)
+
+            browser._camoufox_probe = asyncio.ensure_future(probe_once())
+        task = browser._camoufox_probe
         try:
-            facts = await (await probe.new_page()).evaluate(MACHINE_PROBE)
+            await asyncio.shield(task)
         finally:
-            await probe.close()
-        browser._camoufox_host_identity, browser._camoufox_machine = machine_from_probe(facts)
+            # A failed probe is asked again by the next context.
+            if task.done():
+                vars(browser).pop('_camoufox_probe', None)
     return vars(browser).get('_camoufox_host_identity'), browser._camoufox_machine
 
 

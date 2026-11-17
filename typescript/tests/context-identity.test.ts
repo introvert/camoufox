@@ -110,7 +110,7 @@ describe.skipIf(!MODEL.ok)("context identities", () => {
 	it.each([
 		"navigator.doNotTrack",
 		"headers.Accept-Encoding",
-		"window.devicePixelRatio",
+		"navigator.globalPrivacyControl",
 	])("a browser-wide override of %s throws", (key) => {
 		expect(() =>
 			drawContextIdentity(null, { os: "windows", overrides: { [key]: 1 } }),
@@ -125,6 +125,75 @@ describe.skipIf(!MODEL.ok)("context identities", () => {
 				overrides: { "navigator.hardwareConcurrency": 4 },
 			}),
 		).toThrow(/runs on 8 cores/);
+	});
+
+	it.each([
+		{
+			"navigator.userAgent":
+				"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:159.0) Gecko/20100101 Firefox/159.0",
+		},
+		{ "navigator.platform": "Win32" },
+	])("an override of one half of the OS throws", (overrides) => {
+		const identity = drawContextIdentity(null, { os: "macos" });
+		expect(() =>
+			drawContextIdentity(identity, { overrides, i_know_what_im_doing: true }),
+		).toThrow(/navigator.userAgent .* navigator.platform/);
+	});
+
+	it("a context renders at its own pixel ratio", () => {
+		const identity = drawContextIdentity(null, {
+			os: "windows",
+			overrides: { "window.devicePixelRatio": 1.5 },
+			i_know_what_im_doing: true,
+		});
+		expect(
+			renderContextIdentity(identity, "159").context_options.deviceScaleFactor,
+		).toBe(1.5);
+	});
+
+	it("a phone launch keeps its pixel ratio", () => {
+		expect(() =>
+			drawContextIdentity(null, {
+				os: "android",
+				device_pixel_ratio: 2.625,
+				overrides: { "window.devicePixelRatio": 3 },
+				i_know_what_im_doing: true,
+			}),
+		).toThrow(/renders at 2.625/);
+	});
+
+	it("a stored identity needs its own cores", () => {
+		const identity = drawContextIdentity(null, {
+			os: "windows",
+			hardware_concurrency: 8,
+		});
+		expect(() =>
+			drawContextIdentity(identity, { hardware_concurrency: 4 }),
+		).toThrow(/runs on 4 cores/);
+	});
+
+	it.each([
+		["fonts", "Arial"],
+		["navigator.hardwareConcurrency", 8.5],
+	])("an override of %s of another type throws", (key, value) => {
+		expect(() =>
+			drawContextIdentity(null, {
+				os: "windows",
+				overrides: { [key]: value },
+				i_know_what_im_doing: true,
+			}),
+		).toThrow(new RegExp(key));
+	});
+
+	it("both WebRTC addresses are set", () => {
+		const identity = drawContextIdentity(null, {
+			os: "linux",
+			overrides: { "webrtc:ipv4": "203.0.113.7", "webrtc:ipv6": "2001:db8::7" },
+			i_know_what_im_doing: true,
+		});
+		const script = renderContextIdentity(identity, "159").init_script;
+		expect(script).toContain('setWebRTCIPv4("203.0.113.7")');
+		expect(script).toContain('setWebRTCIPv6("2001:db8::7")');
 	});
 
 	it("NewContext reopens its identity", async () => {
@@ -186,7 +255,7 @@ describe.skipIf(!MODEL.ok)("context identities", () => {
 				},
 			}),
 		};
-		await NewContext(browser);
+		await Promise.all([NewContext(browser), NewContext(browser)]);
 		await NewContext(browser);
 		expect(probes).toBe(1);
 		expect(script).toContain("setNavigatorHardwareConcurrency(6)");

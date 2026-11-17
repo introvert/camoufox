@@ -14,7 +14,8 @@ from unittest import mock
 import pytest
 
 from camoufox import async_api, sync_api
-from camoufox.fingerprints import draw_context_identity, render_context_identity
+from camoufox.fingerprints import draw_context_identity, identity_seed, render_context_identity
+from camoufox.webgl import webgl_for_gpu
 from camoufox.utils import machine_from_probe
 from conftest import fake_browser
 
@@ -81,7 +82,7 @@ def test_a_named_gpu_brings_its_own_tables():
     m1 = {'webGl:vendor': 'Apple', 'webGl:renderer': 'Apple M1, or similar'}
     identity = draw_context_identity(os='macos', webgl_config=('Intel Inc.', 'Intel(R) HD Graphics 400, or similar'))
     changed = draw_context_identity(identity, overrides=m1, i_know_what_im_doing=True)['config']
-    reference = draw_context_identity(os='macos', webgl_config=tuple(m1.values()))['config']
+    reference = webgl_for_gpu('mac', *m1.values(), seed=identity_seed(changed, int(identity['salt'])))
     for key in ('webGl:supportedExtensions', 'webGl2:parameters'):
         assert changed[key] == reference[key], key
 
@@ -94,7 +95,7 @@ def test_another_locale_draws_the_voices_again():
     assert german['webGl:renderer'] == identity['config']['webGl:renderer']
 
 
-@pytest.mark.parametrize('key', ['navigator.doNotTrack', 'headers.Accept-Encoding', 'window.devicePixelRatio'])
+@pytest.mark.parametrize('key', ['navigator.doNotTrack', 'headers.Accept-Encoding', 'navigator.globalPrivacyControl'])
 def test_a_browser_wide_override_raises(key):
     with pytest.raises(ValueError, match='cannot differ between contexts'):
         draw_context_identity(os='windows', overrides={key: 1})
@@ -104,6 +105,48 @@ def test_a_core_count_the_browser_does_not_have_raises():
     with pytest.raises(ValueError, match='runs on 8 cores'):
         draw_context_identity(os='windows', hardware_concurrency=8,
                               overrides={'navigator.hardwareConcurrency': 4})
+
+
+@pytest.mark.parametrize('overrides', [
+    {'navigator.userAgent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:159.0) Gecko/20100101 Firefox/159.0'},
+    {'navigator.platform': 'Win32'},
+])
+def test_an_override_of_one_half_of_the_os_raises(overrides):
+    identity = draw_context_identity(os='macos')
+    with pytest.raises(ValueError, match='navigator.userAgent .* navigator.platform'):
+        draw_context_identity(identity, overrides=overrides, i_know_what_im_doing=True)
+
+
+def test_a_context_renders_at_its_own_pixel_ratio():
+    identity = draw_context_identity(os='windows', overrides={'window.devicePixelRatio': 1.5},
+                                     i_know_what_im_doing=True)
+    assert rendered(identity)['context_options']['device_scale_factor'] == 1.5
+
+
+def test_a_phone_launch_keeps_its_pixel_ratio():
+    with pytest.raises(ValueError, match='renders at 2.625'):
+        draw_context_identity(os='android', device_pixel_ratio=2.625,
+                              overrides={'window.devicePixelRatio': 3}, i_know_what_im_doing=True)
+
+
+def test_a_stored_identity_needs_its_own_cores():
+    identity = draw_context_identity(os='windows', hardware_concurrency=8)
+    with pytest.raises(ValueError, match='runs on 4 cores'):
+        draw_context_identity(identity, hardware_concurrency=4)
+
+
+@pytest.mark.parametrize('key, value', [('fonts', 'Arial'), ('navigator.hardwareConcurrency', 8.5)])
+def test_an_override_of_another_type_raises(key, value):
+    with pytest.raises(ValueError, match=key):
+        draw_context_identity(os='windows', overrides={key: value}, i_know_what_im_doing=True)
+
+
+def test_both_webrtc_addresses_are_set():
+    identity = draw_context_identity(os='linux', overrides={'webrtc:ipv4': '203.0.113.7', 'webrtc:ipv6': '2001:db8::7'},
+                                     i_know_what_im_doing=True)
+    script = rendered(identity)['init_script']
+    assert setter_arg(script, 'setWebRTCIPv4') == '"203.0.113.7"'
+    assert setter_arg(script, 'setWebRTCIPv6') == '"2001:db8::7"'
 
 
 def test_overrides_warn():
@@ -189,6 +232,26 @@ class TestConnectedBrowser:
         facts = {**self.FACTS, 'covered': True, 'devicePixelRatio': 2.625,
                  'userAgent': 'Mozilla/5.0 (Android 16; Mobile; rv:159.0) Gecko/159.0 Firefox/159.0'}
         assert machine_from_probe(facts)[1] == {'hardware_concurrency': 6, 'device_pixel_ratio': 2.625}
+
+    def test_contexts_opened_at_once_ask_once(self):
+        browser = mock.MagicMock(spec=['version', 'new_context'])
+        browser.version = '159.0'
+        probe = mock.AsyncMock()
+
+        async def evaluate(_script):
+            await asyncio.sleep(0)
+            return self.FACTS
+
+        probe.new_page.return_value.evaluate.side_effect = evaluate
+        context = mock.AsyncMock()
+        context.add_init_script = mock.AsyncMock()
+        browser.new_context = mock.AsyncMock(side_effect=[probe, context, context])
+
+        async def open_two():
+            await asyncio.gather(async_api.AsyncNewContext(browser), async_api.AsyncNewContext(browser))
+
+        asyncio.run(open_two())
+        probe.new_page.return_value.evaluate.assert_awaited_once()
 
     def test_it_is_asked_once(self):
         browser = mock.MagicMock(spec=['version', 'new_context'])

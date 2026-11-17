@@ -134,8 +134,8 @@ An identity is plain JSON: a `salt` and the `config` it put in the context, the
 same format the Python launcher writes. `context.camoufoxIdentity` holds the one
 a context was opened as, and `NewIdentity()` draws one, or changes one, without
 opening a context. Opening a context with a stored identity gives its pages the
-same values again, on this browser or a later one, so a returning visitor is the
-same device. Save the storage with it to keep the visitor's cookies too:
+same values again, on this browser or a later one on the same machine, so a returning visitor is
+the same device. Save the storage with it to keep the visitor's cookies too:
 
 ```javascript
 import { readFileSync, writeFileSync } from "node:fs";
@@ -171,10 +171,17 @@ what is drawn from it; every other value is kept:
 
 `overrides` takes the keys in `CONTEXT_IDENTITY_KEYS` and the `webGl:` and
 `webGl2:` keys, and prints a `LeakWarning` (`i_know_what_im_doing: true`
-silences it): a value no real device reports is still a fingerprint. A key every
-context of a browser shares (below) throws `ValueError`. The identity's `config`
-holds every value the context sets, but editing it by hand skips the redraw; use
-`overrides`.
+silences it): a value no real device reports is still a fingerprint. It throws `ValueError` for:
+
+- a key every context of a browser shares (below);
+- a user agent and a platform of two OSes: override both;
+- a value of another type than the one it replaces;
+- a stored identity on a browser whose cores, or phone pixel ratio, differ from
+  the ones it was drawn with, since a page measures the browser's.
+
+The identity's `config` holds what the context sets, and the rest of the launch
+config of the same device, so a launch with it reports the same values. Editing
+it by hand skips the redraw; use `overrides`.
 
 What the browser has one of, every context of it shares: the cores a page can
 measure (`navigator.hardwareConcurrency`), and on a phone launch

@@ -242,7 +242,7 @@ launchers:
 {"salt": "8027429394483719053", "config": {"navigator.userAgent": "...", "fonts": ["..."], "...": "..."}}
 ```
 
-`config` holds the per-context keys of the table below and nothing else. `salt`
+`config` holds the per-context keys of the table below, and the device's other launch keys (below). `salt`
 is the 64-bit value every seeded draw of the identity keys from (fonts, voices,
 the GPU and its WebGL tables), together with the user agent, platform, screen
 and cores (`identity_seed()`). `draw_context_identity()` makes one and
@@ -257,7 +257,12 @@ machine, whose appVersion, oscpu, fonts, voices and GPU are drawn again from the
 same salt; another `webGl:vendor`/`webGl:renderer` brings that GPU's recorded
 tables; another locale draws the voices again. The result then goes through
 `coherence.apply()` as a launch draw does. Keys every context of a browser
-shares raise instead of being silently ignored.
+shares raise instead of being silently ignored, as do a user agent and a
+platform of two OSes, a value of another type than the one it replaces, and a
+stored identity on a browser with other cores (or, on a phone launch, another
+pixel ratio). Besides the context's values, `config` keeps the rest of that
+device's launch config (its avail area, encodings), so launching with it
+reports the same values.
 
 A browser from `firefox.connect()` has no launch config to say what it shares.
 `NewContext` asks it once (`MACHINE_PROBE`): the cores, the pixel ratio, the
@@ -281,7 +286,7 @@ values in the page.
 | `screen.availWidth`, `availHeight` | Derived by Firefox from the context's screen, for a desktop context. A phone context on a desktop launch reports its window's height instead (below) |
 | `window.screenX`, `screenY` | Setter |
 | `window.outerWidth`, `outerHeight`, `innerWidth`, `innerHeight` | Playwright's `viewport`: the launcher sets the inner size to the outer size less the browser chrome, and the outer size follows |
-| `window.devicePixelRatio` | Playwright's `deviceScaleFactor`, set only when the identity records a ratio (a preset or a phone). Pages render at it, not only report it |
+| `window.devicePixelRatio` | Playwright's `deviceScaleFactor`, set when the identity records a ratio (a preset, a phone or an override). Pages render at it, not only report it. On a phone launch the browser renders at the launch's ratio (`layout.css.devPixelsPerPx`), so a phone context must claim it |
 | `mobile` (meta viewport, phone layout) | Playwright's `isMobile`, for an Android user agent (`PageTarget._usesRDM`) |
 | `timezone` | Setter |
 | `geolocation:*` | Playwright's `geolocation`, with the permission granted |
@@ -309,7 +314,11 @@ process of its own, since the process key includes the container. What every
 context shares is the browser itself: the build, the prefs, the parent and GPU
 processes, the fonts installed for the launch's OS, and the launch-only keys
 above. Two contexts of one browser therefore read as two people on one machine,
-not as two machines.
+not as two machines. Caches that warm with use and are kept per process rather
+than per context, such as the GPU process's shader cache and the system font
+list, could in principle be timed from one context to learn what another
+loaded; that has not been measured. `performance.timeOrigin` is the document's
+own navigation start, and no API reports how long the process has run.
 
 A few values stay the launch's for every context:
 

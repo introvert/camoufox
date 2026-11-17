@@ -51,7 +51,6 @@ import {
 	Screen,
 	setAppVersion,
 	setMediaDevicesDefaults,
-	targetOsFromPlatform,
 	voicePool,
 	WINDOWS_11_MARKER_FONTS,
 } from "./fingerprints.js";
@@ -110,7 +109,7 @@ export type TargetOS = "mac" | "win" | "lin";
 type EnvVars = Record<string, string | number | boolean>;
 
 /** The OS names Camoufox takes, by target_os key. */
-const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
+export const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
 
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;

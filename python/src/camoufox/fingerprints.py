@@ -1557,14 +1557,16 @@ def _build_init_script(values: Dict[str, Any]) -> str:
         )
 
     # WebRTC IP
-    ip = values.get('webrtcIP')
-    if ip:
+    ips = values.get('webrtcIP')
+    if isinstance(ips, str):
+        ips = [ips] if ips else []
+    for ip in ips or ():
         validate_ip(ip)
         fn_name = 'setWebRTCIPv4' if valid_ipv4(ip) else 'setWebRTCIPv6'
         lines.append(
             f'  if (typeof w.{fn_name} === "function") w.{fn_name}({_json.dumps(ip)});'
         )
-    else:
+    if not ips:
         lines.append(
             '  if (typeof w.setWebRTCIPv4 === "function") w.setWebRTCIPv4("");'
         )
@@ -1601,7 +1603,7 @@ CONTEXT_IDENTITY_KEYS: FrozenSet[str] = frozenset({
     'screen.width', 'screen.height', 'screen.colorDepth',
     'window.outerWidth', 'window.outerHeight', 'window.screenX', 'window.screenY',
     'timezone', 'geolocation:latitude', 'geolocation:longitude', 'geolocation:accuracy',
-    'webrtc:ipv4', 'webrtc:ipv6', 'fonts', 'voices',
+    'webrtc:ipv4', 'webrtc:ipv6', 'fonts', 'voices', 'window.devicePixelRatio',
 })
 CONTEXT_IDENTITY_PREFIXES: Tuple[str, ...] = ('webGl:', 'webGl2:')
 
@@ -1615,7 +1617,8 @@ def is_context_identity_key(key: str) -> bool:
     return key in CONTEXT_IDENTITY_KEYS or key.startswith(CONTEXT_IDENTITY_PREFIXES)
 
 
-def _check_overrides(overrides: Dict[str, Any], hardware_concurrency: Optional[int]) -> None:
+def _check_overrides(overrides: Dict[str, Any], hardware_concurrency: Optional[int],
+                     device_pixel_ratio: Optional[float]) -> None:
     """Refuse an override no context can carry, rather than drop it silently."""
     browser_wide = sorted(k for k in overrides if not is_context_identity_key(k))
     if browser_wide:
@@ -1630,6 +1633,56 @@ def _check_overrides(overrides: Dict[str, Any], hardware_concurrency: Optional[i
         raise ValueError(
             f'navigator.hardwareConcurrency {cores}: this browser runs on {hardware_concurrency} cores, '
             'which a page can measure whatever a context claims. Launch another browser for another count.'
+        )
+    ratio = overrides.get('window.devicePixelRatio')
+    if device_pixel_ratio and ratio is not None and ratio != device_pixel_ratio:
+        raise ValueError(
+            f'window.devicePixelRatio {ratio}: this phone launch renders at {device_pixel_ratio} '
+            '(layout.css.devPixelsPerPx is the whole browser\'s). Launch another browser for another ratio.'
+        )
+    for key in ('webrtc:ipv4', 'webrtc:ipv6'):
+        if key in overrides:
+            validate_ip(overrides[key])
+    fonts = overrides.get('fonts')
+    if fonts is not None and not (isinstance(fonts, list) and all(isinstance(f, str) for f in fonts)):
+        raise ValueError(f'fonts: {fonts!r} is not a list of font family names')
+    if 'voices' in overrides:
+        from .utils import validate_voices
+
+        validate_voices(overrides['voices'])
+
+
+def _json_kind(value: Any) -> str:
+    if isinstance(value, bool):
+        return 'bool'
+    if isinstance(value, (int, float)):
+        return 'number'
+    return type(value).__name__
+
+
+def _check_override_types(config: Dict[str, Any], overrides: Dict[str, Any]) -> None:
+    """An override replaces a value of its own type: a list of fonts with a
+    list, a count with a whole number."""
+    for key, value in overrides.items():
+        if key not in config:
+            continue
+        old = config[key]
+        if _json_kind(value) != _json_kind(old) or (isinstance(old, int) and isinstance(value, float)
+                                                    and not isinstance(old, bool)):
+            raise ValueError(f'{key}: {value!r} is not a {type(old).__name__} like {old!r}')
+
+
+def _check_os_agrees(config: Dict[str, Any]) -> None:
+    """A user agent and a platform of two OSes are no device: refuse them rather
+    than redraw one to match the other, which would override the caller."""
+    from .utils import determine_ua_os
+
+    ua_os = OS_NAMES[determine_ua_os(config['navigator.userAgent'])]
+    platform_os = platform_to_os(config['navigator.platform'])
+    if ua_os != platform_os:
+        raise ValueError(
+            f'navigator.userAgent describes {ua_os} but navigator.platform '
+            f'{config["navigator.platform"]!r} describes {platform_os}: override both.'
         )
 
 
@@ -1735,7 +1788,7 @@ def draw_context_identity(
     """
     overrides = dict(overrides or {})
     drop_audio_seed(overrides)
-    _check_overrides(overrides, hardware_concurrency)
+    _check_overrides(overrides, hardware_concurrency, device_pixel_ratio)
     if overrides:
         LeakWarning.warn('context_overrides', i_know_what_im_doing)
 
@@ -1743,6 +1796,10 @@ def draw_context_identity(
         salt = int(identity['salt'])
         before = dict(identity['config'])
         config = dict(before)
+        # The device it was drawn as, which this browser must be able to be.
+        _check_overrides({k: before[k] for k in ('navigator.hardwareConcurrency', 'window.devicePixelRatio')
+                          if k in before and k not in overrides},
+                         hardware_concurrency, device_pixel_ratio if is_mobile_config(before) else None)
     else:
         before = None
         if preset is not None:
@@ -1783,9 +1840,12 @@ def draw_context_identity(
             config.pop(f'geolocation:{key}', None)
             if key in geolocation:
                 config[f'geolocation:{key}'] = geolocation[key]
+    _check_override_types(config, overrides)
     config.update(overrides)
     if before is not None:
         _forget_derived(config, before, overrides, _context_locale(config) != old_locale)
+    if {'navigator.userAgent', 'navigator.platform'} & overrides.keys():
+        _check_os_agrees(config)
     if hardware_concurrency:
         config['navigator.hardwareConcurrency'] = hardware_concurrency
 
@@ -1896,7 +1956,7 @@ def render_context_identity(
         'timezone': config.get('timezone'),
         'fontList': config.get('fonts'),
         'speechVoices': config.get('voices'),
-        'webrtcIP': config.get('webrtc:ipv4') or config.get('webrtc:ipv6') or '',
+        'webrtcIP': [config[k] for k in ('webrtc:ipv4', 'webrtc:ipv6') if config.get(k)],
         'webglConfig': {
             k: v for k, v in config.items()
             if k.startswith(('webGl:', 'webGl2:')) and k not in ('webGl:vendor', 'webGl:renderer')

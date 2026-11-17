@@ -33,12 +33,14 @@ import {
 	KeyError,
 	num,
 	orjsonDumps,
+	pyRepr,
 	pyStr,
 	pySum,
 	pySumFloats,
 	pyTruthy,
 	ValueError,
 } from "./pycompat.js";
+import { determineUaOs, OS_NAMES, validateVoices } from "./utils.js";
 import {
 	FallbackWarning,
 	LeakWarning,
@@ -1640,7 +1642,7 @@ export interface InitValues {
 	timezone?: string;
 	fontList?: string[];
 	speechVoices?: Array<string | VoiceObject>;
-	webrtcIP?: string;
+	webrtcIP?: string | string[];
 	webglConfig?: Config;
 }
 
@@ -1713,14 +1715,20 @@ export function buildInitScript(values: InitValues): string {
 	}
 
 	// WebRTC IP
-	const ip = values.webrtcIP;
-	if (pyTruthy(ip)) {
-		validateIP(ip as string);
-		const fnName = validIPv4(ip as string) ? "setWebRTCIPv4" : "setWebRTCIPv6";
+	const ips =
+		typeof values.webrtcIP === "string"
+			? values.webrtcIP
+				? [values.webrtcIP]
+				: []
+			: (values.webrtcIP ?? []);
+	for (const ip of ips) {
+		validateIP(ip);
+		const fnName = validIPv4(ip) ? "setWebRTCIPv4" : "setWebRTCIPv6";
 		lines.push(
 			`  if (typeof w.${fnName} === "function") w.${fnName}(${pyJsonDumps(ip)});`,
 		);
-	} else {
+	}
+	if (!ips.length) {
 		lines.push(
 			'  if (typeof w.setWebRTCIPv4 === "function") w.setWebRTCIPv4("");',
 		);
@@ -1821,6 +1829,7 @@ export const CONTEXT_IDENTITY_KEYS: ReadonlySet<string> = new Set([
 	"webrtc:ipv6",
 	"fonts",
 	"voices",
+	"window.devicePixelRatio",
 ]);
 export const CONTEXT_IDENTITY_PREFIXES: readonly string[] = [
 	"webGl:",
@@ -1848,6 +1857,7 @@ export function isContextIdentityKey(key: string): boolean {
 function checkOverrides(
 	overrides: Config,
 	hardwareConcurrency: number | null | undefined,
+	devicePixelRatio: number | null | undefined,
 ): void {
 	const browserWide = Object.keys(overrides)
 		.filter((k) => !isContextIdentityKey(k))
@@ -1867,6 +1877,60 @@ function checkOverrides(
 				"which a page can measure whatever a context claims. Launch another browser for another count.",
 		);
 	}
+	const ratio = overrides["window.devicePixelRatio"];
+	if (devicePixelRatio && !isNone(ratio) && ratio !== devicePixelRatio) {
+		throw new ValueError(
+			`window.devicePixelRatio ${pyStr(ratio)}: this phone launch renders at ${pyStr(devicePixelRatio)} ` +
+				"(layout.css.devPixelsPerPx is the whole browser's). Launch another browser for another ratio.",
+		);
+	}
+	for (const key of ["webrtc:ipv4", "webrtc:ipv6"])
+		if (key in overrides) validateIP(overrides[key]);
+	const fonts = overrides.fonts;
+	if (
+		fonts !== undefined &&
+		!(Array.isArray(fonts) && fonts.every((f) => typeof f === "string"))
+	)
+		throw new ValueError(
+			`fonts: ${pyRepr(fonts)} is not a list of font family names`,
+		);
+	if ("voices" in overrides) validateVoices(overrides.voices);
+}
+
+function jsonKind(value: unknown): string {
+	if (typeof value === "boolean") return "bool";
+	if (typeof value === "number" || typeof value === "bigint") return "number";
+	if (Array.isArray(value)) return "list";
+	if (value === null) return "null";
+	return typeof value;
+}
+
+/** An override replaces a value of its own type: a list of fonts with a list,
+ * a count with a whole number. */
+function checkOverrideTypes(config: Config, overrides: Config): void {
+	for (const [key, value] of Object.entries(overrides)) {
+		if (!(key in config)) continue;
+		const old = config[key];
+		if (
+			jsonKind(value) !== jsonKind(old) ||
+			(Number.isInteger(old) && !Number.isInteger(value))
+		)
+			throw new ValueError(
+				`${key}: ${pyRepr(value)} is not a ${jsonKind(old)} like ${pyRepr(old)}`,
+			);
+	}
+}
+
+/** A user agent and a platform of two OSes are no device: refuse them rather
+ * than redraw one to match the other, which would override the caller. */
+function checkOsAgrees(config: Config): void {
+	const uaOs = OS_NAMES[determineUaOs(config["navigator.userAgent"])];
+	const platformOs = targetOsFromPlatform(config["navigator.platform"]);
+	if (uaOs !== platformOs)
+		throw new ValueError(
+			`navigator.userAgent describes ${uaOs} but navigator.platform ` +
+				`${pyRepr(config["navigator.platform"])} describes ${platformOs}: override both.`,
+		);
 }
 
 /** Drop what was drawn from values that changed, so it is drawn again. */
@@ -2022,7 +2086,7 @@ export function drawContextIdentity(
 ): ContextIdentity {
 	const ov: Config = { ...(overrides ?? {}) };
 	dropAudioSeed(ov);
-	checkOverrides(ov, hardware_concurrency);
+	checkOverrides(ov, hardware_concurrency, device_pixel_ratio);
 	if (Object.keys(ov).length)
 		LeakWarning.warn("context_overrides", i_know_what_im_doing);
 
@@ -2033,6 +2097,18 @@ export function drawContextIdentity(
 		salt = BigInt(identity.salt);
 		before = { ...identity.config };
 		config = { ...before };
+		// The device it was drawn as, which this browser must be able to be.
+		const stored: Config = {};
+		for (const k of [
+			"navigator.hardwareConcurrency",
+			"window.devicePixelRatio",
+		])
+			if (k in before && !(k in ov)) stored[k] = before[k];
+		checkOverrides(
+			stored,
+			hardware_concurrency,
+			isMobileConfig(before) ? device_pixel_ratio : null,
+		);
 	} else if (!isNone(preset)) {
 		// As a launch from a preset dict: the same preset is the same identity.
 		salt = identitySalt(preset);
@@ -2074,6 +2150,7 @@ export function drawContextIdentity(
 			if (key in geolocation) config[`geolocation:${key}`] = geolocation[key];
 		}
 	}
+	checkOverrideTypes(config, ov);
 	Object.assign(config, ov);
 	if (before)
 		forgetDerived(
@@ -2082,6 +2159,8 @@ export function drawContextIdentity(
 			Object.keys(ov),
 			contextLocale(config) !== oldLocale,
 		);
+	if ("navigator.userAgent" in ov || "navigator.platform" in ov)
+		checkOsAgrees(config);
 	if (hardware_concurrency)
 		config["navigator.hardwareConcurrency"] = hardware_concurrency;
 
@@ -2256,7 +2335,9 @@ export function renderContextIdentity(
 		timezone: config.timezone,
 		fontList: config.fonts,
 		speechVoices: config.voices,
-		webrtcIP: config["webrtc:ipv4"] || config["webrtc:ipv6"] || "",
+		webrtcIP: ["webrtc:ipv4", "webrtc:ipv6"]
+			.filter((k) => config[k])
+			.map((k) => config[k]),
 		webglConfig: Object.fromEntries(
 			Object.entries(config).filter(
 				([k]) =>

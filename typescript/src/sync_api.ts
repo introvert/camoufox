@@ -294,14 +294,20 @@ export async function browserMachine(
 ): Promise<[HostIdentity | null, Machine]> {
 	const b = browser as any;
 	if (!("_camoufoxMachine" in b)) {
-		const probe = await browser.newContext();
-		let facts: MachineFacts;
-		try {
-			facts = await (await probe.newPage()).evaluate(MACHINE_PROBE);
-		} finally {
-			await probe.close();
-		}
-		[b._camoufoxHostIdentity, b._camoufoxMachine] = machineFromProbe(facts);
+		// Contexts opened at once share one probe; a failed one is asked again.
+		b._camoufoxProbe ??= (async () => {
+			const probe = await browser.newContext();
+			let facts: MachineFacts;
+			try {
+				facts = await (await probe.newPage()).evaluate(MACHINE_PROBE);
+			} finally {
+				await probe.close();
+			}
+			[b._camoufoxHostIdentity, b._camoufoxMachine] = machineFromProbe(facts);
+		})().finally(() => {
+			delete b._camoufoxProbe;
+		});
+		await b._camoufoxProbe;
 	}
 	return [b._camoufoxHostIdentity ?? null, b._camoufoxMachine];
 }
