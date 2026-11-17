@@ -8,6 +8,7 @@ page of releases, so an older build could not be found at all (#919). Every
 fetch that installs nothing exits non-zero, so CI stops at the step that failed.
 """
 
+import dataclasses
 import json
 
 import pytest
@@ -208,3 +209,25 @@ def test_an_unconfirmed_prerelease_fails_the_fetch(github, installs, monkeypatch
     assert result.exit_code != 0
     assert "Installation cancelled." in result.output
     assert installs == []
+
+
+def test_a_build_from_the_pins_repository_installs_under_its_source(tmp_path, monkeypatch):
+    """The pin is matched by its source's name, so a fork's build installs where the pin looks."""
+    monkeypatch.setattr(multiversion, "BROWSERS_DIR", tmp_path / "browsers")
+    monkeypatch.setattr(multiversion, "CONFIG_FILE", tmp_path / "config.json")
+    official = pkgman.RepoConfig.get_default()
+    fetcher = object.__new__(pkgman.CamoufoxFetcher)
+    fetcher.repo_config = dataclasses.replace(official, repos=["introvert/camoufox", *official.repos])
+    fetcher.github_repo = "introvert/camoufox"
+    fetcher._selected_version = None
+    fetcher.installed_sha256 = None
+    monkeypatch.setattr(pkgman.CamoufoxFetcher, "version", property(lambda self: "159.0"))
+    monkeypatch.setattr(pkgman.CamoufoxFetcher, "build", property(lambda self: "beta.43"))
+    monkeypatch.setattr(pkgman.CamoufoxFetcher, "verstr", property(lambda self: "159.0-beta.43"))
+    folder = multiversion.version_folder_name("159.0", "beta.43", "")
+    installed = tmp_path / "browsers" / "official" / folder
+    installed.mkdir(parents=True)
+    (installed / "version.json").write_text(json.dumps({"version": "159.0", "build": "beta.43"}))
+
+    assert multiversion.install_versioned(fetcher) is False
+    assert multiversion.load_config()["active_version"] == f"browsers/official/{folder}"

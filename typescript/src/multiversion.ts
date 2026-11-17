@@ -130,18 +130,6 @@ export function latestPerBuild(versions: CachedVersion[]): CachedVersion[] {
 }
 
 /**
- * Get the display name for a repo from the repo config, lowercased.
- */
-function getRepoName(githubRepo: string): string {
-	for (const repo of RepoConfig.loadRepos()) {
-		if (repo.repos.includes(githubRepo)) {
-			return repo.name.toLowerCase();
-		}
-	}
-	return githubRepo.split("/")[0].toLowerCase();
-}
-
-/**
  * Information about an installed Camoufox version.
  */
 export class InstalledVersion {
@@ -427,7 +415,9 @@ export async function installVersioned(
 	fetcher: CamoufoxFetcher,
 	replace: boolean = false,
 ): Promise<boolean> {
-	const repoName = getRepoName(fetcher.githubRepo);
+	// The source's name, which a pin matches, whichever of its repositories
+	// served the build: a pin can name a fork's.
+	const repoName = fetcher.repoConfig.name.toLowerCase();
 	const sha8 = fetcher._selectedVersion?.sha256
 		? fetcher._selectedVersion.sha8
 		: fetcher.installedSha8;
