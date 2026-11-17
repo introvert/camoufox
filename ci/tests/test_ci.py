@@ -3288,6 +3288,8 @@ def test_the_install_gate_launches_and_interacts_through_each_installed_package(
     assert '[str(python), "-I", str(PYTHON_PROBE)]' in source
     assert "shutil.copy(NODE_PROBE, project / NODE_PROBE.name)" in source
     assert '{"executable_path": str(browser)}' in source
+    # Pinned as release.yml stamps a published package.
+    assert "release.write_pin(tag)" in source
     python_probe = run_install.PYTHON_PROBE.read_text(encoding="utf-8")
     node_probe = run_install.NODE_PROBE.read_text(encoding="utf-8")
     assert "from camoufox.sync_api import Camoufox" in python_probe
