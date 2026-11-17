@@ -77,43 +77,12 @@ for (const type of ["click", "keydown", "keyup"]) {
 </script>"""
 
 
-def official_repo() -> str:
-    """Where the packages' Official browser builds come from (repos.yml).
-
-    Not GITHUB_REPOSITORY: a fork's CI runs under its own name, yet its packages
-    still fetch the Official builds, so the pin has to name a release there.
-    """
-    import yaml
-
-    repos = yaml.safe_load((PYTHONLIB / "src" / "camoufox" / "repos.yml").read_text(encoding="utf-8"))
-    entry = next(b for b in repos["browsers"] if b["name"] == "Official")
-    return entry["repo"].split(",")[0].strip()
-
-
 def newest_browser_tag() -> str:
     """The newest published browser release, for a tree no release was built from."""
-    for rel in release.github_releases(official_repo()):  # newest first
+    for rel in release.github_releases(release.repo_name()):  # newest first
         if not rel.get("draft") and release._BROWSER_TAG.match(rel["tag_name"]):
             return rel["tag_name"]
     raise SystemExit("no published browser release to pin")
-
-
-def pin(tag: str) -> None:
-    """Pin the packages to `tag`, as release.yml stamps every published package.
-
-    Unstamped, the pin is empty and `fetch` picks a release by its own rules,
-    which no published package does.
-    """
-    m = release._BROWSER_TAG.match(tag)
-    if not m:
-        raise SystemExit(f"{tag!r} is not a browser release tag")
-    release.PIN_FILE.write_text(json.dumps({
-        "tag": tag,
-        "repo": official_repo(),
-        "repo_name": "Official",
-        "version": m["version"],
-        "build": f"{m['prefix']}.{m['n']}",
-    }, indent=2) + "\n")
 
 
 def same_filesystem(a: Path, b: Path) -> bool:
@@ -353,7 +322,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     unstamped = release.PIN_FILE.read_text(encoding="utf-8")
     tmpdir = Path(tempfile.mkdtemp(dir=args.tmpdir))
     try:
-        pin(tag)
+        # Unstamped, the pin is empty and `fetch` picks a release by its own
+        # rules, which no published package does.
+        release.write_pin(tag)
         browser = args.browser.resolve()
         ok = python_package(result, args.work / "pythonlib", tmpdir, tag, browser, args.timeout)
         ok = npm_package(result, args.work / "typescript", tmpdir, tag, browser, args.timeout) and ok

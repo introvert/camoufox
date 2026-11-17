@@ -8,6 +8,7 @@ page of releases, so an older build could not be found at all (#919). Every
 fetch that installs nothing exits non-zero, so CI stops at the step that failed.
 """
 
+import dataclasses
 import json
 
 import pytest
@@ -117,6 +118,23 @@ def test_the_paired_build_is_fetched_with_one_api_call(github, installs, tmp_pat
     assert installs == [("Official", "156.0.1-beta.33", True)]
 
 
+def test_the_paired_build_is_fetched_from_the_repository_that_published_it(github, installs, tmp_path):
+    """A fork stamps its own repository in the pin; its builds are not in the source's."""
+    served, requested = github
+    fork = "https://api.github.com/repos/introvert/camoufox/releases"
+    (tmp_path / "browser-pin.json").write_text(json.dumps({
+        "tag": "v159.0-beta.43", "repo": "introvert/camoufox", "repo_name": "Official",
+        "version": "159.0", "build": "beta.43",
+    }))
+    served[f"{fork}/tags/v159.0-beta.43"] = _release(served, "v159.0-beta.43", "beta.43", version="159.0")
+
+    result = CliRunner().invoke(cli.cli, ["fetch"])
+
+    assert result.exit_code == 0, result.output
+    assert _api_requests(requested) == [f"{fork}/tags/v159.0-beta.43"]
+    assert installs == [("Official", "159.0-beta.43", True)]
+
+
 def test_a_build_without_its_own_tag_is_found_by_syncing(github, installs, monkeypatch):
     """Early alphas were published under other tags (v146-hardware holds 146.0.1-alpha.25)."""
     served, requested = github
@@ -191,3 +209,25 @@ def test_an_unconfirmed_prerelease_fails_the_fetch(github, installs, monkeypatch
     assert result.exit_code != 0
     assert "Installation cancelled." in result.output
     assert installs == []
+
+
+def test_a_build_from_the_pins_repository_installs_under_its_source(tmp_path, monkeypatch):
+    """The pin is matched by its source's name, so a fork's build installs where the pin looks."""
+    monkeypatch.setattr(multiversion, "BROWSERS_DIR", tmp_path / "browsers")
+    monkeypatch.setattr(multiversion, "CONFIG_FILE", tmp_path / "config.json")
+    official = pkgman.RepoConfig.get_default()
+    fetcher = object.__new__(pkgman.CamoufoxFetcher)
+    fetcher.repo_config = dataclasses.replace(official, repos=["introvert/camoufox", *official.repos])
+    fetcher.github_repo = "introvert/camoufox"
+    fetcher._selected_version = None
+    fetcher.installed_sha256 = None
+    monkeypatch.setattr(pkgman.CamoufoxFetcher, "version", property(lambda self: "159.0"))
+    monkeypatch.setattr(pkgman.CamoufoxFetcher, "build", property(lambda self: "beta.43"))
+    monkeypatch.setattr(pkgman.CamoufoxFetcher, "verstr", property(lambda self: "159.0-beta.43"))
+    folder = multiversion.version_folder_name("159.0", "beta.43", "")
+    installed = tmp_path / "browsers" / "official" / folder
+    installed.mkdir(parents=True)
+    (installed / "version.json").write_text(json.dumps({"version": "159.0", "build": "beta.43"}))
+
+    assert multiversion.install_versioned(fetcher) is False
+    assert multiversion.load_config()["active_version"] == f"browsers/official/{folder}"

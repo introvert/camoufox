@@ -242,6 +242,17 @@ def test_stamp_writes_the_pin_and_every_version(tmp_path, monkeypatch):
     assert 'LIBRARY_VERSION = "0.5.8-beta.2"' in release.TS_VERSION.read_text()
 
 
+def test_the_pin_names_the_repository_the_release_is_in(tmp_path, monkeypatch):
+    """A fork publishes its builds in its own repository, not in the Official source's."""
+    monkeypatch.setattr(release, "PIN_FILE", tmp_path / "browser-pin.json")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "introvert/camoufox")
+    release.write_pin("v159.0-beta.43")
+    assert json.loads(release.PIN_FILE.read_text()) == {
+        "tag": "v159.0-beta.43", "repo": "introvert/camoufox", "repo_name": "Official",
+        "version": "159.0", "build": "beta.43",
+    }
+
+
 def test_the_pin_and_the_launchers_agree_on_its_format(tmp_path, monkeypatch):
     """What stamp writes is what pythonlib's loader reads."""
     import sys

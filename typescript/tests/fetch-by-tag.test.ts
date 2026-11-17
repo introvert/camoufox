@@ -192,6 +192,27 @@ it("fetches the paired build with one API call", async () => {
 	expect(installs).toEqual([["156.0.1-beta.33", true]]);
 });
 
+it("fetches the paired build from the repository that published it", async () => {
+	pin = {
+		tag: "v159.0-beta.43",
+		repo: "introvert/camoufox",
+		repoName: "official",
+		version: "159.0",
+		build: "beta.43",
+	};
+	const fork = "https://api.github.com/repos/introvert/camoufox/releases";
+	served.set(
+		`${fork}/tags/v159.0-beta.43`,
+		await release("v159.0-beta.43", "beta.43", { version: "159.0" }),
+	);
+
+	await fetchCommand();
+
+	expect(process.exitCode ?? 0).toBe(0);
+	expect(apiRequests()).toEqual([`${fork}/tags/v159.0-beta.43`]);
+	expect(installs).toEqual([["159.0-beta.43", false]]);
+});
+
 it("finds a build without its own tag by syncing", async () => {
 	// Early alphas were published under other tags (v146-hardware holds 146.0.1-alpha.25).
 	await onlyOfficialSource();
