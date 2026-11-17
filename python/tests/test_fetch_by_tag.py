@@ -117,6 +117,23 @@ def test_the_paired_build_is_fetched_with_one_api_call(github, installs, tmp_pat
     assert installs == [("Official", "156.0.1-beta.33", True)]
 
 
+def test_the_paired_build_is_fetched_from_the_repository_that_published_it(github, installs, tmp_path):
+    """A fork stamps its own repository in the pin; its builds are not in the source's."""
+    served, requested = github
+    fork = "https://api.github.com/repos/introvert/camoufox/releases"
+    (tmp_path / "browser-pin.json").write_text(json.dumps({
+        "tag": "v159.0-beta.43", "repo": "introvert/camoufox", "repo_name": "Official",
+        "version": "159.0", "build": "beta.43",
+    }))
+    served[f"{fork}/tags/v159.0-beta.43"] = _release(served, "v159.0-beta.43", "beta.43", version="159.0")
+
+    result = CliRunner().invoke(cli.cli, ["fetch"])
+
+    assert result.exit_code == 0, result.output
+    assert _api_requests(requested) == [f"{fork}/tags/v159.0-beta.43"]
+    assert installs == [("Official", "159.0-beta.43", True)]
+
+
 def test_a_build_without_its_own_tag_is_found_by_syncing(github, installs, monkeypatch):
     """Early alphas were published under other tags (v146-hardware holds 146.0.1-alpha.25)."""
     served, requested = github
