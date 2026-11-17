@@ -13,19 +13,15 @@ from unittest import mock
 import pytest
 
 from camoufox import async_api, sync_api
+from conftest import fake_browser
 from camoufox.fingerprints import generate_context_fingerprint
 
 
 def _new_context(api, machine, **kwargs):
-    browser = mock.MagicMock()
-    browser.version = "152.0.4"
-    browser._camoufox_machine = machine
+    browser = fake_browser(machine=machine, is_async=api == "async")
     if api == "sync":
         sync_api.NewContext(browser, **kwargs)
     else:
-        context = mock.MagicMock()
-        context.add_init_script = mock.AsyncMock()
-        browser.new_context = mock.AsyncMock(return_value=context)
         asyncio.run(async_api.AsyncNewContext(browser, **kwargs))
     options = browser.new_context.call_args.kwargs
     script = browser.new_context.return_value.add_init_script.call_args.args[0]

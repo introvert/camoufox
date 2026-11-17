@@ -7,7 +7,7 @@ from os import environ
 from os.path import abspath
 from pathlib import Path
 from pprint import pprint
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, NoReturn, Optional, Tuple, Union
 
 import numpy as np
 import orjson
@@ -22,7 +22,7 @@ from .exceptions import (
     NonFirefoxFingerprint,
     UnknownIPLocation,
 )
-from .fingerprints import Screen, platform_to_os, _set_app_version, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, voice_pool, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts, android_gpu, android_gpus
+from .fingerprints import Screen, draw_context_identity, platform_to_os, _set_app_version, apply_mobile_mode, gpu_screen_is_plausible, is_software_renderer, from_fpgen, from_preset, generate_fingerprint, get_random_preset, _generate_random_font_subset, _generate_random_voice_subset, fix_navigator_arch, fix_hardware_concurrency, identity_salt, drop_audio_seed, identity_seed, voice_pool, follow_baseline_protection, clamp_screen_to_display, clamp_window_dimensions, clamp_window_position, raise_screen_to_modern_floor, set_media_devices_defaults, WINDOWS_11_MARKER_FONTS, OS_KEYS, OS_NAMES, POOL_KEYS, android_fonts, android_gpu, android_gpus
 from . import coherence
 from .coherence import is_mobile_config, is_mobile_user_agent
 from .geolocation import geoip_allowed, get_geolocation
@@ -898,74 +898,148 @@ def host_identity(from_options: Dict[str, Any], canvas_noise: Optional[bool]) ->
     return None if covered else (host_os, gpu)
 
 
-def context_identity(
-    browser: Any, os: Optional[str], preset: Optional[Dict[str, Any]]
-) -> Tuple[Optional[str], Optional[Tuple[str, str]]]:
-    """The OS and GPU a new context on `browser` claims (None: drawn).
+HostIdentity = Optional[Tuple[str, Optional[Gpu]]]
 
-    On a browser without the canvas placeholder they are the host's, since the
-    canvas renders there; asking for anything else raises.
-    """
-    host_identity = vars(browser).get('_camoufox_host_identity')
+# What a browser the launcher did not start (firefox.connect()) tells a page
+# about its machine, read once from a context without an identity of its own:
+# the launch identity, and whether canvas readback is covered (random on each
+# read, as RFP's placeholder is) or the host's pixels.
+MACHINE_PROBE = """() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 4;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#f60';
+    ctx.fillRect(0, 0, 4, 4);
+    const read = () => Array.from(ctx.getImageData(0, 0, 4, 4).data).join();
+    const gl = document.createElement('canvas').getContext('webgl');
+    const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
+    return {
+        userAgent: navigator.userAgent,
+        cores: navigator.hardwareConcurrency,
+        devicePixelRatio: window.devicePixelRatio,
+        covered: read() !== read(),
+        gpu: info ? [gl.getParameter(info.UNMASKED_VENDOR_WEBGL), gl.getParameter(info.UNMASKED_RENDERER_WEBGL)] : null,
+    };
+}"""
+
+
+def machine_from_probe(facts: Dict[str, Any]) -> Tuple[HostIdentity, Dict[str, Any]]:
+    """The host identity and machine (launch_machine) of a probed browser. An
+    uncovered browser renders on its host, so its launch identity is the host's
+    OS, and its GPU unless that is a software renderer, which matches any."""
+    mobile = is_mobile_user_agent(facts['userAgent'])
+    machine = {
+        'hardware_concurrency': facts['cores'],
+        'device_pixel_ratio': float(facts['devicePixelRatio']) if mobile else None,
+    }
+    if facts['covered']:
+        return None, machine
+    gpu = tuple(facts['gpu']) if facts['gpu'] and not is_software_renderer(facts['gpu'][1]) else None
+    return (POOL_KEYS[os_from_user_agent(facts['userAgent'])], gpu), machine
+
+
+def context_binding(
+    host_identity: HostIdentity, os: Optional[str]
+) -> Tuple[Optional[str], Optional[Tuple[str, str]]]:
+    """The OS and GPU a new context draws (None: drawn). On a browser without
+    the canvas placeholder they are the host's, since the canvas renders there."""
     if host_identity is None:
         return os, None
     host_os, gpu = host_identity
-    host_name = OS_NAMES[host_os]
-    preset_os = platform_to_os(preset.get('navigator', {}).get('platform', '')) if preset else None
-    preset_gpu = preset.get('webgl', {}) if preset else {}
-    if (
-        POOL_KEYS.get(os or host_name) != host_os
-        or (preset_os or host_name) != host_name
-        or (gpu and preset and (preset_gpu.get('unmaskedVendor'), preset_gpu.get('unmaskedRenderer')) != gpu)
-    ):
-        raise ValueError(
-            f'This browser renders its canvas as this {host_name} machine, so its contexts claim it'
-            f'{" and its GPU " + repr(gpu) if gpu else ""}. Launch it with canvas_noise=True to give '
-            'a context another OS or GPU.'
-        )
-    return os or host_name, gpu
+    if POOL_KEYS.get(os or OS_NAMES[host_os]) != host_os:
+        raise_unbound(host_identity)
+    return os or OS_NAMES[host_os], gpu
+
+
+def check_context_binding(host_identity: HostIdentity, config: Dict[str, Any]) -> None:
+    """Refuse an identity (drawn, a preset's, replayed or overridden) that
+    claims another OS or GPU than the host a browser without the canvas
+    placeholder renders on."""
+    if host_identity is None:
+        return
+    host_os, gpu = host_identity
+    claims_os = POOL_KEYS[os_from_user_agent(config.get('navigator.userAgent', ''))]
+    claims_gpu = (config.get('webGl:vendor'), config.get('webGl:renderer'))
+    if claims_os != host_os or (gpu and claims_gpu != gpu):
+        raise_unbound(host_identity)
+
+
+def raise_unbound(host_identity: Tuple[str, Optional[Gpu]]) -> NoReturn:
+    host_os, gpu = host_identity
+    raise ValueError(
+        f'This browser renders its canvas as this {OS_NAMES[host_os]} machine, so its contexts claim it'
+        f'{" and its GPU " + repr(gpu) if gpu else ""}. Launch it with canvas_noise=True to give '
+        'a context another OS or GPU.'
+    )
 
 
 def needs_exit_geo(
+    identity: Optional[Dict[str, Any]],
     webrtc_ip: Optional[str],
     geolocation: Optional[Dict[str, float]],
-    context_kwargs: Dict[str, Any],
+    timezone: Optional[str],
+    locale: Optional[str],
 ) -> bool:
     """Whether a context behind a proxy needs to look up where the proxy exits:
     unless the caller gave every value place_at_exit() would fill."""
-    return not (webrtc_ip and geolocation and 'timezone_id' in context_kwargs and 'locale' in context_kwargs)
+    return not (webrtc_ip and geolocation and timezone and (locale or (identity and _stored_locale(identity))))
 
 
 def place_at_exit(
     geo: ExitGeo,
+    identity: Optional[Dict[str, Any]],
     webrtc_ip: Optional[str],
     geolocation: Optional[Dict[str, float]],
-    context_kwargs: Dict[str, Any],
-) -> Tuple[str, Dict[str, float]]:
+    timezone: Optional[str],
+    locale: Optional[str],
+) -> Tuple[str, Dict[str, float], str, Optional[str]]:
     """Put a context behind a proxy where the proxy exits, as geoip places a
-    launch: its WebRTC IP, clock, locale and position. A clock that moved
-    without the locale and position named two places at once. A value the
-    caller gave is kept. Returns the WebRTC IP and geolocation."""
-    context_kwargs.setdefault('timezone_id', geo.timezone)
-    if 'locale' not in context_kwargs:
-        context_kwargs['locale'] = SELECTOR.from_region(geo.country).as_string
-    return webrtc_ip or geo.ip, geolocation or {'latitude': geo.latitude, 'longitude': geo.longitude}
+    launch: its WebRTC IP, clock and position follow the exit, and a new
+    identity's locale is drawn for the exit's country. A clock that moved
+    without the position named two places at once. A replayed identity keeps
+    its locale, and a value the caller gave is kept. Returns the WebRTC IP,
+    geolocation, timezone and locale."""
+    if not locale and not (identity and _stored_locale(identity)):
+        locale = SELECTOR.from_region(geo.country).as_string
+    return (
+        webrtc_ip or geo.ip,
+        geolocation or {'latitude': geo.latitude, 'longitude': geo.longitude},
+        timezone or geo.timezone,
+        locale,
+    )
+
+
+def _stored_locale(identity: Dict[str, Any]) -> Optional[str]:
+    config = identity['config']
+    return config.get('locale:all') or (config.get('locale:language') and config.get('navigator.language'))
+
+
+def context_identity(
+    host_identity: HostIdentity,
+    machine: Dict[str, Any],
+    identity: Optional[Dict[str, Any]],
+    ff_version: str,
+    **draw: Any,
+) -> Dict[str, Any]:
+    """draw_context_identity() for a context of a browser with this host
+    identity and machine (launch_machine), refusing one it cannot render."""
+    os, webgl_config = context_binding(host_identity, draw.pop('os', None))
+    drawn = draw_context_identity(
+        identity, os=os, webgl_config=webgl_config, ff_version=ff_version, **machine, **draw
+    )
+    check_context_binding(host_identity, drawn['config'])
+    return drawn
 
 
 def new_context_options(
-    fingerprint: Dict[str, Any],
+    rendered: Dict[str, Any],
     context_kwargs: Dict[str, Any],
     proxy: Optional[Dict[str, str]],
-    geolocation: Optional[Dict[str, float]],
 ) -> Dict[str, Any]:
-    """new_context() options for a generate_context_fingerprint() identity; the
-    caller's own options win."""
-    opts: Dict[str, Any] = {**fingerprint['context_options'], **context_kwargs}
+    """new_context() options for a rendered identity; the caller's own options win."""
+    opts: Dict[str, Any] = {**rendered['context_options'], **context_kwargs}
     if proxy:
         opts['proxy'] = proxy
-    if geolocation:
-        opts['geolocation'] = geolocation
-        opts.setdefault('permissions', ['geolocation'])
     return opts
 
 

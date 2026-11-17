@@ -17,9 +17,8 @@ import {
 	firefox,
 } from "playwright-core";
 import * as cpuAffinity from "./cpu_affinity.js";
-import { generateContextFingerprint } from "./fingerprints.js";
+import { type ContextIdentity, renderContextIdentity } from "./fingerprints.js";
 import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
-import { SELECTOR } from "./locales.js";
 import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
@@ -31,12 +30,19 @@ import {
 	driverPid,
 	type GpuDisplayOptions,
 	type Headless,
+	type HostIdentity,
 	hostIdentity,
 	type LaunchOptions,
 	launchesMobile,
 	launchMachine,
 	launchOptions,
+	MACHINE_PROBE,
+	type Machine,
+	type MachineFacts,
+	machineFromProbe,
+	needsExitGeo,
 	pinnedCoreCount,
+	placeAtExit,
 	STOCK_MEDIA_DEFAULTS,
 	spoofsWindowDimensions,
 	startVirtualDisplay,
@@ -224,26 +230,12 @@ async function launchWith(
 	return attachVirtualDisplay(browser, virtualDisplay);
 }
 
-export interface NewContextOptions extends Record<string, any> {
-	/** A fingerprint preset to use. If omitted, fpgen draws a new identity. */
-	preset?: Record<string, any>;
-	/** Target OS for the drawn identity ("windows", "macos", "linux",
-	 * "android"). On a browser launched without canvas noise, contexts claim the
-	 * host's OS and GPU, and another os or preset throws ValueError; "android"
-	 * draws from the Linux pools, so a Linux host can render it. "android" also
-	 * opens the context with isMobile and hasTouch. */
-	os?: string;
-	/** Firefox major version to claim in the UA. Defaults to the browser's own. */
-	ff_version?: string;
-	/** IPv4 or IPv6 address to spoof for WebRTC ICE candidates. */
-	webrtc_ip?: string;
-	/** Per-context proxy, in Playwright's format. The context is placed where
-	 * the proxy exits: webrtc_ip, timezoneId, locale and geolocation each
-	 * default to the exit IP's, looked up through the proxy unless all four are
-	 * given; InvalidIP is thrown if that lookup fails. */
-	proxy?: ProxyConfig;
-	/** Per-context geolocation. */
-	geolocation?: { latitude: number; longitude: number; accuracy?: number };
+export interface NewContextOptions
+	extends Omit<NewIdentityOptions, "locale" | "timezone">,
+		Record<string, any> {
+	/** Part of the identity, as Playwright names them. */
+	locale?: string;
+	timezoneId?: string;
 }
 
 /** snake_case -> camelCase, as camoufox.server.camel_case does. */
@@ -258,87 +250,188 @@ export function camelCase(snake: string): string {
 	);
 }
 
+export interface NewIdentityOptions {
+	/** A stored identity to start from. Its values are kept, except the ones
+	 * this call sets and what is drawn from them (see `overrides`). */
+	identity?: ContextIdentity | null;
+	/** A fingerprint preset to draw from. If omitted, fpgen draws. */
+	preset?: Record<string, any>;
+	/** Target OS for a drawn identity ("windows", "macos", "linux", "android").
+	 * On a browser launched without canvas noise, contexts claim the host's OS
+	 * and GPU, and another OS or GPU throws ValueError; "android" draws from the
+	 * Linux pools, so a Linux host can render it. */
+	os?: string;
+	/** Firefox major version to claim in the UA. Defaults to the browser's own. */
+	ff_version?: string;
+	/** BCP-47 tag or language list (Playwright's `locale`). */
+	locale?: string;
+	/** IANA timezone. */
+	timezone?: string;
+	/** IPv4 or IPv6 address WebRTC reports. */
+	webrtc_ip?: string;
+	/** Only read to place the identity where the proxy exits: the WebRTC IP,
+	 * timezone and geolocation follow the exit, and a new identity's locale is
+	 * drawn for its country, unless given. InvalidIP is thrown if that lookup
+	 * fails. It is not stored. */
+	proxy?: ProxyConfig;
+	geolocation?: { latitude: number; longitude: number; accuracy?: number };
+	/** Config keys to set (CONTEXT_IDENTITY_KEYS, and the webGl: and webGl2:
+	 * keys). The rest of the identity is drawn to agree: another user agent,
+	 * platform or screen draws the fonts, voices and GPU again, from the
+	 * identity's own salt, and another GPU brings its own WebGL tables. A key
+	 * every context of a browser shares throws ValueError. */
+	overrides?: Record<string, any>;
+	/** Silences the warnings for overrides and for phone identities. */
+	i_know_what_im_doing?: boolean;
+}
+
 /**
- * Creates a new browser context with a unique fingerprint identity.
+ * The host identity and machine a browser's contexts must keep. A browser
+ * from NewBrowser knows them; one from firefox.connect() is asked once.
+ */
+export async function browserMachine(
+	browser: Browser,
+): Promise<[HostIdentity | null, Machine]> {
+	const b = browser as any;
+	if (!("_camoufoxMachine" in b)) {
+		// Contexts opened at once share one probe; a failed one is asked again.
+		b._camoufoxProbe ??= (async () => {
+			const probe = await browser.newContext();
+			let facts: MachineFacts;
+			try {
+				facts = await (await probe.newPage()).evaluate(MACHINE_PROBE);
+			} finally {
+				await probe.close();
+			}
+			[b._camoufoxHostIdentity, b._camoufoxMachine] = machineFromProbe(facts);
+		})().finally(() => {
+			delete b._camoufoxProbe;
+		});
+		await b._camoufoxProbe;
+	}
+	return [b._camoufoxHostIdentity ?? null, b._camoufoxMachine];
+}
+
+/**
+ * Draws a context identity for `browser`, or changes a stored one, without
+ * opening a context. The result is plain JSON: store it, and pass it to
+ * NewContext({ identity }) to open a context that is that identity.
+ */
+export async function NewIdentity(
+	browser: Browser,
+	{
+		identity,
+		preset,
+		os,
+		ff_version,
+		locale,
+		timezone,
+		webrtc_ip,
+		proxy,
+		geolocation,
+		overrides,
+		i_know_what_im_doing = false,
+	}: NewIdentityOptions = {},
+): Promise<ContextIdentity> {
+	// Python's fpgen loads its model on import; here it is fetched on first use.
+	// launchOptions() awaits it, but a browser from connect() or a custom
+	// executable never went through launchOptions().
+	await ensureModel();
+	const ffVersion = ff_version || browser.version().split(".", 1)[0];
+	const [hostIdentity, machine] = await browserMachine(browser);
+	let place: {
+		webrtcIp?: string;
+		geolocation?: NewIdentityOptions["geolocation"];
+		timezone?: string;
+		locale?: string | null;
+	} = { webrtcIp: webrtc_ip, geolocation, timezone, locale };
+	if (
+		proxy &&
+		needsExitGeo(identity, webrtc_ip, geolocation, timezone, locale)
+	) {
+		place = await placeAtExit(
+			await proxyExitGeo(ProxyHelper.asString(proxy)),
+			identity,
+			webrtc_ip,
+			geolocation,
+			timezone,
+			locale,
+		);
+	}
+	return contextIdentity(hostIdentity, machine, identity, ffVersion, {
+		preset: preset as any,
+		os,
+		locale: place.locale,
+		timezone: place.timezone,
+		webrtc_ip: place.webrtcIp,
+		geolocation: place.geolocation,
+		overrides,
+		i_know_what_im_doing,
+	});
+}
+
+/** A context that is `identity`, to store and replay (NewContext sets it). */
+export type CamoufoxContext = BrowserContext & {
+	camoufoxIdentity: ContextIdentity;
+};
+
+/**
+ * Creates a new browser context with its own identity: a new one, drawn as a
+ * launch draws one, or the stored `identity` (from NewIdentity, or an earlier
+ * context's `camoufoxIdentity`). The identity's values are applied through
+ * addInitScript, whose setters remove themselves before page scripts run.
  *
- * Each context gets its own identity (navigator, screen, WebGL, fonts,
- * voices), drawn by fpgen unless a preset is given, with its own audio noise
- * seed. All values are applied via addInitScript so they self-destruct before
- * page scripts can detect them.
+ * `locale` and `timezoneId` are part of the identity. The other options are
+ * NewIdentity's; `proxy` is also the context's proxy. Every other option goes
+ * to Playwright's newContext() and wins over the identity's: pass
+ * `storageState` to restore a returning visitor's cookies and storage, and
+ * save them with context.storageState().
  */
 export async function NewContext(
 	browser: Browser,
 	{
+		identity,
 		preset,
 		os,
 		ff_version,
 		webrtc_ip,
 		proxy,
 		geolocation,
+		overrides,
+		i_know_what_im_doing = false,
+		locale,
+		timezoneId,
 		...contextOptions
 	}: NewContextOptions = {},
-): Promise<BrowserContext> {
-	// Python's fpgen loads its model on import; here it is fetched on first use.
-	// launchOptions() awaits it, but a browser from connect() or a custom
-	// executable never went through launchOptions().
-	await ensureModel();
-
-	// The drawn UA carries fpgen's Firefox version, which must not disagree with
-	// the browser the page is actually talking to.
+): Promise<CamoufoxContext> {
 	const ffVersion = ff_version || browser.version().split(".", 1)[0];
-
-	// Put a context behind a proxy where the proxy exits, as geoip places a
-	// launch: its WebRTC IP, clock, locale and position. A clock that moved
-	// without the locale and position named two places at once. A value the
-	// caller gave is kept.
-	let webrtcIp = webrtc_ip;
-	let position = geolocation;
-	if (
-		proxy &&
-		!(
-			webrtcIp &&
-			position &&
-			"timezoneId" in contextOptions &&
-			"locale" in contextOptions
-		)
-	) {
-		const exit = await proxyExitGeo(ProxyHelper.asString(proxy));
-		webrtcIp ||= exit.ip;
-		position ||= { latitude: exit.latitude, longitude: exit.longitude };
-		if (!("timezoneId" in contextOptions))
-			contextOptions.timezoneId = exit.timezone;
-		if (!("locale" in contextOptions))
-			contextOptions.locale = (
-				await SELECTOR.fromRegion(exit.country)
-			).asString;
-	}
-
-	const [contextOs, webglConfig] = contextIdentity(browser, os, preset);
-	const fp = generateContextFingerprint({
-		preset: preset as any,
-		os: contextOs,
+	const drawn = await NewIdentity(browser, {
+		identity,
+		preset,
+		os,
 		ff_version: ffVersion,
-		webrtc_ip: webrtcIp,
-		webgl_config: webglConfig,
-		locale: contextOptions.locale,
-		...(browser as any)._camoufoxMachine,
+		locale,
+		timezone: timezoneId,
+		webrtc_ip,
+		proxy,
+		geolocation,
+		overrides,
+		i_know_what_im_doing,
 	});
-
-	// Merge the generated context options with user overrides (user wins). They
-	// are already Playwright's JS names (userAgent, deviceScaleFactor,
-	// timezoneId); re-casing them turned userAgent into `useragent`, which
-	// Playwright ignores, so the HTTP User-Agent contradicted navigator's.
+	const rendered = renderContextIdentity(
+		drawn,
+		ffVersion,
+		i_know_what_im_doing,
+	);
+	// The rendered options are already Playwright's JS names (userAgent,
+	// deviceScaleFactor, timezoneId); the caller's own options win.
 	const opts: Record<string, any> = {
-		...fp.context_options,
+		...rendered.context_options,
 		...contextOptions,
 	};
 	if (proxy) opts.proxy = proxy;
-	if (position) {
-		opts.geolocation = position;
-		opts.permissions ??= ["geolocation"];
-	}
-
-	const context = await browser.newContext(opts);
-	await context.addInitScript(fp.init_script);
+	const context = (await browser.newContext(opts)) as CamoufoxContext;
+	await context.addInitScript(rendered.init_script);
+	context.camoufoxIdentity = drawn;
 	return context;
 }

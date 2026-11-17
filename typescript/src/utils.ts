@@ -25,9 +25,12 @@ import {
 	androidGpu,
 	androidGpus,
 	applyMobileMode,
+	type ContextIdentity,
 	clampScreenToDisplay,
 	clampWindowDimensions,
 	clampWindowPosition,
+	type DrawContextIdentityOptions,
+	drawContextIdentity,
 	dropAudioSeed,
 	fixHardwareConcurrency,
 	fixNavigatorArch,
@@ -48,7 +51,6 @@ import {
 	Screen,
 	setAppVersion,
 	setMediaDevicesDefaults,
-	targetOsFromPlatform,
 	voicePool,
 	WINDOWS_11_MARKER_FONTS,
 } from "./fingerprints.js";
@@ -70,7 +72,7 @@ import {
 	validIPv4,
 	validIPv6,
 } from "./ip.js";
-import { handleLocales } from "./locales.js";
+import { handleLocales, SELECTOR } from "./locales.js";
 import { INSTALL_DIR, LAUNCHER_CONSTANTS, OS_NAME } from "./paths.js";
 import {
 	buildFile,
@@ -107,7 +109,7 @@ export type TargetOS = "mac" | "win" | "lin";
 type EnvVars = Record<string, string | number | boolean>;
 
 /** The OS names Camoufox takes, by target_os key. */
-const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
+export const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
 
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
@@ -1226,40 +1228,203 @@ export async function hostIdentity(
 	return covered ? null : [hostOs, gpu];
 }
 
+/** What launchMachine() records: what every context of a browser shares. */
+export interface Machine {
+	hardware_concurrency: number | null;
+	device_pixel_ratio: number | null;
+}
+
 /**
- * The OS and GPU a new context on `browser` claims (null: drawn).
- *
- * On a browser without the canvas placeholder they are the host's, since the
- * canvas renders there; asking for anything else throws.
+ * What a browser the launcher did not start (firefox.connect()) tells a page
+ * about its machine, read once from a context without an identity of its own:
+ * the launch identity, and whether canvas readback is covered (random on each
+ * read, as RFP's placeholder is) or the host's pixels.
+ */
+export const MACHINE_PROBE = `() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 4;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#f60';
+    ctx.fillRect(0, 0, 4, 4);
+    const read = () => Array.from(ctx.getImageData(0, 0, 4, 4).data).join();
+    const gl = document.createElement('canvas').getContext('webgl');
+    const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
+    return {
+        userAgent: navigator.userAgent,
+        cores: navigator.hardwareConcurrency,
+        devicePixelRatio: window.devicePixelRatio,
+        covered: read() !== read(),
+        gpu: info ? [gl.getParameter(info.UNMASKED_VENDOR_WEBGL), gl.getParameter(info.UNMASKED_RENDERER_WEBGL)] : null,
+    };
+}`;
+
+export interface MachineFacts {
+	userAgent: string;
+	cores: number;
+	devicePixelRatio: number;
+	covered: boolean;
+	gpu: [string, string] | null;
+}
+
+/**
+ * The host identity and machine of a probed browser. An uncovered browser
+ * renders on its host, so its launch identity is the host's OS, and its GPU
+ * unless that is a software renderer, which matches any.
+ */
+export function machineFromProbe(
+	facts: MachineFacts,
+): [HostIdentity | null, Machine] {
+	const mobile = coherence.isMobileUserAgent(facts.userAgent);
+	const machine: Machine = {
+		hardware_concurrency: facts.cores,
+		device_pixel_ratio: mobile ? Number(facts.devicePixelRatio) : null,
+	};
+	if (facts.covered) return [null, machine];
+	const gpu: Gpu | null =
+		facts.gpu && !isSoftwareRenderer(facts.gpu[1])
+			? [facts.gpu[0], facts.gpu[1]]
+			: null;
+	return [[POOL_KEYS[osFromUserAgent(facts.userAgent)], gpu], machine];
+}
+
+function raiseUnbound(hostIdentity: HostIdentity): never {
+	const [hostOs, gpu] = hostIdentity;
+	throw new ValueError(
+		`This browser renders its canvas as this ${hostOs ? OS_NAMES[hostOs] : "unknown"} machine, so its contexts claim it` +
+			`${gpu ? ` and its GPU ${JSON.stringify(gpu)}` : ""}. Launch it with canvas_noise: true ` +
+			"to give a context another OS or GPU.",
+	);
+}
+
+/**
+ * The OS and GPU a new context draws (undefined/null: drawn). On a browser
+ * without the canvas placeholder they are the host's, since the canvas
+ * renders there.
+ */
+export function contextBinding(
+	hostIdentity: HostIdentity | null,
+	os: string | null | undefined,
+): [string | undefined, Gpu | null] {
+	if (!hostIdentity) return [os ?? undefined, null];
+	const [hostOs, gpu] = hostIdentity;
+	const hostName = hostOs ? OS_NAMES[hostOs] : undefined;
+	if (!hostName || POOL_KEYS[os || hostName] !== hostOs)
+		raiseUnbound(hostIdentity);
+	return [os || hostName, gpu];
+}
+
+/**
+ * Refuse an identity (drawn, a preset's, replayed or overridden) that claims
+ * another OS or GPU than the host a browser without the canvas placeholder
+ * renders on.
+ */
+export function checkContextBinding(
+	hostIdentity: HostIdentity | null,
+	config: Record<string, any>,
+): void {
+	if (!hostIdentity) return;
+	const [hostOs, gpu] = hostIdentity;
+	const claimsOs =
+		POOL_KEYS[osFromUserAgent(config["navigator.userAgent"] ?? "")];
+	if (
+		claimsOs !== hostOs ||
+		(gpu &&
+			(config["webGl:vendor"] !== gpu[0] ||
+				config["webGl:renderer"] !== gpu[1]))
+	)
+		raiseUnbound(hostIdentity);
+}
+
+/**
+ * drawContextIdentity() for a context of a browser with this host identity
+ * and machine, refusing one it cannot render.
  */
 export function contextIdentity(
-	browser: any,
-	os: string | undefined,
-	preset: Record<string, any> | undefined,
-): [string | undefined, Gpu | null] {
-	const hostIdentity: [TargetOS, Gpu | null] | undefined =
-		browser._camoufoxHostIdentity;
-	if (!hostIdentity) return [os, null];
-	const [hostOs, gpu] = hostIdentity;
-	const hostName = OS_NAMES[hostOs];
-	const hasPreset = pyTruthy(preset);
-	const presetGpu = preset?.webgl ?? {};
-	if (
-		POOL_KEYS[os || hostName] !== hostOs ||
-		(hasPreset &&
-			targetOsFromPlatform(preset?.navigator?.platform ?? "") !== hostName) ||
-		(gpu &&
-			hasPreset &&
-			(presetGpu.unmaskedVendor !== gpu[0] ||
-				presetGpu.unmaskedRenderer !== gpu[1]))
-	) {
-		throw new ValueError(
-			`This browser renders its canvas as this ${hostName} machine, so its contexts claim it` +
-				`${gpu ? ` and its GPU ${JSON.stringify(gpu)}` : ""}. Launch it with canvas_noise: true ` +
-				"to give a context another OS or GPU.",
-		);
-	}
-	return [os || hostName, gpu];
+	hostIdentity: HostIdentity | null,
+	machine: Machine,
+	identity: ContextIdentity | null | undefined,
+	ffVersion: string,
+	{ os, ...draw }: DrawContextIdentityOptions,
+): ContextIdentity {
+	const [contextOs, webglConfig] = contextBinding(hostIdentity, os);
+	const drawn = drawContextIdentity(identity, {
+		...draw,
+		os: contextOs,
+		webgl_config: webglConfig,
+		ff_version: ffVersion,
+		...machine,
+	});
+	checkContextBinding(hostIdentity, drawn.config);
+	return drawn;
+}
+
+/** The stored identity's own locale, if it has one. */
+function storedLocale(identity: ContextIdentity | null | undefined): unknown {
+	const config = identity?.config ?? {};
+	return (
+		config["locale:all"] ||
+		(config["locale:language"] && config["navigator.language"])
+	);
+}
+
+/** Whether a context behind a proxy needs to look up where the proxy exits:
+ * unless the caller gave every value placeAtExit() would fill. */
+export function needsExitGeo(
+	identity: ContextIdentity | null | undefined,
+	webrtcIp: string | null | undefined,
+	geolocation: unknown,
+	timezone: string | null | undefined,
+	locale: string | null | undefined,
+): boolean {
+	return !(
+		webrtcIp &&
+		geolocation &&
+		timezone &&
+		(locale || storedLocale(identity))
+	);
+}
+
+/**
+ * Put a context behind a proxy where the proxy exits, as geoip places a
+ * launch: its WebRTC IP, clock and position follow the exit, and a new
+ * identity's locale is drawn for the exit's country. A clock that moved
+ * without the position named two places at once. A replayed identity keeps
+ * its locale, and a value the caller gave is kept.
+ */
+export async function placeAtExit(
+	geo: {
+		ip: string;
+		timezone: string;
+		country: string;
+		latitude: number;
+		longitude: number;
+	},
+	identity: ContextIdentity | null | undefined,
+	webrtcIp: string | null | undefined,
+	geolocation:
+		| { latitude: number; longitude: number; accuracy?: number }
+		| null
+		| undefined,
+	timezone: string | null | undefined,
+	locale: string | null | undefined,
+): Promise<{
+	webrtcIp: string;
+	geolocation: { latitude: number; longitude: number; accuracy?: number };
+	timezone: string;
+	locale: string | null | undefined;
+}> {
+	let loc = locale;
+	if (!loc && !storedLocale(identity))
+		loc = (await SELECTOR.fromRegion(geo.country)).asString;
+	return {
+		webrtcIp: webrtcIp || geo.ip,
+		geolocation: geolocation || {
+			latitude: geo.latitude,
+			longitude: geo.longitude,
+		},
+		timezone: timezone || geo.timezone,
+		locale: loc,
+	};
 }
 
 /**

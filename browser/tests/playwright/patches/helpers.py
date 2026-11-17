@@ -16,9 +16,10 @@ async def launch_camoufox(os: str = "macos", headless: bool = True):
     from camoufox.async_api import AsyncCamoufox
     from camoufox.fingerprints import generate_context_fingerprint, get_random_preset
 
-    fp = generate_context_fingerprint(preset=get_random_preset(os=os))
+    preset = get_random_preset(os=os)
+    fp = generate_context_fingerprint(preset=preset)
     async with AsyncCamoufox(
-        fingerprint_preset=fp["preset"],
+        fingerprint_preset=preset,
         headless=headless,
         os=os,
         executable_path=str(resolve_binary()),

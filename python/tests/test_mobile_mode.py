@@ -533,11 +533,9 @@ class TestIsMobileWarning:
         assert not [w for w in recwarn if 'built for desktops' in str(w.message)]
 
     def test_android_context_on_a_linux_host_keeps_android(self):
-        browser = mock.Mock(spec=[])
-        browser._camoufox_host_identity = ('lin', None)
-        assert utils.context_identity(browser, 'android', None) == ('android', None)
+        assert utils.context_binding(('lin', None), 'android') == ('android', None)
         with pytest.raises(ValueError, match='canvas_noise=True'):
-            utils.context_identity(browser, 'windows', None)
+            utils.context_binding(('lin', None), 'windows')
 
 
 class TestFleetGpu:

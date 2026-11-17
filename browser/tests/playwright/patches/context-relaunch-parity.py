@@ -128,7 +128,7 @@ def main() -> int:
             # The relaunch takes the locale as a launch does, and a phone's pixel
             # ratio is a pref, not a config key.
             config = {k: v for k, v in fp["config"].items() if k not in LOCALE_KEYS}
-            dpr = fp["preset"]["screen"].get("devicePixelRatio")
+            dpr = config.pop("window.devicePixelRatio", None)
             prefs = {"layout.css.devPixelsPerPx": str(dpr)} if dpr else {}
             with Camoufox(**launch_kwargs(**common, locale=LOCALE, firefox_user_prefs=prefs,
                                           config={**config, "timezone": TIMEZONE})) as browser:

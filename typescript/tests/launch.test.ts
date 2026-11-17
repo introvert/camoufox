@@ -688,12 +688,11 @@ describe("test_launch_environment: stock media defaults", () => {
 	});
 
 	it("an Android context on a Linux host keeps its OS", () => {
-		const browser = { _camoufoxHostIdentity: ["lin", null] };
-		expect(utils.contextIdentity(browser, "android", undefined)).toEqual([
+		expect(utils.contextBinding(["lin", null], "android")).toEqual([
 			"android",
 			null,
 		]);
-		expect(() => utils.contextIdentity(browser, "windows", undefined)).toThrow(
+		expect(() => utils.contextBinding(["lin", null], "windows")).toThrow(
 			/canvas_noise/,
 		);
 	});

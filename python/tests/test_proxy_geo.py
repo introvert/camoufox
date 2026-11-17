@@ -20,6 +20,7 @@ from urllib.parse import unquote, urlsplit
 import pytest
 
 from camoufox import async_api, ip, sync_api
+from conftest import fake_browser
 from camoufox.exceptions import InvalidIP
 
 
@@ -45,18 +46,11 @@ EXIT = {
 
 
 def _sync_browser():
-    browser = mock.MagicMock()
-    browser.version = "152.0.4"
-    return browser
+    return fake_browser()
 
 
 def _async_browser():
-    context = mock.MagicMock()
-    context.add_init_script = mock.AsyncMock()
-    browser = mock.MagicMock()
-    browser.version = "152.0.4"
-    browser.new_context = mock.AsyncMock(return_value=context)
-    return browser
+    return fake_browser(is_async=True)
 
 
 def _new_context(api, proxy, **kwargs):

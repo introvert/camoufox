@@ -116,18 +116,80 @@ await browser.close();
 
 | `NewContext` option | Effect |
 |---|---|
+| `identity` | A stored identity to open the context as, from `NewIdentity()` or an earlier context's `camoufoxIdentity` ([below](#storing-and-changing-an-identity)). Without it, a new identity is drawn. |
+| `overrides` | Config keys to set in the identity; the rest is drawn to agree with them ([below](#storing-and-changing-an-identity)). |
 | `preset` | Use this fingerprint preset object instead of an fpgen draw. |
 | `os` | `"windows"`, `"macos"`, `"linux"` or `"android"` for the drawn identity. On a browser without canvas noise, the host's OS, and anything else throws `ValueError`; `"android"` draws from the Linux pools, so a Linux host can render it. `"android"` also opens the context with `isMobile` and `hasTouch` ([Firefox for Android](#firefox-for-android)). |
 | `ff_version` | Firefox major version claimed in the User-Agent. Defaults to the browser's own. |
 | `webrtc_ip` | IPv4 or IPv6 address WebRTC reports. |
 | `proxy` | Per-context proxy, in Playwright's format. The context is placed where the proxy exits: `webrtc_ip`, `timezoneId`, `locale` and `geolocation` each default to the exit IP's, looked up through the proxy unless all four are given, and `InvalidIP` is thrown if the lookup fails. |
 | `geolocation` | `{ latitude, longitude }`; also grants the `geolocation` permission. |
-| `locale` | Playwright's: a tag (`"de-DE"`, reported as `de-DE, de`) or a language list (`"de, en-US, en"`) whose first entry is the locale. The context's speech voices are drawn for it. |
-| anything else | Passed to Playwright's `browser.newContext()` (camelCase, e.g. `timezoneId`), overriding the generated value. |
+| `locale` | Playwright's: a tag (`"de-DE"`, reported as `de-DE, de`) or a language list (`"de, en-US, en"`) whose first entry is the locale. The context's speech voices are drawn for it. Part of the identity. |
+| `timezoneId` | Playwright's, an IANA timezone. Part of the identity. |
+| anything else | Passed to Playwright's `browser.newContext()` (camelCase), overriding the generated value. `storageState` restores cookies and storage saved with `context.storageState()`. |
+
+#### Storing and changing an identity
+
+An identity is plain JSON: a `salt` and the `config` it put in the context, the
+same format the Python launcher writes. `context.camoufoxIdentity` holds the one
+a context was opened as, and `NewIdentity()` draws one, or changes one, without
+opening a context. Opening a context with a stored identity gives its pages the
+same values again, on this browser or a later one on the same machine, so a returning visitor is
+the same device. Save the storage with it to keep the visitor's cookies too:
+
+```javascript
+import { readFileSync, writeFileSync } from "node:fs";
+import { Camoufox, NewContext, NewIdentity } from "camoufox";
+
+let browser = await Camoufox({ headless: true });
+let context = await NewContext(browser, { locale: "fr-FR", timezoneId: "Europe/Paris" });
+await (await context.newPage()).goto("https://example.com");
+writeFileSync("visitor.json", JSON.stringify({
+    identity: context.camoufoxIdentity,
+    storage: await context.storageState(),
+}));
+await browser.close();
+
+const saved = JSON.parse(readFileSync("visitor.json", "utf8"));
+browser = await Camoufox({ headless: true });
+context = await NewContext(browser, { identity: saved.identity, storageState: saved.storage });
+const german = await NewIdentity(browser, { identity: saved.identity, locale: "de-DE" });
+const tokyo = await NewContext(browser, { identity: saved.identity, timezoneId: "Asia/Tokyo" });
+await browser.close();
+```
+
+Passing a stored identity with other options changes only what they set and
+what is drawn from it; every other value is kept:
+
+| Change | Also drawn again |
+|---|---|
+| `locale` | The speech voices, for the new language |
+| `timezoneId`, `geolocation`, `webrtc_ip` | Nothing |
+| `proxy` | The timezone, geolocation and WebRTC IP follow the exit; the stored locale is kept |
+| `overrides` of the user agent, platform or screen | Another machine: `appVersion`, `oscpu`, the fonts, voices and GPU, from the identity's own salt, so the same change always draws the same values |
+| `overrides` of `webGl:vendor` and `webGl:renderer` | That GPU's recorded WebGL tables |
+
+`overrides` takes the keys in `CONTEXT_IDENTITY_KEYS` and the `webGl:` and
+`webGl2:` keys, and prints a `LeakWarning` (`i_know_what_im_doing: true`
+silences it): a value no real device reports is still a fingerprint. It throws `ValueError` for:
+
+- a key every context of a browser shares (below);
+- a user agent and a platform of two OSes: override both;
+- a value of another type than the one it replaces;
+- a stored identity on a browser whose cores, or phone pixel ratio, differ from
+  the ones it was drawn with, since a page measures the browser's.
+
+The identity's `config` holds what the context sets, and the rest of the launch
+config of the same device, so a launch with it reports the same values. Editing
+it by hand skips the redraw; use `overrides`.
 
 What the browser has one of, every context of it shares: the cores a page can
 measure (`navigator.hardwareConcurrency`), and on a phone launch
 (`os: "android"`) the device, since the whole browser renders at its pixel ratio.
+The media devices, `Accept-Encoding`, `navigator.doNotTrack` and
+`globalPrivacyControl` are launch settings too. A browser from
+`firefox.connect()` that the launcher did not start is asked for its cores, pixel
+ratio, OS and GPU once, by a page in a throwaway context.
 
 Canvas noise belongs to the browser, not the context (see
 [The canvas on another OS](#the-canvas-on-another-os)). On a browser without it,

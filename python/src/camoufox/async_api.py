@@ -1,6 +1,6 @@
 import asyncio
 from functools import partial
-from typing import Any, Dict, Optional, Union, overload
+from typing import Any, Dict, Optional, Tuple, Union, overload
 
 from playwright.async_api import (
     Browser,
@@ -12,9 +12,11 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from .fingerprints import generate_context_fingerprint
+from .fingerprints import render_context_identity
 from .ip import ExitGeo, Proxy, proxy_exit_geo
 from .utils import (
+    MACHINE_PROBE,
+    HostIdentity,
     async_attach_vd,
     attach_context_defaults,
     context_identity,
@@ -22,6 +24,7 @@ from .utils import (
     launch_options,
     launch_machine,
     launches_mobile,
+    machine_from_probe,
     needs_exit_geo,
     new_context_options,
     persistent_context_options,
@@ -217,8 +220,61 @@ async def _resolve_proxy_geo(proxy: Dict[str, str]) -> ExitGeo:
     return await loop.run_in_executor(None, proxy_exit_geo, Proxy(**proxy).as_string())
 
 
+async def async_browser_machine(browser: Browser) -> Tuple[HostIdentity, Dict[str, Any]]:
+    """browser_machine() for the async API. Contexts opened at once share one probe."""
+    if '_camoufox_machine' not in vars(browser):
+        if '_camoufox_probe' not in vars(browser):
+            async def probe_once() -> None:
+                probe = await browser.new_context()
+                try:
+                    facts = await (await probe.new_page()).evaluate(MACHINE_PROBE)
+                finally:
+                    await probe.close()
+                browser._camoufox_host_identity, browser._camoufox_machine = machine_from_probe(facts)
+
+            browser._camoufox_probe = asyncio.ensure_future(probe_once())
+        task = browser._camoufox_probe
+        try:
+            await asyncio.shield(task)
+        finally:
+            # A failed probe is asked again by the next context.
+            if task.done():
+                vars(browser).pop('_camoufox_probe', None)
+    return vars(browser).get('_camoufox_host_identity'), browser._camoufox_machine
+
+
+async def AsyncNewIdentity(
+    browser: Browser,
+    identity: Optional[Dict[str, Any]] = None,
+    *,
+    preset: Optional[Dict[str, Any]] = None,
+    os: Optional[str] = None,
+    ff_version: Optional[str] = None,
+    locale: Optional[str] = None,
+    timezone: Optional[str] = None,
+    webrtc_ip: Optional[str] = None,
+    proxy: Optional[Dict[str, str]] = None,
+    geolocation: Optional[Dict[str, float]] = None,
+    overrides: Optional[Dict[str, Any]] = None,
+    i_know_what_im_doing: bool = False,
+) -> Dict[str, Any]:
+    """The async NewIdentity (camoufox.sync_api.NewIdentity has the parameters)."""
+    ff_version = ff_version or browser.version.split('.', 1)[0]
+    host_identity, machine = await async_browser_machine(browser)
+    if proxy and needs_exit_geo(identity, webrtc_ip, geolocation, timezone, locale):
+        webrtc_ip, geolocation, timezone, locale = place_at_exit(
+            await _resolve_proxy_geo(proxy), identity, webrtc_ip, geolocation, timezone, locale
+        )
+    return await asyncio.get_running_loop().run_in_executor(None, partial(
+        context_identity, host_identity, machine, identity, ff_version, preset=preset, os=os,
+        locale=locale, timezone=timezone, webrtc_ip=webrtc_ip, geolocation=geolocation,
+        overrides=overrides, i_know_what_im_doing=i_know_what_im_doing,
+    ))
+
+
 async def AsyncNewContext(
     browser: Browser,
+    identity: Optional[Dict[str, Any]] = None,
     *,
     preset: Optional[Dict[str, Any]] = None,
     os: Optional[str] = None,
@@ -226,50 +282,20 @@ async def AsyncNewContext(
     webrtc_ip: Optional[str] = None,
     proxy: Optional[Dict[str, str]] = None,
     geolocation: Optional[Dict[str, float]] = None,
+    overrides: Optional[Dict[str, Any]] = None,
+    i_know_what_im_doing: bool = False,
     **context_kwargs: Any,
 ) -> BrowserContext:
-    """
-    Creates a new browser context with a unique fingerprint identity.
-
-    Each context gets its own identity (navigator, screen, WebGL, fonts, voices),
-    drawn by fpgen unless a preset is given. All values are applied
-    via addInitScript so they self-destruct before page scripts can detect them.
-
-    Parameters:
-        browser: A Browser instance from AsyncNewBrowser or AsyncCamoufox.
-        preset: A fingerprint preset dict to use. If None, fpgen draws a new identity.
-        os: Target OS for the drawn identity ("windows", "macos", "linux", "android"). On a browser
-            launched without canvas noise, contexts claim the host's OS and GPU, and another os or
-            preset raises ValueError; "android" draws from the Linux pools, so a Linux host can
-            render it. "android" also opens the context with is_mobile and has_touch.
-        ff_version: Firefox major version to claim in the UA. Defaults to the browser's own.
-        webrtc_ip: IPv4 or IPv6 address to spoof for WebRTC ICE candidates.
-        proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).
-            The context is placed where the proxy exits: webrtc_ip, timezone_id, locale and
-            geolocation each default to the exit IP's, looked up through the proxy unless all
-            four are given; InvalidIP is raised if that lookup fails.
-        geolocation: Per-context geolocation ({"latitude": float, "longitude": float}).
-        **context_kwargs: Additional Playwright new_context() options.
-    """
-    # The drawn UA carries fpgen's Firefox version, which must not disagree with
-    # the browser the page is actually talking to.
+    """The async NewContext (camoufox.sync_api.NewContext has the parameters)."""
     ff_version = ff_version or browser.version.split('.', 1)[0]
-
-    if proxy and needs_exit_geo(webrtc_ip, geolocation, context_kwargs):
-        webrtc_ip, geolocation = place_at_exit(
-            await _resolve_proxy_geo(proxy), webrtc_ip, geolocation, context_kwargs
-        )
-
-    os, webgl_config = context_identity(browser, os, preset)
-    fp = await asyncio.get_event_loop().run_in_executor(
-        None,
-        lambda: generate_context_fingerprint(
-            preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config,
-            locale=context_kwargs.get('locale'),
-            **vars(browser).get('_camoufox_machine', {}),
-        ),
+    drawn = await AsyncNewIdentity(
+        browser, identity, preset=preset, os=os, ff_version=ff_version,
+        locale=context_kwargs.pop('locale', None), timezone=context_kwargs.pop('timezone_id', None),
+        webrtc_ip=webrtc_ip, proxy=proxy, geolocation=geolocation, overrides=overrides,
+        i_know_what_im_doing=i_know_what_im_doing,
     )
-
-    context = await browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
-    await context.add_init_script(fp['init_script'])
+    rendered = render_context_identity(drawn, ff_version, i_know_what_im_doing)
+    context = await browser.new_context(**new_context_options(rendered, context_kwargs, proxy))
+    await context.add_init_script(rendered['init_script'])
+    context.camoufox_identity = drawn
     return context

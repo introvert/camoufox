@@ -990,6 +990,7 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		let script = "";
 		const browser = {
 			version: () => "150.0.2",
+			_camoufoxMachine: {},
 			newContext: async (o: Record<string, any>) => {
 				options = o;
 				return {
