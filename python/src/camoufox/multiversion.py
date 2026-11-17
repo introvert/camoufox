@@ -97,18 +97,6 @@ def latest_per_build(versions: List[Dict]) -> List[Dict]:
     )
 
 
-def get_repo_name(github_repo: str) -> str:
-    """
-    Get display name for a repo from repos.yml, lowercased
-    """
-    from .pkgman import RepoConfig
-
-    for repo in RepoConfig.load_repos():
-        if github_repo in repo.repos:
-            return repo.name.lower()
-    return github_repo.split('/')[0].lower()
-
-
 @dataclass
 class InstalledVersion:
     """
@@ -337,7 +325,9 @@ def install_versioned(fetcher, replace: bool = False) -> bool:
     """
     Install to browsers/{repo_name}/{version}-{build}-{sha8}, suffix omitted when no sha
     """
-    repo_name = get_repo_name(fetcher.github_repo)
+    # The source's name, which a pin matches, whichever of its repositories
+    # served the build: a pin can name a fork's.
+    repo_name = fetcher.repo_config.name.lower()
     if fetcher._selected_version and fetcher._selected_version.sha256:
         sha8 = fetcher._selected_version.sha8
     else:

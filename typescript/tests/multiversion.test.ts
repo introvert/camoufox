@@ -150,3 +150,31 @@ it("finds a catalog item's install, legacy folders included", () => {
 	expect(find("152.0.4-beta.29")).toBe("152.0.4-beta.29");
 	expect(find("152.0.4-beta.29", undefined, 2)).toBeNull();
 });
+
+it("a build from the pin's repository installs under its source", async () => {
+	// The pin is matched by its source's name, so a fork's build installs where
+	// the pin looks.
+	const { CamoufoxFetcher, RepoConfig } = await import("../src/pkgman.js");
+	const official = RepoConfig.getDefault();
+	const fetcher = Object.create(CamoufoxFetcher.prototype);
+	const own = (value: unknown) => ({ value, configurable: true });
+	Object.defineProperties(fetcher, {
+		repoConfig: own(
+			new RepoConfig({
+				...official,
+				repos: ["introvert/camoufox", ...official.repos],
+			}),
+		),
+		githubRepo: own("introvert/camoufox"),
+		version: own("159.0"),
+		build: own("beta.43"),
+		verstr: own("159.0-beta.43"),
+		_selectedVersion: own(null),
+		installedSha8: own(""),
+	});
+	const folder = "159.0-beta.43";
+	addInstall("official", folder, { version: "159.0", build: "beta.43" });
+
+	expect(await mv.installVersioned(fetcher)).toBe(false);
+	expect(mv.loadConfig().active_version).toBe(`browsers/official/${folder}`);
+});
