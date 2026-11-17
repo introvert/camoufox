@@ -10,3 +10,19 @@ def no_host_gpu_probe(monkeypatch):
     from camoufox import utils
 
     monkeypatch.setattr(utils, 'host_gpu', lambda *args: None)
+
+
+def fake_browser(version='152.0.4', machine=None, host_identity=None, is_async=False):
+    """A Browser stand-in for NewContext: a launch's NewBrowser records its
+    machine and host identity on the browser, so nothing is probed."""
+    from unittest import mock
+
+    browser = mock.MagicMock()
+    browser.version = version
+    browser._camoufox_machine = machine or {}
+    browser._camoufox_host_identity = host_identity
+    if is_async:
+        context = mock.MagicMock()
+        context.add_init_script = mock.AsyncMock()
+        browser.new_context = mock.AsyncMock(return_value=context)
+    return browser

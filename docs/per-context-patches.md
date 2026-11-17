@@ -75,8 +75,9 @@ await browser.close();
 ```
 
 Values set this way must still describe one plausible machine. The launchers'
-`generate_context_fingerprint()` (`fingerprints.py`) draws them together and
-builds this script; prefer it to hand-picked values.
+`draw_context_identity()` (`fingerprints.py`) draws them together and
+`render_context_identity()` builds this script and the context options; prefer
+them to hand-picked values.
 
 ## Architecture
 
@@ -215,7 +216,7 @@ The User-Agent's version is rewritten to the running browser's.
 | Fonts | `_generate_random_font_subset()`: one OS-version base plus measured additions ([FONTS.md](FONTS.md)); never from presets |
 | Voices | `_generate_random_voice_subset()`, from `voice-manifests.json`, seeded by the identity and drawn for the locale; never from presets. `voices:pool` holds every voice of the manifests for the OSes a context may claim |
 | Timezone | The preset, or `timezone` in `CAMOU_CONFIG` (from geoip); with a proxy, `NewContext` takes the exit IP's |
-| Locale | Playwright's `locale`; with a proxy, `NewContext` draws one for the exit IP's country, as geoip does at launch. A tag ("de-DE") also gives the languages a Firefox set to it reports ("de-DE, de"); a list ("de, en-US, en") is the languages as given, and its first entry the locale of `Intl` and Firefox's own strings |
+| Locale | Playwright's `locale`; with a proxy, a new identity draws one for the exit IP's country, as geoip does at launch, and a stored one keeps its own. A tag ("de-DE") also gives the languages a Firefox set to it reports ("de-DE, de"); a list ("de, en-US, en") is the languages as given, and its first entry the locale of `Intl` and Firefox's own strings |
 | WebRTC IP | `NewContext`'s `webrtc_ip` or the proxy's exit IP, to the IPv4 or IPv6 setter; an invalid address raises `InvalidIP` |
 | Geolocation | The `geolocation` argument, via Playwright; with a proxy, the exit IP's position |
 
@@ -231,6 +232,84 @@ launch draws one, from the same fpgen model and pools. Playwright's own
 `new_context()` draws nothing, and its pages report the launch's identity. An existing context keeps the identity it was
 created with: the setters are offered once, so a page cannot change it, and its
 cookies, storage, cache and open pages would tie the old identity to the new one.
+
+### A context identity
+
+What `NewContext` puts in a context is one JSON object, the same in both
+launchers:
+
+```json
+{"salt": "8027429394483719053", "config": {"navigator.userAgent": "...", "fonts": ["..."], "...": "..."}}
+```
+
+`config` holds the per-context keys of the table below and nothing else. `salt`
+is the 64-bit value every seeded draw of the identity keys from (fonts, voices,
+the GPU and its WebGL tables), together with the user agent, platform, screen
+and cores (`identity_seed()`). `draw_context_identity()` makes one and
+`render_context_identity()` turns one into the init script and context
+options, so a stored identity renders to the same script on every replay, with
+only the user agent's Firefox version following the running browser.
+
+Changing a stored identity (`overrides`, `locale`, `timezone`, ...) keeps every
+value except the changed ones and what is drawn from them
+(`_forget_derived()`): another user agent, platform or screen is another
+machine, whose appVersion, oscpu, fonts, voices and GPU are drawn again from the
+same salt; another `webGl:vendor`/`webGl:renderer` brings that GPU's recorded
+tables; another locale draws the voices again. The result then goes through
+`coherence.apply()` as a launch draw does. Keys every context of a browser
+shares raise instead of being silently ignored.
+
+A browser from `firefox.connect()` has no launch config to say what it shares.
+`NewContext` asks it once (`MACHINE_PROBE`): the cores, the pixel ratio, the
+OS, the GPU, and whether its canvas is covered, read as two readbacks of one
+drawing that differ. An uncovered browser binds its contexts to its OS and GPU,
+as a launch without `canvas_noise` does.
+
+### Every launch key, per context
+
+How each config key a launch draw sets reaches a context. Checked on
+v159.0-beta.43 by opening contexts of each OS on one browser and reading the
+values in the page.
+
+| Key | Mechanism |
+|---|---|
+| `navigator.userAgent`, `platform`, `oscpu`, `appVersion` | Setter. `headers.User-Agent` follows from Playwright's `userAgent`, which the launcher sets to the same string |
+| `navigator.hardwareConcurrency` | Setter, held to the browser's cores (above) |
+| `navigator.language`, `languages`, `headers.Accept-Language`, `locale:*` | Playwright's `locale` (`per-context-consistency.patch`). `Intl` in the page and in workers takes the context's locale |
+| `navigator.maxTouchPoints`, the `pointer`/`hover` media features | Playwright's `hasTouch` and `isMobile`, which the launcher sets for a phone identity |
+| `screen.width`, `height`, `colorDepth`, `pixelDepth` | Setters; `pixelDepth` reports `colorDepth` |
+| `screen.availWidth`, `availHeight` | Derived by Firefox from the context's screen, for a desktop context. A phone context on a desktop launch reports its window's height instead (below) |
+| `window.screenX`, `screenY` | Setter |
+| `window.outerWidth`, `outerHeight`, `innerWidth`, `innerHeight` | Playwright's `viewport`: the launcher sets the inner size to the outer size less the browser chrome, and the outer size follows |
+| `window.devicePixelRatio` | Playwright's `deviceScaleFactor`, set only when the identity records a ratio (a preset or a phone). Pages render at it, not only report it |
+| `mobile` (meta viewport, phone layout) | Playwright's `isMobile`, for an Android user agent (`PageTarget._usesRDM`) |
+| `timezone` | Setter |
+| `geolocation:*` | Playwright's `geolocation`, with the permission granted |
+| `webrtc:ipv4`, `webrtc:ipv6` | Setters |
+| `webGl:*`, `webGl2:*` | Setters (`setWebGLVendor`, `setWebGLRenderer`, `setWebGLConfig`) |
+| `fonts` | Setter |
+| `voices` | Setter, choosing among the launch's `voices:pool` |
+| `mediaDevices:*` | Launch only (below) |
+| `AudioContext:*` | Launch only: the output device's rate, latency and channels, which the machine has one of |
+| `navigator.doNotTrack`, `globalPrivacyControl`, `headers.Accept-Encoding` | Launch only: browser settings, not draws |
+| `window.history.length` | Not spoofed: a new context has a real history of 1 |
+| `canvas:seed`, `audio:seed`, `fonts:spacing_seed`, `canvas:aaOffset`, `canvas:aaCapOffset`, `battery:*` | Removed and inert (`properties.json`): nothing reads them, so two launches that differ only in them present the same device |
+
+A phone context on a browser launched as a desktop renders at the context's
+`deviceScaleFactor`, but reports `screen.availHeight` and `window.outerHeight`
+from the window rather than the identity's values. A phone identity belongs on a
+phone launch (`os="android"`), where every value matches.
+
+### What contexts of one browser share
+
+Each context is a Firefox container (`userContextId`), and origin attributes
+keep its cookies, storage, HTTP cache, service workers and connections apart
+from every other context's. With Fission, a site in one context gets a content
+process of its own, since the process key includes the container. What every
+context shares is the browser itself: the build, the prefs, the parent and GPU
+processes, the fonts installed for the launch's OS, and the launch-only keys
+above. Two contexts of one browser therefore read as two people on one machine,
+not as two machines.
 
 A few values stay the launch's for every context:
 

@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Union, overload
+from typing import Any, Dict, Optional, Tuple, Union, overload
 
 from playwright.sync_api import (
     Browser,
@@ -10,15 +10,18 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from .fingerprints import generate_context_fingerprint
+from .fingerprints import render_context_identity
 from .ip import ExitGeo, Proxy, proxy_exit_geo
 from .utils import (
+    MACHINE_PROBE,
+    HostIdentity,
     attach_context_defaults,
     context_identity,
     host_identity,
     launch_options,
     launch_machine,
     launches_mobile,
+    machine_from_probe,
     needs_exit_geo,
     new_context_options,
     persistent_context_options,
@@ -184,8 +187,77 @@ def _resolve_proxy_geo(proxy: Dict[str, str]) -> ExitGeo:
     return proxy_exit_geo(Proxy(**proxy).as_string())
 
 
+def browser_machine(browser: Browser) -> Tuple[HostIdentity, Dict[str, Any]]:
+    """The host identity and machine a browser's contexts must keep. A browser
+    from NewBrowser knows them; one from firefox.connect() is asked once."""
+    if '_camoufox_machine' not in vars(browser):
+        probe = browser.new_context()
+        try:
+            facts = probe.new_page().evaluate(MACHINE_PROBE)
+        finally:
+            probe.close()
+        browser._camoufox_host_identity, browser._camoufox_machine = machine_from_probe(facts)
+    return vars(browser).get('_camoufox_host_identity'), browser._camoufox_machine
+
+
+def NewIdentity(
+    browser: Browser,
+    identity: Optional[Dict[str, Any]] = None,
+    *,
+    preset: Optional[Dict[str, Any]] = None,
+    os: Optional[str] = None,
+    ff_version: Optional[str] = None,
+    locale: Optional[str] = None,
+    timezone: Optional[str] = None,
+    webrtc_ip: Optional[str] = None,
+    proxy: Optional[Dict[str, str]] = None,
+    geolocation: Optional[Dict[str, float]] = None,
+    overrides: Optional[Dict[str, Any]] = None,
+    i_know_what_im_doing: bool = False,
+) -> Dict[str, Any]:
+    """
+    Draws a context identity for `browser`, or changes a stored one, without
+    opening a context. The result is plain JSON: store it, and pass it to
+    NewContext(identity=...) to open a context that is that identity.
+
+    Parameters:
+        identity: A stored identity to start from. Its values are kept, except
+            the ones this call sets and what is drawn from them (see overrides).
+        preset: A fingerprint preset dict to draw from. If None, fpgen draws.
+        os: Target OS for a drawn identity ("windows", "macos", "linux", "android"). On a browser
+            launched without canvas noise, contexts claim the host's OS and GPU, and another OS or
+            GPU raises ValueError; "android" draws from the Linux pools, so a Linux host can render it.
+        ff_version: Firefox major version to claim in the UA. Defaults to the browser's own.
+        locale: BCP-47 tag or language list (Playwright's `locale`).
+        timezone: IANA timezone.
+        webrtc_ip: IPv4 or IPv6 address WebRTC reports.
+        proxy: Only read to place the identity where the proxy exits: the WebRTC IP, timezone and
+            geolocation follow the exit, and a new identity's locale is drawn for its country,
+            unless given. InvalidIP is raised if that lookup fails. It is not stored.
+        geolocation: {"latitude": float, "longitude": float[, "accuracy": float]}.
+        overrides: Config keys to set (camoufox.fingerprints.CONTEXT_IDENTITY_KEYS, and the
+            webGl: and webGl2: keys). The rest of the identity is drawn to agree: another user
+            agent, platform or screen draws the fonts, voices and GPU again, from the identity's
+            own salt, and another GPU brings its own WebGL tables. A key every context of a
+            browser shares raises ValueError.
+        i_know_what_im_doing: Silences the warnings for overrides and for phone identities.
+    """
+    ff_version = ff_version or browser.version.split('.', 1)[0]
+    host_identity, machine = browser_machine(browser)
+    if proxy and needs_exit_geo(identity, webrtc_ip, geolocation, timezone, locale):
+        webrtc_ip, geolocation, timezone, locale = place_at_exit(
+            _resolve_proxy_geo(proxy), identity, webrtc_ip, geolocation, timezone, locale
+        )
+    return context_identity(
+        host_identity, machine, identity, ff_version, preset=preset, os=os, locale=locale,
+        timezone=timezone, webrtc_ip=webrtc_ip, geolocation=geolocation, overrides=overrides,
+        i_know_what_im_doing=i_know_what_im_doing,
+    )
+
+
 def NewContext(
     browser: Browser,
+    identity: Optional[Dict[str, Any]] = None,
     *,
     preset: Optional[Dict[str, Any]] = None,
     os: Optional[str] = None,
@@ -193,47 +265,33 @@ def NewContext(
     webrtc_ip: Optional[str] = None,
     proxy: Optional[Dict[str, str]] = None,
     geolocation: Optional[Dict[str, float]] = None,
+    overrides: Optional[Dict[str, Any]] = None,
+    i_know_what_im_doing: bool = False,
     **context_kwargs: Any,
 ) -> BrowserContext:
     """
-    Creates a new browser context with a unique fingerprint identity.
+    Creates a new browser context with its own identity: a new one, drawn as a
+    launch draws one, or the stored `identity` (from NewIdentity, or an earlier
+    context's `camoufox_identity`). The identity's values are applied through
+    addInitScript, whose setters remove themselves before page scripts run, and
+    the context's `camoufox_identity` holds it, to store and replay.
 
-    Each context gets its own identity (navigator, screen, WebGL, fonts, voices),
-    drawn by fpgen unless a preset is given. All values are applied
-    via addInitScript so they self-destruct before page scripts can detect them.
-
-    Parameters:
-        browser: A Browser instance from NewBrowser or Camoufox.
-        preset: A fingerprint preset dict to use. If None, fpgen draws a new identity.
-        os: Target OS for the drawn identity ("windows", "macos", "linux", "android"). On a browser
-            launched without canvas noise, contexts claim the host's OS and GPU, and another os or
-            preset raises ValueError; "android" draws from the Linux pools, so a Linux host can
-            render it. "android" also opens the context with is_mobile and has_touch.
-        ff_version: Firefox major version to claim in the UA. Defaults to the browser's own.
-        webrtc_ip: IPv4 or IPv6 address to spoof for WebRTC ICE candidates.
-        proxy: Per-context proxy (Playwright format: {"server": "...", "username": "...", "password": "..."}).
-            The context is placed where the proxy exits: webrtc_ip, timezone_id, locale and
-            geolocation each default to the exit IP's, looked up through the proxy unless all
-            four are given; InvalidIP is raised if that lookup fails.
-        geolocation: Per-context geolocation ({"latitude": float, "longitude": float}).
-        **context_kwargs: Additional Playwright new_context() options.
+    `locale` and `timezone_id` in context_kwargs are part of the identity. The
+    other parameters are NewIdentity's; `proxy` is also the context's proxy
+    (Playwright format: {"server": "...", "username": "...", "password": "..."}).
+    **context_kwargs are passed to Playwright's new_context(), and win over
+    the identity's options: pass storage_state to restore a returning
+    visitor's cookies and storage, and save them with context.storage_state().
     """
-    # The drawn UA carries fpgen's Firefox version, which must not disagree with
-    # the browser the page is actually talking to.
     ff_version = ff_version or browser.version.split('.', 1)[0]
-
-    if proxy and needs_exit_geo(webrtc_ip, geolocation, context_kwargs):
-        webrtc_ip, geolocation = place_at_exit(
-            _resolve_proxy_geo(proxy), webrtc_ip, geolocation, context_kwargs
-        )
-
-    os, webgl_config = context_identity(browser, os, preset)
-    fp = generate_context_fingerprint(
-        preset=preset, os=os, ff_version=ff_version, webrtc_ip=webrtc_ip, webgl_config=webgl_config,
-        locale=context_kwargs.get('locale'),
-        **vars(browser).get('_camoufox_machine', {}),
+    drawn = NewIdentity(
+        browser, identity, preset=preset, os=os, ff_version=ff_version,
+        locale=context_kwargs.pop('locale', None), timezone=context_kwargs.pop('timezone_id', None),
+        webrtc_ip=webrtc_ip, proxy=proxy, geolocation=geolocation, overrides=overrides,
+        i_know_what_im_doing=i_know_what_im_doing,
     )
-
-    context = browser.new_context(**new_context_options(fp, context_kwargs, proxy, geolocation))
-    context.add_init_script(fp['init_script'])
+    rendered = render_context_identity(drawn, ff_version, i_know_what_im_doing)
+    context = browser.new_context(**new_context_options(rendered, context_kwargs, proxy))
+    context.add_init_script(rendered['init_script'])
+    context.camoufox_identity = drawn
     return context

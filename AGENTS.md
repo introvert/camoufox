@@ -225,6 +225,8 @@ this section in step with the launcher options.
 | `camoufox.async_api.AsyncNewBrowser(playwright, **opts)` | `AsyncNewBrowser` (alias) | same |
 | `camoufox.sync_api.NewContext(browser, **kw)` | `NewContext(browser, opts)` | `BrowserContext` with its own identity |
 | `camoufox.async_api.AsyncNewContext(browser, **kw)` | `AsyncNewContext` (alias) | same |
+| `camoufox.sync_api.NewIdentity(browser, identity=None, **kw)` | `NewIdentity(browser, opts)` | a context identity, `{salt, config}` as JSON, to store and pass to `NewContext(browser, identity)` (TS: `{ identity }`); a context's own is `context.camoufox_identity` (TS: `camoufoxIdentity`) |
+| `camoufox.async_api.AsyncNewIdentity(browser, ...)` | `AsyncNewIdentity` (alias) | same |
 | `camoufox.launch_options(**opts)` | `launchOptions(opts)` | kwargs for `firefox.launch()` (TS: camelCase keys) |
 | `camoufox.server.launch_server(**opts)` | `launchServer(opts)` | Python blocks and prints the ws endpoint; TS returns a `BrowserServer` |
 | `camoufox.DefaultAddons.UBO` | `"UBO"` | default addon id for `exclude_addons` |
@@ -232,7 +234,7 @@ this section in step with the launcher options.
 
 ## Pitfalls
 
-- **Do not set identity values by hand.** Do not pass Playwright's `user_agent`, or `navigator.*`, `headers.User-Agent`, `screen.*`, `window.*`, `timezone` or `geolocation:*` in `config`. The identity is drawn as a whole; overriding one value leaves the rest describing a different machine. Use `os`, `screen`, `window`, `locale` and `geoip` instead. Manual config keys print a `LeakWarning`.
+- **Do not set identity values by hand.** Do not pass Playwright's `user_agent`, or `navigator.*`, `headers.User-Agent`, `screen.*`, `window.*`, `timezone` or `geolocation:*` in `config`. The identity is drawn as a whole; overriding one value leaves the rest describing a different machine. Use `os`, `screen`, `window`, `locale` and `geoip` instead. Manual config keys print a `LeakWarning`. For a context, `NewContext(overrides=...)` sets one value and draws the rest to agree with it.
 - **Use `geoip=True` with a proxy.** Without it the timezone and locale are the identity's, not the proxy's, and a warning is printed.
 - **`page.evaluate` is isolated.** It cannot read globals the page defined. Use `main_world_eval=True` and prefix the script with `mw:`. Without the option, a `mw:` evaluate fails with "Main world evaluation is disabled". `mw:` cannot return a handle (`evaluate_handle`).
 - **Leave the viewport alone.** When the window size is spoofed, new pages default to `no_viewport=True`; forcing a `viewport` asks the window to resize to something the identity does not claim.

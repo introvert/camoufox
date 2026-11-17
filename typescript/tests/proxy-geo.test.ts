@@ -44,6 +44,7 @@ function fakeBrowser(version = "152.0.4") {
 	const browser = {
 		// Playwright's Browser.version() for Firefox: MOZ_APP_VERSION_DISPLAY.
 		version: () => version,
+		_camoufoxMachine: {},
 		newContext: async (options: any) => {
 			calls.options = options;
 			return {

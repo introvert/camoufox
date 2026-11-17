@@ -330,6 +330,7 @@ function browserOnHost(gpu: Gpu | null) {
 			},
 		}),
 		_camoufoxHostIdentity: ["lin", gpu],
+		_camoufoxMachine: {},
 	};
 	return { browser: browser as any, calls };
 }

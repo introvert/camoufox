@@ -18,6 +18,7 @@ import orjson  # noqa: E402
 import pytest  # noqa: E402
 
 from camoufox import sync_api, utils  # noqa: E402
+from conftest import fake_browser  # noqa: E402
 from camoufox._warnings import LeakWarning  # noqa: E402
 from camoufox.host_rendering import (  # noqa: E402
     BASELINE_OVERRIDES_PREF,
@@ -250,10 +251,7 @@ def test_the_probe_ignores_what_the_launcher_adds_to_the_environment():
 
 
 def browser_on_host(gpu):
-    browser = mock.MagicMock()
-    browser.version = "150.0.2"
-    browser._camoufox_host_identity = ("lin", gpu)
-    return browser
+    return fake_browser("150.0.2", host_identity=("lin", gpu))
 
 
 def renderer_of(context):

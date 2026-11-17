@@ -59,6 +59,10 @@ is_mobile: >-
     Responsive Design Mode, which a page can read too. Use os="android" for a phone,
     or has_touch, device_scale_factor and viewport for the parts you need.
 
+context_overrides: >-
+    A context identity is drawn as a whole. Overriding one of its values draws the
+    rest to agree with it, but a value no real device reports is still a fingerprint.
+
 mobile_resources: >-
     A Firefox for Android identity takes its speech voices from the Linux pool, because
     fpgen records no phone voices. Its WebGL vendor and renderer are a recorded phone's
