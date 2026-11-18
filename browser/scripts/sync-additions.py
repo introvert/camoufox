@@ -21,7 +21,6 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # settings/ files copy-additions.sh places in the source dir's lw/.
 SETTINGS = {
     'settings/camoufox.cfg': 'lw/camoufox.cfg',
-    'settings/distribution/policies.json': 'lw/policies.json',
     'settings/defaults/pref/local-settings.js': 'lw/local-settings.js',
     'settings/properties.json': 'lw/properties.json',
 }
