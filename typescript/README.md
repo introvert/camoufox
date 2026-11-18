@@ -214,8 +214,10 @@ come from the real OS, driver and GPU, whatever the identity claims.
 - **On the host's OS**, the launcher starts the browser once, unspoofed and with
   the same display, reads the GPU Firefox reports, and the identity claims it.
   The pixels then agree with the identity. A host that renders in software (no
-  GPU driver, as on most servers) keeps a drawn GPU: it reads as a machine
-  whose driver failed to load.
+  working GPU driver, as on most servers) claims its software renderer, such as
+  `llvmpipe` on Linux. Firefox reads the name and the pixels from one GL context,
+  so a machine with a broken driver reports the software renderer too, and a GPU
+  name over software pixels never happens on a real machine.
 - **On another OS, or with another GPU** (`webgl_config`, a preset's GPU, or a
   host GPU fpgen never recorded), the pixels would show the real one. Camoufox
   then turns on the canvas protection of `privacy.resistFingerprinting`, and
@@ -317,7 +319,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `headless` | `boolean \| "virtual" \| "virtual-gpu"` | `false` | See [Headless modes](#headless-modes). |
 | `gpu` | `string \| number` | `CAMOUFOX_GPU`, or the only GPU | The card for `headless: "virtual-gpu"`. Not taken by `launchOptions()`. |
 | `require_gpu` | `boolean` | `true` | With `headless: "virtual-gpu"`, fail the launch when the browser does not render on the card; `false` warns. Not taken by `launchOptions()`. |
-| `proxy` | `{ server, username?, password?, bypass? }` | none | Playwright proxy. |
+| `proxy` | `{ server, username?, password?, bypass? }` | none | Playwright proxy. A `socks5://` proxy can have a username and password too (RFC 1929), which Playwright alone refuses; the same holds for `NewContext()` and `newContext()`. |
 | `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. |
 | `geoip_db` | `string` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
 | `locale` | `string \| string[]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"`. The first is used for `Intl`. |
@@ -332,6 +334,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `block_webrtc` | `boolean` | `false` | Disable WebRTC entirely. |
 | `block_webgl` | `boolean` | `false` | Disable WebGL. Warns: many WAFs check for it. |
 | `webgl_config` | `[vendor, renderer]` | `CAMOUFOX_WEBGL_CONFIG`, else drawn | Use one GPU fpgen has recorded for Firefox on `os`; any other pair throws, except on a phone ([Firefox for Android](#firefox-for-android)). Warns for a discrete GPU behind a screen too small for one, and for a software renderer. Needs `os`. The `CAMOUFOX_WEBGL_CONFIG` environment variable (`"Vendor\|Renderer"`) sets a default for every launch; a preset's or the config's own GPU wins over it. |
+| `cpu` | `{ arch?: "x86" \| "arm", manufacturer?: string }` | follows the GPU and cores, else x86 drawn | The CPU the identity computes as: canvas, Web Audio, Opus, relaxed-SIMD wasm and NaN signs differ between x86-64 and ARM64, and canvas and Opus between Intel and AMD. A manufacturer alone implies its arch. Per OS: macos x86 `intel`, arm `apple`; windows x86 `intel`/`amd`, arm `qualcomm`; linux x86 `intel`/`amd`, arm `apple`, `qualcomm`, `broadcom`, `nvidia`, `ampere`, `rockchip`, `mediatek`, `amlogic`, `allwinner`. A pair no machine on the OS has, or one the GPU contradicts, throws `ValueError`; without `os`, the OS is drawn among those with a recorded GPU for the CPU. By default an Apple GPU is Apple ARM, an Intel iGPU or Intel Mac Intel, a Radeon iGPU AMD, and 10, 14, 18, 22 or 28 logical cores Intel; otherwise x86, 81% Intel. ARM64 is emulated on an x86-64 host, and Intel or AMD x86-64 on an ARM64 host. |
 | `canvas_noise` | `boolean` | on for another OS or GPU | Random canvas and WebGL readback, as in LibreWolf. Warns. See [The canvas on another OS](#the-canvas-on-another-os). |
 | `disable_coop` | `boolean` | `false` | Turn off Cross-Origin-Opener-Policy so elements in cross-origin iframes (such as the Turnstile checkbox) can be clicked. Warns. |
 | `main_world_eval` | `boolean` | `false` | Allow `page.evaluate("mw:...")` and `mw:` init scripts to run in the page's own world. |
@@ -341,7 +344,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `fingerprint` | fpgen fingerprint object | drawn | Use this fpgen fingerprint instead of drawing one. Warns. |
 | `fingerprint_preset` | `boolean \| object` | `undefined` | Opt into a recorded real-device preset instead of fpgen: `true` picks a random bundled one, an object uses that one. |
 | `ff_version` | `number` | the browser's own | Firefox version to claim. Warns: a mismatch with the engine is detectable. |
-| `config` | `object` | none | Raw Camoufox properties ([`properties.json`](https://github.com/daijro/camoufox/blob/main/browser/settings/properties.json)). Overrides the generated identity; manual identity keys warn. |
+| `config` | `object` | none | Raw Camoufox properties ([`properties.json`](https://github.com/daijro/camoufox/blob/main/browser/settings/properties.json)). Overrides the generated identity; manual identity keys warn. A value you set is always used; one no real machine with the rest of the identity reports prints a `LeakWarning` naming it, which `i_know_what_im_doing` does not silence. |
 | `firefox_user_prefs` | `object` | none | Extra Firefox prefs. |
 | `args` | `string[]` | none | Extra browser command-line arguments. |
 | `env` | `object` | a copy of `process.env` | Environment variables for the browser. |

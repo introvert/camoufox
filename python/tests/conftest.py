@@ -1,4 +1,8 @@
+from pathlib import Path
+
 import pytest
+
+SETTINGS = Path(__file__).resolve().parents[2] / 'browser' / 'settings'
 
 
 @pytest.fixture(autouse=True)
@@ -26,3 +30,16 @@ def fake_browser(version='152.0.4', machine=None, host_identity=None, is_async=F
         context.add_init_script = mock.AsyncMock()
         browser.new_context = mock.AsyncMock(return_value=context)
     return browser
+
+
+@pytest.fixture(autouse=True)
+def properties_of_this_checkout(monkeypatch):
+    """launch_options reads properties.json from the installed build, and CI
+    installs the last published one. This suite tests the checkout, whose
+    launcher may draw a key that build predates, so it reads the checkout's."""
+    from camoufox import utils
+
+    load = utils._load_properties
+    monkeypatch.setattr(
+        utils, '_load_properties', lambda path=None: load(path or SETTINGS / 'camoufox-bin')
+    )

@@ -39,7 +39,7 @@ be listed there.
 | `force-default-pointer.patch` | `navigator.maxTouchPoints`, `mobile` (switches both pointer sets to Android's coarse, non-hovering touchscreen) |
 | `geolocation-spoofing.patch` | `geolocation:*` |
 | `locale-spoofing.patch` | `locale:*`, `navigator.language` |
-| `media-codec-spoofing.patch` | `media:spoof_codecs` (bypasses `PDMFactory::Supports()` in `MP4Decoder`/`MatroskaDecoder` so `canPlayType()`/`isTypeSupported()` don't leak system codec libraries) |
+| `media-codec-spoofing.patch` | `media:spoof_codecs` (bypasses `PDMFactory::Supports()` in `MP4Decoder`/`MatroskaDecoder` so `canPlayType()`/`isTypeSupported()` don't leak system codec libraries, and answers `decodingInfo()` to match) |
 | `media-device-spoofing.patch` | `mediaDevices:*` |
 | `mobile-meta-viewport.patch` | `mobile`, `mobile:zoom` (honours `<meta name="viewport">` in mobile mode, or in RDM for an Android `isMobile` context; zooming is on for a phone unless `mobile:zoom` is false) |
 | `navigator-config-keys.patch` | `navigator.appCodeName`, `appName`, `product`, `productSub`, `vendor`, `buildID`, `cookieEnabled`, `onLine` (window, and workers where they expose them) |
@@ -52,12 +52,13 @@ be listed there.
 | `system-ui-font-spoofing.patch` | `navigator.platform` |
 | `timezone-spoofing.patch` | `timezone` |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints`, `mobile` (Android's legacy touch APIs and 5 touch points; a Playwright `hasTouch` context also reports 5 unless a count is set) |
-| `voice-spoofing.patch` | `voices`, `voices:blockIfNotDefined` |
+| `virtual-display-claimed-screen.patch` | `screen.width`, `screen.height`, `screen.avail*` (the X screen reports the claimed screen when it is smaller) |
+| `voice-spoofing.patch` | `voices`, `voices:speechd`, `voices:blockIfNotDefined`, `voices:pool` |
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
 | `window-orientation.patch` | `mobile` (builds `window.orientation` / `onorientationchange` everywhere and exposes them for a phone: mobile mode or an Android `isMobile` context) |
 | `windows-keyboard.patch` | `input:windowsKeyboard` (launch-wide: the shortcut tables and GTK's key handling are process-level) |
-| `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*`, `window.screenX`, `window.screenY` (re-orders the getters above so stock's work runs first) |
+| `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*` (re-orders the getters above so stock's work runs first) |
 
 To regenerate the list: `grep -l 'MaskConfig::' patches/*.patch`.
 
@@ -77,6 +78,8 @@ already set up, and do not add the include or `LOCAL_INCLUDES` themselves:
 | `font-system-fonts-css2.patch`, `system-ui-font-spoofing.patch`, `webrtc-ip-spoofing.patch`, `zz-stock-cost-parity.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetSpoofedOS()` |
 | `per-context-consistency.patch` | `navigator-spoofing.patch` for `NavigatorManager` and its includes in `dom/base/Navigator.cpp` and `dom/workers/WorkerNavigator.cpp` |
 | `webgl-spoofing.patch` | `zz-stock-cost-parity.patch` for `RoverfoxStorageManager::Generation()`, which keys its parsed per-context tables (it compiles only with the whole stack) |
+| `per-context-http-user-agent.patch` | `navigator-spoofing.patch` for `NavigatorManager::GetUserAgent()` (exported as `mozilla/dom/NavigatorManager.h`); `cross-process-storage.patch` for reading the context's value in the parent and worker processes |
+| `virtual-display-claimed-screen.patch` | `windows-keyboard.patch` for `/camoucfg` in `widget/gtk/moz.build` |
 | `windows-keyboard.patch` | `touchscreen-fingerprint-spoofing.patch` for `/camoucfg` in `dom/events/moz.build` |
 | `zz-stock-cost-parity.patch` | `cross-process-storage.patch` for `RoverfoxStorageManager::Generation()`; `screen-spoofing.patch` for `ScreenDimensionManager` in `dom/base/nsScreen.cpp` |
 
@@ -98,14 +101,61 @@ at hand. A browsing context is not used, because a document created by
 shares its creator's principal. A value is stored only under its own context;
 nothing writes a fallback copy under context 0.
 
+## Driver input and the page's globals
+
+- `input-coalescing-parity.patch` uses `mJugglerEventId` and the
+  `juggler-mouse-event-hit-renderer` ack from `playwright/0-playwright.patch`.
+  Its JS half is in `additions/juggler` (`MouseDispatch.sendQueuedMove`,
+  `PageHandler.beforeDispatch`), and either half without the other wedges
+  every move until the ack deadline.
+- `drag-source-events.patch` extends the drag branch that
+  `playwright/0-playwright.patch` adds to `nsContentUtils::SynthesizeMouseEvent`.
+- `isolated-world-global-order.patch` stands alone. It recognises Juggler as
+  the scripted caller (its `resource://gre/modules/juggler/` modules, and the
+  sandboxes those modules create, whose location names them) and leaves the
+  interfaces it creates undefined on the page's window until the page uses
+  them. It edits `Codegen.py` (the window Xray's resolve on the window), so
+  every generated binding rebuilds, and `BindingUtils.h`
+  (`DoGetOrCreateDOMReflector`), which most of `dom/` includes.
+
+## WebRTC behind a proxy
+
+`webrtc-socks5-udp.patch` builds on two earlier patches and uses their lines as
+context:
+
+- `webrtc-proxy-local-network.patch` keeps UDP host sockets behind a proxy and
+  limits them to the local network (`NrSocketBase::RefusesDestination`). The
+  new patch adds `NrUdpRelaySocket`, which sends the rest through a SOCKS5 UDP
+  ASSOCIATE relay on the tab's proxy, and makes a refused destination fail at
+  once instead of being dropped silently.
+- `webrtc-ip-spoofing.patch` rewrites candidate, SDP and `getStats()` addresses
+  to `webrtc:ipv4`/`ipv6`; it makes up host candidates when none reached the
+  page, never a srflx. It also decides whether a page is behind a proxy
+  (`ShouldForceProxy`): Juggler records each proxy it sets, which decides for a
+  document with no HTTP channel, so a direct launch stays direct and a proxied
+  one never gathers around its proxy. The new patch keeps a srflx or
+  relay address gathered through the proxy as it is, because a page's own STUN
+  server already saw that address. Behind an HTTP proxy, or a SOCKS5 proxy that
+  refuses UDP, no srflx surfaces: the page reads a machine whose UDP is
+  blocked, not one that made a STUN answer up.
+
+ICE sockets live in the socket process, and proxies are resolved in the
+parent. The patch adds an optional `LoadInfoArgs` to the existing
+`PProxyConfigLookup` constructor (`netwerk/ipc`), so the parent resolves the
+proxy with the tab's load info, as it does for the tab's own loads. Juggler's
+per-context proxy filter then picks that context's proxy. The SOCKS5 control
+connection (`WebrtcUdpAssociation`) runs in the socket process, so the relay
+sees the control connection and the datagrams come from the same address.
+
 ## Backports
 
 These patches carry upstream Firefox changes that `browser/upstream.sh`'s
 version does not have yet. Drop each one when the Firefox it moves to ships
 the change.
 
-None: Firefox 159.0 ships the last one, the startup import of the bundled
-OneCRL list ([Bug 2084311](https://bugzilla.mozilla.org/show_bug.cgi?id=2084311)).
+None at present. Firefox 159 ships the startup import of the bundled OneCRL
+list ([Bug 2084311](https://bugzilla.mozilla.org/show_bug.cgi?id=2084311)),
+which `remote-security-settings.patch` carried for 158.0.1.
 
 ## Playwright
 

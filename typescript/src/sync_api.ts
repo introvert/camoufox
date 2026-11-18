@@ -17,12 +17,14 @@ import {
 	firefox,
 } from "playwright-core";
 import * as cpuAffinity from "./cpu_affinity.js";
+import { attachDriverDefaults } from "./driver_defaults.js";
 import { type ContextIdentity, renderContextIdentity } from "./fingerprints.js";
 import { type ProxyConfig, ProxyHelper, proxyExitGeo } from "./ip.js";
 import {
 	applyNoViewport,
 	attachDesktopOnlyWarning,
 	attachNoViewportDefault,
+	attachSocks5Auth,
 	attachStockMediaDefaults,
 	attachTouchDefault,
 	attachVirtualDisplay,
@@ -211,12 +213,14 @@ async function launchWith(
 			userDataDir ?? "",
 			options,
 		);
+		attachDriverDefaults(context);
 		return attachVirtualDisplay(context, virtualDisplay);
 	}
 
 	// Browser
 	const identity = await hostIdentity(fromOptions, canvasNoise);
 	const browser = await playwright.launch(fromOptions);
+	attachSocks5Auth(browser);
 	if (noViewportDefault) {
 		attachNoViewportDefault(browser);
 	}
@@ -225,6 +229,7 @@ async function launchWith(
 	}
 	attachStockMediaDefaults(browser);
 	attachDesktopOnlyWarning(browser);
+	attachDriverDefaults(browser);
 	(browser as any)._camoufoxHostIdentity = identity;
 	(browser as any)._camoufoxMachine = launchMachine(fromOptions);
 	return attachVirtualDisplay(browser, virtualDisplay);
@@ -430,6 +435,8 @@ export async function NewContext(
 		...contextOptions,
 	};
 	if (proxy) opts.proxy = proxy;
+	// A browser launched elsewhere takes SOCKS5 credentials too.
+	attachSocks5Auth(browser);
 	const context = (await browser.newContext(opts)) as CamoufoxContext;
 	await context.addInitScript(rendered.init_script);
 	context.camoufoxIdentity = drawn;

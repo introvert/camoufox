@@ -37,7 +37,7 @@ def convert_preset(ctx: dict) -> dict:
             "webglRenderer": config["webGl:renderer"],
             "timezone": config.get("timezone", ""),
             "fontList": config["fonts"],
-            "speechVoices": config["voices"],
+            "speechVoices": config.get("voices", []),
         },
     }
 

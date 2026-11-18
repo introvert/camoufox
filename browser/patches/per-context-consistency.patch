@@ -147,33 +147,6 @@ diff --git a/netwerk/protocol/http/HttpBaseChannel.cpp b/netwerk/protocol/http/H
        nsContentUtils::ShouldResistFingerprinting(this,
                                                   RFPTarget::HttpUserAgent),
        languageOverride);
-@@ -535,12 +542,26 @@ HttpBaseChannel::SetTRRMode(nsIRequest::TRRMode aTRRMode) {
- 
- NS_IMETHODIMP
- HttpBaseChannel::SetDocshellUserAgentOverride() {
-   RefPtr<dom::BrowsingContext> bc;
-   MOZ_ALWAYS_SUCCEEDS(mLoadInfo->GetBrowsingContext(getter_AddRefs(bc)));
-   if (!bc) {
-+    // Camoufox: worker and service worker requests have no browsing context
-+    // to carry the page's user agent override, so they went out with the
-+    // launch-wide one -- a Windows UA from an Android context's service
-+    // worker. Send the user agent the request's user context was given.
-+    const uint32_t userContextId =
-+        mLoadInfo->GetOriginAttributes().mUserContextId;
-+    nsAutoString contextUserAgent;
-+    if (userContextId &&
-+        dom::NavigatorManager::GetUserAgent(userContextId, contextUserAgent) &&
-+        !contextUserAgent.IsEmpty()) {
-+      return SetRequestHeaderInternal(
-+          "User-Agent"_ns, NS_ConvertUTF16toUTF8(contextUserAgent), false,
-+          nsHttpHeaderArray::eVarietyRequestEnforceDefault);
-+    }
-     return NS_OK;
-   }
- 
-   nsAutoCString customUserAgent;
-   bc->GetCustomUserAgent(customUserAgent);
-   if (customUserAgent.IsEmpty() || customUserAgent.IsVoid()) {
 diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
 --- a/netwerk/protocol/http/nsHttpHandler.cpp
 +++ b/netwerk/protocol/http/nsHttpHandler.cpp

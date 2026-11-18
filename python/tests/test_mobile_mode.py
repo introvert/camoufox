@@ -18,6 +18,7 @@ Run with:
 
 import json
 import re
+import types
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
@@ -300,6 +301,8 @@ class TestLaunchOptions:
 class _FakeBrowser:
     def __init__(self):
         self.kwargs = None
+        # Playwright's implementation object, which attach_socks5_auth wraps.
+        self._impl_obj = types.SimpleNamespace()
 
     def new_page(self, **kwargs):
         self.kwargs = kwargs

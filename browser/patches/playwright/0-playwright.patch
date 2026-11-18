@@ -959,10 +959,12 @@ index b39212b1c9..9321637f72 100644
  nsDOMWindowUtils::IsCORSSafelistedRequestHeader(const nsACString& aName,
                                                  const nsACString& aValue,
 diff --git a/dom/base/nsFocusManager.cpp b/dom/base/nsFocusManager.cpp
-index bb523c2717..d57e3992cd 100644
 --- a/dom/base/nsFocusManager.cpp
 +++ b/dom/base/nsFocusManager.cpp
-@@ -1892,6 +1892,10 @@ Maybe<uint64_t> nsFocusManager::SetFocusInner(Element* aNewContent,
+@@ -1889,12 +1889,16 @@ Maybe<uint64_t> nsFocusManager::SetFocusInner(Element* aNewContent,
+     // to check if the new element is in the active window, compare the
+     // new root docshell for the new element with the active window's docshell.
+     isElementInActiveWindow =
          (GetActiveBrowsingContext() == newRootBrowsingContext);
    }
  
@@ -973,7 +975,13 @@ index bb523c2717..d57e3992cd 100644
    // Exit fullscreen if a website focuses another window
    if (StaticPrefs::full_screen_api_exit_on_windowRaise() &&
        !isElementInActiveWindow && (aFlags & FLAG_RAISE)) {
-@@ -2453,6 +2457,7 @@ bool nsFocusManager::BlurImpl(BrowsingContext* aBrowsingContextToClear,
+     if (XRE_IsParentProcess()) {
+       if (Document* doc = mActiveWindow ? mActiveWindow->GetDoc() : nullptr) {
+         Document::ClearPendingFullscreenRequests(doc);
+@@ -2450,12 +2454,13 @@ void nsFocusManager::BlurFromOtherProcess(
+ 
+ bool nsFocusManager::BlurImpl(BrowsingContext* aBrowsingContextToClear,
+                               BrowsingContext* aAncestorBrowsingContextToFocus,
                                bool aIsLeavingDocument, bool aAdjustWidget,
                                bool aRemainActive, Element* aElementToFocus,
                                uint64_t aActionId) {
@@ -981,19 +989,31 @@ index bb523c2717..d57e3992cd 100644
    LOGFOCUS(("<<Blur begin actionid: %" PRIu64 ">>", aActionId));
  
    // hold a reference to the focused content, which may be null
-@@ -2496,6 +2501,11 @@ bool nsFocusManager::BlurImpl(BrowsingContext* aBrowsingContextToClear,
+   RefPtr<Element> element = mFocusedElement;
+   if (element) {
+     if (!element->IsInComposedDoc()) {
+@@ -2493,12 +2498,17 @@ bool nsFocusManager::BlurImpl(BrowsingContext* aBrowsingContextToClear,
+     // preview.
+     SetFocusedBrowsingContext(nullptr, aActionId);
+     mFocusedElement = nullptr;
      return true;
    }
  
-+  // Playwright: emulate focused page by never bluring when leaving document.
-+  if (XRE_IsContentProcess() && aIsLeavingDocument && docShell && nsDocShell::Cast(docShell)->ShouldOverrideHasFocus()) {
++  // Playwright: emulate focused page by never bluring when focus leaves the tab. Camoufox: not when it moves into one of the page's frames, which blurs as in stock.
++  if (XRE_IsContentProcess() && aIsLeavingDocument && !aAncestorBrowsingContextToFocus && docShell && nsDocShell::Cast(docShell)->ShouldOverrideHasFocus()) {
 +    return true;
 +  }
 +
    // Keep a ref to presShell since dispatching the DOM event may cause
    // the document to be destroyed.
    RefPtr<PresShell> presShell = docShell->GetPresShell();
-@@ -3266,7 +3276,9 @@ void nsFocusManager::RaiseWindow(nsPIDOMWindowOuter* aWindow,
+   if (!presShell) {
+     if (XRE_IsContentProcess() &&
+         ActionIdComparableAndLower(
+@@ -3263,13 +3273,15 @@ void nsFocusManager::RaiseWindow(nsPIDOMWindowOuter* aWindow,
+     }
+     if (bc == GetFocusedBrowsingContext()) {
+       return;
      }
    }
  
@@ -1004,6 +1024,9 @@ index bb523c2717..d57e3992cd 100644
      // In test mode, emulate raising the window. WindowRaised takes
      // care of lowering the present active window. This happens in
      // a separate runnable to avoid touching multiple windows in
+     // the current runnable.
+     NS_DispatchToCurrentThread(NS_NewRunnableFunction(
+         "nsFocusManager::RaiseWindow",
 diff --git a/dom/base/nsGlobalWindowOuter.cpp b/dom/base/nsGlobalWindowOuter.cpp
 index 59a1a46710..5c94520039 100644
 --- a/dom/base/nsGlobalWindowOuter.cpp
@@ -1963,10 +1986,12 @@ index 34acc89341..e2f9675edd 100644
     * Set the default time zone.
     */
 diff --git a/js/public/Date.h b/js/public/Date.h
-index c36ea65ae6..55c8db661d 100644
 --- a/js/public/Date.h
 +++ b/js/public/Date.h
-@@ -54,6 +54,8 @@ namespace JS {
+@@ -51,12 +51,14 @@ namespace JS {
+  * this method in response to system time changes, or immediately before
+  * operations requiring instantaneous correctness, to guarantee correct
+  * behavior.
   */
  extern JS_PUBLIC_API void ResetTimeZone();
  
@@ -1975,22 +2000,9 @@ index c36ea65ae6..55c8db661d 100644
  class ClippedTime;
  inline ClippedTime TimeClip(double time);
  
-diff --git a/js/src/debugger/Object.cpp b/js/src/debugger/Object.cpp
-index dddede7b02..8866e8d393 100644
---- a/js/src/debugger/Object.cpp
-+++ b/js/src/debugger/Object.cpp
-@@ -2635,7 +2635,11 @@ Maybe<Completion> DebuggerObject::call(JSContext* cx,
-         invokeArgs[i].set(args2[i]);
-       }
- 
-+      // Disable CSP for the scope of the call.
-+      const JSSecurityCallbacks* securityCallbacks = JS_GetSecurityCallbacks(cx);
-+      JS_SetSecurityCallbacks(cx, nullptr);
-       ok = js::Call(cx, calleev, thisv, invokeArgs, &result);
-+      JS_SetSecurityCallbacks(cx, securityCallbacks);
-     }
-   }
- 
+ /*
+  * |ClippedTime| represents the limited subset of dates/times described above.
+  *
 diff --git a/js/src/vm/DateTime.cpp b/js/src/vm/DateTime.cpp
 index 123965cf4b..57e8f2e9e0 100644
 --- a/js/src/vm/DateTime.cpp
@@ -2701,29 +2713,6 @@ index 30ca546027..049725c879 100644
  #ifdef ENABLE_WEBDRIVER
    nsCOMPtr<nsIMarionette> marionette = do_GetService(NS_MARIONETTE_CONTRACTID);
    if (marionette) {
-diff --git a/services/settings/Utils.sys.mjs b/services/settings/Utils.sys.mjs
-index 70f77c9fcb..e11bad0f28 100644
---- a/services/settings/Utils.sys.mjs
-+++ b/services/settings/Utils.sys.mjs
-@@ -105,7 +105,7 @@ function _isUndefined(value) {
- 
- export var Utils = {
-   get SERVER_URL() {
--    return lazy.allowServerURL
-+    return true || lazy.allowServerURL
-       ? // eslint-disable-next-line mozilla/valid-lazy
-         lazy.gServerURL
-       : AppConstants.REMOTE_SETTINGS_SERVER_URLS[0];
-@@ -119,6 +119,9 @@ export var Utils = {
-   log,
- 
-   get shouldSkipRemoteActivity() {
-+    // Playwright does not set Cu.isInAutomation, hence we just return true
-+    // here in order to disable the remote activity.
-+    return true;
-     if (
-       (lazy.isRunningTests || Cu.isInAutomation) &&
-       this.SERVER_URL == "data:,#remote-settings-dummy/v1"
 diff --git a/third_party/libwebrtc/api/location.h b/third_party/libwebrtc/api/location.h
 new file mode 100644
 index 0000000000..040cbc972b

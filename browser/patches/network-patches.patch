@@ -143,7 +143,7 @@ diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsH
  #include "mozilla/AntiTrackingRedirectHeuristic.h"
  #include "mozilla/AppShutdown.h"
  #include "mozilla/Base64.h"
-@@ -989,13 +990,33 @@ uint8_t nsHttpHandler::UrgencyFromCoSFlags(uint32_t cos,
+@@ -998,13 +999,33 @@ uint8_t nsHttpHandler::UrgencyFromCoSFlags(uint32_t cos,
  }
  
  //-----------------------------------------------------------------------------
@@ -177,7 +177,7 @@ diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsH
    }
  
    if (!mUserAgentOverride.IsVoid()) {
-@@ -2104,15 +2125,19 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
+@@ -2114,15 +2135,19 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
            rv = gHttpHandler->SetAcceptLanguages();
          }));
      return rv;
@@ -198,22 +198,35 @@ diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsH
    nsAutoCString buf;
    nsresult rv = PrepareAcceptLanguages(acceptLanguages.get(), buf);
    if (NS_SUCCEEDED(rv)) {
-@@ -2120,12 +2145,24 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
+@@ -2130,12 +2155,37 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
    }
    return rv;
  }
  
  nsresult nsHttpHandler::SetAcceptEncodings(const char* aAcceptEncodings,
                                             bool isSecure, bool isDictionary) {
-+  // Camoufox: headers.Accept-Encoding replaces the list sent over https only.
-+  // Firefox keeps three lists -- plain http ("gzip, deflate"), https and
-+  // dictionary-eligible requests (adds "dcb, dcz") -- and one value written
-+  // over all three makes http:// requests claim encodings no Firefox sends
-+  // there.
++  // Camoufox: headers.Accept-Encoding replaces the list sent over https, and
++  // the dictionary list built from it. Firefox keeps three lists -- plain http
++  // ("gzip, deflate"), https and dictionary-eligible requests (adds "dcb,
++  // dcz") -- and one value written over all three makes http:// requests claim
++  // encodings no Firefox sends there.
 +  nsCString encodingOverride;
-+  if (isSecure && !isDictionary) {
++  if (isSecure || isDictionary) {
 +    if (auto value = MaskConfig::GetString("headers.Accept-Encoding")) {
 +      encodingOverride.Assign(value.value().c_str());
++      // Camoufox: stock builds the dictionary list as the secure list plus
++      // network.http.accept-encoding.dictionary (PrefsChanged). The override
++      // stands for the secure list, so a request that offers a dictionary still
++      // names dcb/dcz after it, as stock's does.
++      if (isDictionary) {
++        nsAutoCString dictionaryEncodings;
++        if (NS_SUCCEEDED(Preferences::GetCString(
++                HTTP_PREF("accept-encoding.dictionary"), dictionaryEncodings)) &&
++            !dictionaryEncodings.IsEmpty()) {
++          encodingOverride.Append(", "_ns);
++          encodingOverride.Append(dictionaryEncodings);
++        }
++      }
 +      aAcceptEncodings = encodingOverride.get();
 +    }
 +  }

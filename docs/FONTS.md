@@ -152,18 +152,20 @@ Deliberate choices:
   `browser/bundle/fontconfig/windows/fonts.conf` because there is no per-launch
   fontconfig hook, and the names are in `essential-fonts.json`'s Windows list. That matches
   reality: every Windows install resolves all of them.
-- **macOS TTC weight names are reported where the version has them.** The
-  confs rewrite `American Typewriter Semibold`, `Futura Bold`, `STIX Two Math
-  Regular`, ... to their base family. A real Mac registers those as families but
-  `fc-scan` cannot see them, so the ones whose target is bundled are forced into
-  `fonts.json`. Only Sonoma's base lists all of them; `Kohinoor Devanagari
-  Medium` is one of the names whose absence identifies macOS 27. A base carries
-  an alias only when it lists the name (`base_has_alias` in
-  `browser/scripts/_font_bundle.py`), and `essential-fonts.json` holds only the
-  aliases every base of the OS carries. On Linux, where fontconfig never lists a
-  metric alias, a base carries one when it has the target: `Calibri` and
-  `Cambria` are not essential there, because no Ubuntu base has Carlito or
-  Caladea.
+- **macOS TTC weight names are reported.** The confs rewrite `American
+  Typewriter Semibold`, `Futura Bold`, `STIX Two Math Regular`, ... to their base
+  family. A real Mac registers those as families but `fc-scan` cannot see them,
+  so the ones whose target is bundled are forced in.
+- **An alias name is essential only where its target is in every base.** A
+  name fonts.conf rewrites renders only through its target, so it joins a base
+  only with it. On Linux, `Calibri` and `Cambria` resolve to Carlito and
+  Caladea, which come with LibreOffice (the `libreoffice` addition) and are in
+  neither Ubuntu base: a draw without that bundle does not have them, as a
+  stock Ubuntu without it does not. Every Linux identity used to claim both,
+  and they rendered only because the bundled-font activation leaked Windows'
+  own Calibri and Cambria to every OS. macOS's `Noto Sans Canadian Aboriginal
+  Regular` left the floor for the same reason (its family is not in every
+  macOS base).
 - **`Twemoji Mozilla` is reportable on Linux** (a CreepJS Linux marker, and
   Firefox exposes its bundled font to content). Not reported on macOS.
 - One name renders for every Linux identity but is not always reported
@@ -188,7 +190,7 @@ plus independent per-unit draws. Not a uniform percentage of a pool.
    families and is identified by the *absence* of `Noto Sans Brahmi` /
    `Noto Sans CanAborig`.
 
-2. **The essential floor** (`essential-fonts.json`: 125 / 361 / 272) — the
+2. **The essential floor** (`essential-fonts.json`: 125 / 368 / 272) — the
    intersection of that OS's bases, so it holds whichever base was drawn.
 
 3. **Per-unit Bernoulli draws, per OS.** Each addition is one independent
@@ -258,8 +260,10 @@ cd python && python3 -m pytest -q -k "font or humanize or launch_environment"
 The full run checks, per OS: `fonts.json[os]` ⊆ what `fc-list` publishes (aliases
 resolved via `fc-match`), no file reachable outside that OS's groups, generics
 resolve to a reportable family, essential / variant / marker ⊆ `fonts.json`,
-20 draws stay inside `fonts.json`, each face stored exactly once, no subfolders,
-and no basename collisions within a package's group set.
+every OS version that reports an alias's target reports the alias, 20 draws stay
+inside `fonts.json`, each face stored exactly once, no subfolders, and no
+basename collisions within a package's group set. The release runs the full
+check; every pull request runs `--quick` on the fonts its build carries.
 
 ## Known residue
 
