@@ -260,7 +260,10 @@ class TestLaunchOptions:
         config, prefs = launch(os=os_name)
         assert 'mobile' not in config
         assert not set(MOBILE_FIREFOX_PREFS) & set(prefs)
-        assert 'layout.css.devPixelsPerPx' not in prefs
+        # A desktop renders at its own display scale (#933), set only for a
+        # zoomed draw, never at a phone's ratio.
+        if 'layout.css.devPixelsPerPx' in prefs:
+            assert prefs['layout.css.devPixelsPerPx'] == f"{float(config['window.devicePixelRatio']):g}"
 
     @pytest.mark.parametrize('os_name', ['windows', 'macos', 'linux', 'android'])
     def test_browser_owned_navigator_values_are_firefoxs(self, os_name):
