@@ -862,16 +862,24 @@ function voiceObjects(osKey: string, entries: string[]): VoiceObject[] {
 }
 
 /**
- * Every voice the manifests record for these OSes, for `voices:pool`. The
- * browser registers them beside the launch's own voices, and a context sees
- * those its list names: the voices its draw took for its locale, which the
- * launch's draw need not have.
+ * Every voice the manifests record for these OSes, as the config keys the
+ * browser registers beside the launch's own voices: `voices:pool` for voice
+ * objects, `voices:pool:speechd` for each Ubuntu release's speech-dispatcher
+ * grid. A context sees those its list names: the voices its draw took for its
+ * locale and release, which the launch's draw need not have.
  */
-export function voicePool(osKeys: Iterable<string>): VoiceObject[] {
+export function voicePool(osKeys: Iterable<string>): {
+	"voices:pool"?: VoiceObject[];
+	"voices:pool:speechd"?: Record<string, any>[];
+} {
 	const manifests = loadVoiceManifests();
-	const pool: VoiceObject[] = [];
+	const objects: VoiceObject[] = [];
+	const grids: Record<string, any>[] = [];
 	for (const osKey of osKeys) {
 		const manifest = manifests[osKey];
+		for (const release of Object.values(manifest.releases ?? {}) as any[]) {
+			grids.push(release.speechd);
+		}
 		const entries: string[] = [...(manifest.base ?? [])];
 		for (const pack of Object.values(manifest.langPacks ?? {}) as any[]) {
 			entries.push(...(pack.oneCore ?? []), ...(pack.desktop ?? []));
@@ -879,9 +887,12 @@ export function voicePool(osKeys: Iterable<string>): VoiceObject[] {
 		for (const addition of manifest.additions ?? []) {
 			entries.push(...(addition.voices ?? []));
 		}
-		pool.push(...voiceObjects(osKey, [...new Set(entries)]));
+		objects.push(...voiceObjects(osKey, [...new Set(entries)]));
 	}
-	return pool;
+	return {
+		...(objects.length ? { "voices:pool": objects } : {}),
+		...(grids.length ? { "voices:pool:speechd": grids } : {}),
+	};
 }
 
 /**

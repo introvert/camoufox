@@ -14,7 +14,7 @@ diff --git a/dom/media/webspeech/synth/moz.build b/dom/media/webspeech/synth/moz
 diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp b/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
 --- a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
 +++ b/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
-@@ -20,13 +20,17 @@
+@@ -20,13 +20,16 @@
  #include "nsContentUtils.h"
  #include "nsGlobalWindowInner.h"
  #include "nsISpeechService.h"
@@ -22,17 +22,16 @@ diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp b/dom/media/webs
  #include "nsSpeechTask.h"
  #include "nsString.h"
 +#include "nsThreadUtils.h"
-+#include "nsEscape.h"
-+#include "nsRefPtrHashtable.h"
  
 +#include "MaskConfig.hpp"
++#include "SpeechVoicesManager.h"
  using mozilla::intl::LocaleService;
  
  #undef LOG
  extern mozilla::LogModule* GetSpeechSynthLog();
  #define LOG(type, msg) \
    MOZ_LOG_FMT(GetSpeechSynthLog(), type, MOZ_LOG_EXPAND_ARGS msg)
-@@ -163,18 +167,87 @@ nsSynthVoiceRegistry* nsSynthVoiceRegistry::GetInstance() {
+@@ -163,18 +166,76 @@ nsSynthVoiceRegistry* nsSynthVoiceRegistry::GetInstance() {
      gSynthVoiceRegistry = new nsSynthVoiceRegistry();
      ClearOnShutdown(&gSynthVoiceRegistry);
      if (XRE_IsParentProcess()) {
@@ -46,56 +45,28 @@ diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp b/dom/media/webs
    return gSynthVoiceRegistry;
  }
  
-+namespace {
-+// SpeechDispatcherService's voice record, so the table below has its layout.
-+class SpoofedSpeechdVoice {
-+ public:
-+  SpoofedSpeechdVoice(const nsAString& aName, const nsAString& aLanguage)
-+      : mName(aName), mLanguage(aLanguage) {}
-+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(SpoofedSpeechdVoice)
-+  nsString mName;
-+  nsString mLanguage;
-+
-+ private:
-+  ~SpoofedSpeechdVoice() = default;
-+};
-+}  // namespace
-+
 +// The identity's voices, registered as the OS backend it claims would register
-+// them. A spoofed voice has no service (SpeakImpl speaks it silently).
++// them, then the pool a context's list may also name, which only that context
++// sees (SpeechVoicesManager). A spoofed voice has no service (SpeakImpl speaks
++// it silently).
 +void nsSynthVoiceRegistry::AddSpoofedVoices() {
-+  if (auto speechd = MaskConfig::MSpeechdVoices()) {
-+    // SpeechDispatcherService::Setup builds this table in speech-dispatcher's
-+    // order and RegisterVoices adds the voices in the table's iteration order,
-+    // which is the order getVoices() reports. Same table, same insertions,
-+    // same order.
-+    nsRefPtrHashtable<nsStringHashKey, SpoofedSpeechdVoice> table;
-+    for (const auto& [name, lang] : speechd.value()) {
-+      nsAutoString uri;
-+      uri.AssignLiteral("urn:moz-tts:speechd:");
-+      nsAutoCString escaped;
-+      NS_EscapeURL(name.c_str(), -1,
-+                   esc_OnlyNonASCII | esc_Spaces | esc_AlwaysCopy, escaped);
-+      uri.Append(NS_ConvertUTF8toUTF16(escaped));
-+      uri.AppendLiteral("?");
-+      uri.Append(NS_ConvertUTF8toUTF16(lang));
-+      table.InsertOrUpdate(uri, MakeRefPtr<SpoofedSpeechdVoice>(
-+                                    NS_ConvertUTF8toUTF16(name),
-+                                    NS_ConvertUTF8toUTF16(lang)));
++  auto addSpeechd =
++      [this](const std::vector<std::pair<std::string, std::string>>& aVoices) {
++        for (const auto& voice :
++             SpeechVoicesManager::SpeechdVoicesInOrder(aVoices)) {
++          if (mUriVoiceMap.Contains(voice.mUri)) {
++            continue;
++          }
++          // As RegisterVoices does: local only for a voice named "default".
++          AddVoiceImpl(nullptr, voice.mUri, voice.mName, voice.mLanguage,
++                       voice.mName.EqualsLiteral("default"), true);
++        }
++      };
++  auto addVoices = [this](const char* aKey) {
++    auto voices = MaskConfig::MVoices(aKey);
++    if (!voices) {
++      return;
 +    }
-+    for (const auto& entry : table) {
-+      const RefPtr<SpoofedSpeechdVoice>& voice = entry.GetData();
-+      // As RegisterVoices does: local only for a voice named "default".
-+      AddVoiceImpl(nullptr, entry.GetKey(), voice->mName, voice->mLanguage,
-+                   voice->mName.EqualsLiteral("default"), true);
-+    }
-+    return;
-+  }
-+  // The launch's own voices, then the pool a context's list may also name,
-+  // which only that context sees (SpeechVoicesManager).
-+  for (const char* key : {"voices", "voices:pool"}) {
-+    auto voices = MaskConfig::MVoices(key);
-+    if (!voices) continue;
 +    for (const auto& [lang, name, uri, isDefault, isLocal] : voices.value()) {
 +      const NS_ConvertUTF8toUTF16 voiceUri(uri);
 +      if (mUriVoiceMap.Contains(voiceUri)) {
@@ -103,13 +74,30 @@ diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp b/dom/media/webs
 +      }
 +      // SAPI voices queue their utterances and macOS's do not, as each
 +      // backend registers them.
-+      const bool queues =
-+          StringBeginsWith(voiceUri, u"urn:moz-tts:sapi:"_ns);
++      const bool queues = StringBeginsWith(voiceUri, u"urn:moz-tts:sapi:"_ns);
 +      AddVoiceImpl(nullptr, voiceUri, NS_ConvertUTF8toUTF16(name),
 +                   NS_ConvertUTF8toUTF16(lang), isLocal, queues);
 +      if (isDefault) {
 +        SetDefaultVoice(voiceUri, true);
 +      }
++    }
++  };
++
++  if (auto speechd = MaskConfig::MSpeechdVoices()) {
++    addSpeechd(speechd.value());
++  } else {
++    addVoices("voices");
++  }
++  addVoices("voices:pool");
++  if (const auto* grids = MaskConfig::Find("voices:pool:speechd")) {
++    for (const auto& grid : *grids) {
++      auto voices = MaskConfig::ExpandSpeechdGrid(grid);
++      if (!voices) {
++        printf_stderr("ERROR: a 'voices:pool:speechd' grid is malformed: %s\n",
++                      grid.dump().c_str());
++        continue;
++      }
++      addSpeechd(voices.value());
 +    }
 +  }
 +}
@@ -120,7 +108,7 @@ diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp b/dom/media/webs
  
    return registry.forget();
  }
-@@ -299,12 +372,22 @@ nsSynthVoiceRegistry::AddVoice(nsISpeechService* aService,
+@@ -299,12 +360,22 @@ nsSynthVoiceRegistry::AddVoice(nsISpeechService* aService,
         aQueuesUtterances ? "true" : "false"));
  
    if (NS_WARN_IF(XRE_IsContentProcess())) {
@@ -143,7 +131,7 @@ diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp b/dom/media/webs
  
  NS_IMETHODIMP
  nsSynthVoiceRegistry::RemoveVoice(nsISpeechService* aService,
-@@ -371,12 +454,22 @@ nsSynthVoiceRegistry::NotifyVoicesChanged() {
+@@ -371,12 +442,22 @@ nsSynthVoiceRegistry::NotifyVoicesChanged() {
  
    return NS_OK;
  }
@@ -166,7 +154,7 @@ diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp b/dom/media/webs
  
      for (uint32_t i = 0; i < ssplist.Length(); ++i) {
        (void)ssplist[i]->SendNotifyVoicesError(aError);
-@@ -773,12 +866,31 @@ void nsSynthVoiceRegistry::SpeakImpl(VoiceData* aVoice, nsSpeechTask* aTask,
+@@ -773,12 +854,31 @@ void nsSynthVoiceRegistry::SpeakImpl(VoiceData* aVoice, nsSpeechTask* aTask,
    LOG(LogLevel::Debug,
        ("nsSynthVoiceRegistry::SpeakImpl queueing text='{}' uri='{}' rate={} "
         "pitch={}",

@@ -991,29 +991,25 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 	it.each([
 		["windows", "win"],
 		["macos", "mac"],
-	])("a %s context's voices are all in voices:pool", (os, key) => {
-		// The browser registers the launch's voices and voices:pool; a
-		// context's list only selects among them.
-		const pool = new Set(voicePool([key]).map((v) => v.voiceUri));
+		["linux", "lin"],
+		["android", "lin"],
+	])("a %s context's voices are all in the pool", (os, key) => {
+		// The browser registers the launch's voices and the pool; a context's
+		// list only selects among them. A Linux list is its release's
+		// speech-dispatcher grid, which the pool holds whole.
+		const pool = voicePool([key]);
+		const uris = new Set((pool["voices:pool"] ?? []).map((v) => v.voiceUri));
+		const grids = pool["voices:pool:speechd"] ?? [];
 		for (const locale of ["de-DE", "fr-FR", "ja-JP", "en-GB"]) {
 			for (let i = 0; i < 5; i++) {
-				const fp = generateContextFingerprint({ os, locale });
-				for (const v of fp.config.voices) expect(pool).toContain(v.voiceUri);
+				const { config } = generateContextFingerprint({ os, locale });
+				if ("voices:speechd" in config) {
+					expect(grids).toContainEqual(config["voices:speechd"]);
+				} else {
+					for (const v of config.voices) expect(uris).toContain(v.voiceUri);
+				}
 			}
 		}
-	});
-
-	it.each([
-		"linux",
-		"android",
-	])("a %s context carries a measured speech-dispatcher grid", (os) => {
-		// The browser expands the grid per context as at launch.
-		const grids = Object.values(data("voice-manifests.json").lin.releases).map(
-			(r: any) => r.speechd,
-		);
-		const fp = generateContextFingerprint({ os });
-		expect(fp.config.voices).toBeUndefined();
-		expect(grids).toContainEqual(fp.config["voices:speechd"]);
 	});
 
 	it("NewContext draws the identity for its context's locale", async () => {

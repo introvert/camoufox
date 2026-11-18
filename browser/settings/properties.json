@@ -66,6 +66,7 @@
   { "property": "voices", "type": "array" },
   { "property": "voices:blockIfNotDefined", "type": "bool" },
   { "property": "voices:pool", "type": "array" },
+  { "property": "voices:pool:speechd", "type": "array" },
   { "property": "voices:speechd", "type": "dict" },
   { "property": "mediaDevices:micros", "type": "uint" },
   { "property": "mediaDevices:webcams", "type": "uint" },

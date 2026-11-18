@@ -2122,7 +2122,7 @@ def launch_options(
     # A context's voices follow its own OS and locale. The browser registers
     # every voice such a draw can take, and shows each context the ones it
     # lists. Without canvas noise a context claims the launch's OS.
-    config['voices:pool'] = voice_pool(OS_KEYS.values() if cover_canvas else [target_os])
+    config.update(voice_pool(OS_KEYS.values() if cover_canvas else [target_os]))
 
     if block_webgl:
         firefox_user_prefs['webgl.disabled'] = True

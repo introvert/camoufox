@@ -720,27 +720,30 @@ def _voice_objects(os_key: str, entries: List[str]) -> List[Dict[str, Any]]:
     ]
 
 
-def voice_pool(os_keys: Iterable[str]) -> List[Dict[str, Any]]:
-    """Every voice the manifests record for these OSes, for `voices:pool`.
-
-    The browser registers them beside the launch's own voices, and a context
-    sees those its list names: the voices its draw took for its locale, which
-    the launch's draw need not have.
+def voice_pool(os_keys: Iterable[str]) -> Dict[str, Any]:
+    """Every voice the manifests record for these OSes, as the config keys the
+    browser registers beside the launch's own voices: `voices:pool` for voice
+    objects, `voices:pool:speechd` for each Ubuntu release's speech-dispatcher
+    grid. A context sees those its list names: the voices its draw took for
+    its locale and release, which the launch's draw need not have.
     """
     manifests = _load_voice_manifests()
-    pool: List[Dict[str, Any]] = []
+    objects: List[Dict[str, Any]] = []
+    grids: List[Dict[str, Any]] = []
     for os_key in os_keys:
-        # A Linux context lists its speech-dispatcher grid, which the browser
-        # expands itself (SpeechVoicesManager), so it needs no pool.
-        if os_key == 'lin':
-            continue
         manifest = manifests[os_key]
+        grids += [release['speechd'] for release in (manifest.get('releases') or {}).values()]
         entries = list(manifest.get('base') or [])
         for pack in (manifest.get('langPacks') or {}).values():
             entries += (pack.get('oneCore') or []) + (pack.get('desktop') or [])
         for addition in manifest.get('additions', []):
             entries += addition.get('voices') or []
-        pool += _voice_objects(os_key, list(dict.fromkeys(entries)))
+        objects += _voice_objects(os_key, list(dict.fromkeys(entries)))
+    pool: Dict[str, Any] = {}
+    if objects:
+        pool['voices:pool'] = objects
+    if grids:
+        pool['voices:pool:speechd'] = grids
     return pool
 
 

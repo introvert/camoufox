@@ -2727,8 +2727,9 @@ export async function launchOptions({
 	// A context's voices follow its own OS and locale. The browser registers
 	// every voice such a draw can take, and shows each context the ones it
 	// lists. Without canvas noise a context claims the launch's OS.
-	config["voices:pool"] = voicePool(
-		coverCanvas ? ["mac", "win", "lin"] : [targetOs],
+	Object.assign(
+		config,
+		voicePool(coverCanvas ? ["mac", "win", "lin"] : [targetOs]),
 	);
 
 	if (block_webgl) {

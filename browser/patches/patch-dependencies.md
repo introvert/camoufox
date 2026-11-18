@@ -53,7 +53,7 @@ be listed there.
 | `timezone-spoofing.patch` | `timezone` |
 | `touchscreen-fingerprint-spoofing.patch` | `navigator.maxTouchPoints`, `mobile` (Android's legacy touch APIs and 5 touch points; a Playwright `hasTouch` context also reports 5 unless a count is set) |
 | `virtual-display-claimed-screen.patch` | `screen.width`, `screen.height`, `screen.avail*` (the X screen reports the claimed screen when it is smaller) |
-| `voice-spoofing.patch` | `voices`, `voices:speechd`, `voices:blockIfNotDefined`, `voices:pool` |
+| `voice-spoofing.patch` | `voices`, `voices:speechd`, `voices:pool`, `voices:pool:speechd` (the voices a context's own list may name), `voices:blockIfNotDefined` |
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
 | `window-orientation.patch` | `mobile` (builds `window.orientation` / `onorientationchange` everywhere and exposes them for a phone: mobile mode or an Android `isMobile` context) |
