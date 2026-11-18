@@ -116,18 +116,80 @@ await browser.close();
 
 | `NewContext` option | Effect |
 |---|---|
+| `identity` | A stored identity to open the context as, from `NewIdentity()` or an earlier context's `camoufoxIdentity` ([below](#storing-and-changing-an-identity)). Without it, a new identity is drawn. |
+| `overrides` | Config keys to set in the identity; the rest is drawn to agree with them ([below](#storing-and-changing-an-identity)). |
 | `preset` | Use this fingerprint preset object instead of an fpgen draw. |
 | `os` | `"windows"`, `"macos"`, `"linux"` or `"android"` for the drawn identity. On a browser without canvas noise, the host's OS, and anything else throws `ValueError`; `"android"` draws from the Linux pools, so a Linux host can render it. `"android"` also opens the context with `isMobile` and `hasTouch` ([Firefox for Android](#firefox-for-android)). |
 | `ff_version` | Firefox major version claimed in the User-Agent. Defaults to the browser's own. |
 | `webrtc_ip` | IPv4 or IPv6 address WebRTC reports. |
 | `proxy` | Per-context proxy, in Playwright's format. The context is placed where the proxy exits: `webrtc_ip`, `timezoneId`, `locale` and `geolocation` each default to the exit IP's, looked up through the proxy unless all four are given, and `InvalidIP` is thrown if the lookup fails. |
 | `geolocation` | `{ latitude, longitude }`; also grants the `geolocation` permission. |
-| `locale` | Playwright's: a tag (`"de-DE"`, reported as `de-DE, de`) or a language list (`"de, en-US, en"`) whose first entry is the locale. The context's speech voices are drawn for it. |
-| anything else | Passed to Playwright's `browser.newContext()` (camelCase, e.g. `timezoneId`), overriding the generated value. |
+| `locale` | Playwright's: a tag (`"de-DE"`, reported as `de-DE, de`) or a language list (`"de, en-US, en"`) whose first entry is the locale. The context's speech voices are drawn for it. Part of the identity. |
+| `timezoneId` | Playwright's, an IANA timezone. Part of the identity. |
+| anything else | Passed to Playwright's `browser.newContext()` (camelCase), overriding the generated value. `storageState` restores cookies and storage saved with `context.storageState()`. |
+
+#### Storing and changing an identity
+
+An identity is plain JSON: a `salt` and the `config` it put in the context, the
+same format the Python launcher writes. `context.camoufoxIdentity` holds the one
+a context was opened as, and `NewIdentity()` draws one, or changes one, without
+opening a context. Opening a context with a stored identity gives its pages the
+same values again, on this browser or a later one on the same machine, so a returning visitor is
+the same device. Save the storage with it to keep the visitor's cookies too:
+
+```javascript
+import { readFileSync, writeFileSync } from "node:fs";
+import { Camoufox, NewContext, NewIdentity } from "camoufox";
+
+let browser = await Camoufox({ headless: true });
+let context = await NewContext(browser, { locale: "fr-FR", timezoneId: "Europe/Paris" });
+await (await context.newPage()).goto("https://example.com");
+writeFileSync("visitor.json", JSON.stringify({
+    identity: context.camoufoxIdentity,
+    storage: await context.storageState(),
+}));
+await browser.close();
+
+const saved = JSON.parse(readFileSync("visitor.json", "utf8"));
+browser = await Camoufox({ headless: true });
+context = await NewContext(browser, { identity: saved.identity, storageState: saved.storage });
+const german = await NewIdentity(browser, { identity: saved.identity, locale: "de-DE" });
+const tokyo = await NewContext(browser, { identity: saved.identity, timezoneId: "Asia/Tokyo" });
+await browser.close();
+```
+
+Passing a stored identity with other options changes only what they set and
+what is drawn from it; every other value is kept:
+
+| Change | Also drawn again |
+|---|---|
+| `locale` | The speech voices, for the new language |
+| `timezoneId`, `geolocation`, `webrtc_ip` | Nothing |
+| `proxy` | The timezone, geolocation and WebRTC IP follow the exit; the stored locale is kept |
+| `overrides` of the user agent, platform or screen | Another machine: `appVersion`, `oscpu`, the fonts, voices and GPU, from the identity's own salt, so the same change always draws the same values |
+| `overrides` of `webGl:vendor` and `webGl:renderer` | That GPU's recorded WebGL tables |
+
+`overrides` takes the keys in `CONTEXT_IDENTITY_KEYS` and the `webGl:` and
+`webGl2:` keys, and prints a `LeakWarning` (`i_know_what_im_doing: true`
+silences it): a value no real device reports is still a fingerprint. It throws `ValueError` for:
+
+- a key every context of a browser shares (below);
+- a user agent and a platform of two OSes: override both;
+- a value of another type than the one it replaces;
+- a stored identity on a browser whose cores, or phone pixel ratio, differ from
+  the ones it was drawn with, since a page measures the browser's.
+
+The identity's `config` holds what the context sets, and the rest of the launch
+config of the same device, so a launch with it reports the same values. Editing
+it by hand skips the redraw; use `overrides`.
 
 What the browser has one of, every context of it shares: the cores a page can
 measure (`navigator.hardwareConcurrency`), and on a phone launch
 (`os: "android"`) the device, since the whole browser renders at its pixel ratio.
+The media devices, `Accept-Encoding`, `navigator.doNotTrack` and
+`globalPrivacyControl` are launch settings too. A browser from
+`firefox.connect()` that the launcher did not start is asked for its cores, pixel
+ratio, OS and GPU once, by a page in a throwaway context.
 
 Canvas noise belongs to the browser, not the context (see
 [The canvas on another OS](#the-canvas-on-another-os)). On a browser without it,
@@ -152,8 +214,10 @@ come from the real OS, driver and GPU, whatever the identity claims.
 - **On the host's OS**, the launcher starts the browser once, unspoofed and with
   the same display, reads the GPU Firefox reports, and the identity claims it.
   The pixels then agree with the identity. A host that renders in software (no
-  GPU driver, as on most servers) keeps a drawn GPU: it reads as a machine
-  whose driver failed to load.
+  working GPU driver, as on most servers) claims its software renderer, such as
+  `llvmpipe` on Linux. Firefox reads the name and the pixels from one GL context,
+  so a machine with a broken driver reports the software renderer too, and a GPU
+  name over software pixels never happens on a real machine.
 - **On another OS, or with another GPU** (`webgl_config`, a preset's GPU, or a
   host GPU fpgen never recorded), the pixels would show the real one. Camoufox
   then turns on the canvas protection of `privacy.resistFingerprinting`, and
@@ -255,7 +319,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `headless` | `boolean \| "virtual" \| "virtual-gpu"` | `false` | See [Headless modes](#headless-modes). |
 | `gpu` | `string \| number` | `CAMOUFOX_GPU`, or the only GPU | The card for `headless: "virtual-gpu"`. Not taken by `launchOptions()`. |
 | `require_gpu` | `boolean` | `true` | With `headless: "virtual-gpu"`, fail the launch when the browser does not render on the card; `false` warns. Not taken by `launchOptions()`. |
-| `proxy` | `{ server, username?, password?, bypass? }` | none | Playwright proxy. |
+| `proxy` | `{ server, username?, password?, bypass? }` | none | Playwright proxy. A `socks5://` proxy can have a username and password too (RFC 1929), which Playwright alone refuses; the same holds for `NewContext()` and `newContext()`. |
 | `geoip` | `boolean \| string` | none | `true` finds the public IP (through `proxy` if set); a string uses that IP. Sets timezone, locale, geolocation and the WebRTC IP. Without a proxy, also decides whether IPv6 stays on. |
 | `geoip_db` | `string` | the `camoufox set --geoip` choice | GeoIP database name, e.g. `"GeoIP AIO by daijro"`. |
 | `locale` | `string \| string[]` | from `geoip`, else the drawn identity's | Locale(s), e.g. `"en-US"`. The first is used for `Intl`. |
@@ -270,6 +334,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `block_webrtc` | `boolean` | `false` | Disable WebRTC entirely. |
 | `block_webgl` | `boolean` | `false` | Disable WebGL. Warns: many WAFs check for it. |
 | `webgl_config` | `[vendor, renderer]` | `CAMOUFOX_WEBGL_CONFIG`, else drawn | Use one GPU fpgen has recorded for Firefox on `os`; any other pair throws, except on a phone ([Firefox for Android](#firefox-for-android)). Warns for a discrete GPU behind a screen too small for one, and for a software renderer. Needs `os`. The `CAMOUFOX_WEBGL_CONFIG` environment variable (`"Vendor\|Renderer"`) sets a default for every launch; a preset's or the config's own GPU wins over it. |
+| `cpu` | `{ arch?: "x86" \| "arm", manufacturer?: string }` | follows the GPU and cores, else x86 drawn | The CPU the identity computes as: canvas, Web Audio, Opus, relaxed-SIMD wasm and NaN signs differ between x86-64 and ARM64, and canvas and Opus between Intel and AMD. A manufacturer alone implies its arch. Per OS: macos x86 `intel`, arm `apple`; windows x86 `intel`/`amd`, arm `qualcomm`; linux x86 `intel`/`amd`, arm `apple`, `qualcomm`, `broadcom`, `nvidia`, `ampere`, `rockchip`, `mediatek`, `amlogic`, `allwinner`. A pair no machine on the OS has, or one the GPU contradicts, throws `ValueError`; without `os`, the OS is drawn among those with a recorded GPU for the CPU. By default an Apple GPU is Apple ARM, an Intel iGPU or Intel Mac Intel, a Radeon iGPU AMD, and 10, 14, 18, 22 or 28 logical cores Intel; otherwise x86, 81% Intel. ARM64 is emulated on an x86-64 host, and Intel or AMD x86-64 on an ARM64 host. |
 | `canvas_noise` | `boolean` | on for another OS or GPU | Random canvas and WebGL readback, as in LibreWolf. Warns. See [The canvas on another OS](#the-canvas-on-another-os). |
 | `disable_coop` | `boolean` | `false` | Turn off Cross-Origin-Opener-Policy so elements in cross-origin iframes (such as the Turnstile checkbox) can be clicked. Warns. |
 | `main_world_eval` | `boolean` | `false` | Allow `page.evaluate("mw:...")` and `mw:` init scripts to run in the page's own world. |
@@ -279,7 +344,7 @@ names. Any other key is passed to Playwright's `firefox.launch()` (or
 | `fingerprint` | fpgen fingerprint object | drawn | Use this fpgen fingerprint instead of drawing one. Warns. |
 | `fingerprint_preset` | `boolean \| object` | `undefined` | Opt into a recorded real-device preset instead of fpgen: `true` picks a random bundled one, an object uses that one. |
 | `ff_version` | `number` | the browser's own | Firefox version to claim. Warns: a mismatch with the engine is detectable. |
-| `config` | `object` | none | Raw Camoufox properties ([`properties.json`](https://github.com/daijro/camoufox/blob/main/browser/settings/properties.json)). Overrides the generated identity; manual identity keys warn. |
+| `config` | `object` | none | Raw Camoufox properties ([`properties.json`](https://github.com/daijro/camoufox/blob/main/browser/settings/properties.json)). Overrides the generated identity; manual identity keys warn. A value you set is always used; one no real machine with the rest of the identity reports prints a `LeakWarning` naming it, which `i_know_what_im_doing` does not silence. |
 | `firefox_user_prefs` | `object` | none | Extra Firefox prefs. |
 | `args` | `string[]` | none | Extra browser command-line arguments. |
 | `env` | `object` | a copy of `process.env` | Environment variables for the browser. |

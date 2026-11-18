@@ -1,58 +1,53 @@
-Camoufox: the popup blocker stays on, and the driver gets its own door.
-
-Firefox blocks window.open() that is not called while handling user input
-(dom.disable_open_during_load, default true). Playwright and geckodriver both
-turn that off, and a page reads the difference in one line with no permission
-and nothing to wait for:
-
-    const w = window.open('', '_blank');   // null on stock Firefox
-    if (w) { w.close(); /* not a stock browser */ }
-
-Camoufox used to ship the blocker off for one reason: with it on,
-page.evaluate(() => window.open(...)) returns null, which breaks ~35 tests of
-the upstream Playwright suite and every caller who scripts a popup.
-
-So lift the blocker for the driver instead of for everyone.
-nsIDocShell.driverPopupsAllowed makes this docShell's window.open behave as if
-it were handling user input, and juggler sets it only while an explicit
-Runtime.evaluate / Runtime.callFunction is on the stack (see
-additions/juggler/content/Runtime.js::withDriverPopups). Unlike upstream's
-nsIDOMWindowUtils.setHandlingUserInput(), it grants NO user-gesture activation:
-navigator.userActivation, getAutoplayPolicy() and everything else a page can
-read are untouched, which is the leak that made evaluate() stop doing that in
-the first place.
-
-KNOWN LIMIT, measured 2026-09-18: the flag is a content-process docShell member,
-so it only reaches decisions the content process makes. window.open() is one of
-them (nsGlobalWindowOuter::OpenInternal runs in content and consults
-BrowsingContext::IsPopupAllowed there). A <a target=_blank> click is NOT: the
-retargeting happens in the parent, which sees only the pref, so
-page.eval_on_selector("a", "a => a.click()") on such a link no longer opens a
-popup -- exactly as on stock, where a scripted click carries no activation
-either. Reaching that case would mean making this a synced BrowsingContext field
-instead of a docShell member. page.click() is unaffected: it synthesizes a real
-click, which grants a real activation.
-
-Guards: browser/tests/playwright/patches/popup-blocker-parity.py (both
-directions, plus that no user activation is granted), and the upstream suite's
-popup tests (page.evaluate(window.open) must keep working).
-
 diff --git a/docshell/base/BrowsingContext.cpp b/docshell/base/BrowsingContext.cpp
-index 5da611e913..d63498919d 100644
 --- a/docshell/base/BrowsingContext.cpp
 +++ b/docshell/base/BrowsingContext.cpp
-@@ -4398,6 +4398,18 @@ bool BrowsingContext::IsPopupAllowed() {
+@@ -6,12 +6,13 @@
+ 
+ #include "ipc/IPCMessageUtils.h"
+ #include "js/Context.h"
+ #include "js/LocaleSensitive.h"
+ #include "mozilla/GfxMessageUtils.h"
+ 
++#include "jsapi.h"
+ #ifdef ACCESSIBILITY
+ #  include "mozilla/a11y/DocAccessibleParent.h"
+ #  include "mozilla/a11y/Platform.h"
+ #  include "nsAccessibilityService.h"
+ #  if defined(XP_WIN)
+ #    include "mozilla/a11y/AccessibleWrap.h"
+@@ -4384,18 +4385,42 @@ void BrowsingContext::DidSet(FieldIndex<IDX_ForceOffline>, bool aOldValue) {
+                          window->FireOfflineStatusEventIfChanged();
+                        }
+                      }
+                    });
+ }
+ 
++// Camoufox: whether the code calling into the DOM right now is the driver's
++// own (see IsPopupAllowed below).
++static bool IsDriverScriptedCaller() {
++  JSContext* cx = nsContentUtils::GetCurrentJSContext();
++  return cx && JS::IsScriptedCallerDebuggerCode(cx);
++}
++
+ bool BrowsingContext::IsPopupAllowed() {
+   for (auto* context = GetCurrentWindowContext(); context;
+        context = context->GetParentWindowContext()) {
      if (context->CanShowPopup()) {
        return true;
      }
 +    // Camoufox: an explicit driver evaluate opens popups the way handling user
 +    // input does, without granting the document a user-gesture activation.
 +    // See nsIDocShell::driverPopupsAllowed; the flag is only ever set around a
-+    // juggler Runtime.evaluate / Runtime.callFunction, so page scripts never
-+    // see it and the popup blocker stays at Firefox's default for them.
++    // juggler Runtime.evaluate / Runtime.callFunction. It counts only when the
++    // driver's own code is the one calling: page code the evaluate reaches (a
++    // getter, a Proxy trap, a toJSON) runs while the flag is set too, and must
++    // meet the popup blocker exactly as it would on stock. Driver code is the
++    // only code a Debugger evaluation compiles (Debugger executeInGlobal), and
++    // an eval inside it counts as driver code too.
 +    if (BrowsingContext* bc = context->GetBrowsingContext()) {
 +      if (nsIDocShell* shell = bc->GetDocShell()) {
-+        if (nsDocShell::Cast(shell)->DriverPopupsAllowed()) {
++        if (nsDocShell::Cast(shell)->DriverPopupsAllowed() &&
++            IsDriverScriptedCaller()) {
 +          return true;
 +        }
 +      }
@@ -60,11 +55,16 @@ index 5da611e913..d63498919d 100644
    }
  
    return false;
+ }
+ 
+ /* static */
 diff --git a/docshell/base/nsDocShell.cpp b/docshell/base/nsDocShell.cpp
-index 16703bcea9..583ce3b917 100644
 --- a/docshell/base/nsDocShell.cpp
 +++ b/docshell/base/nsDocShell.cpp
-@@ -372,6 +372,7 @@ nsDocShell::nsDocShell(BrowsingContext* aBrowsingContext,
+@@ -369,12 +369,13 @@ nsDocShell::nsDocShell(BrowsingContext* aBrowsingContext,
+       mCSSErrorReportingEnabled(false),
+       mFileInputInterceptionEnabled(false),
+       mOverrideHasFocus(false),
        mBypassCSPEnabled(false),
        mForceActiveState(false),
        mDisallowBFCache(false),
@@ -72,7 +72,13 @@ index 16703bcea9..583ce3b917 100644
        mReducedMotionOverride(REDUCED_MOTION_OVERRIDE_NONE),
        mForcedColorsOverride(FORCED_COLORS_OVERRIDE_NO_OVERRIDE),
        mContrastOverride(CONTRAST_OVERRIDE_NONE),
-@@ -3046,6 +3047,21 @@ nsDocShell::SetDisallowBFCache(bool aEnabled) {
+       mAllowAuth(mItemType == typeContent),
+       mAllowKeywordFixup(false),
+       mDisableMetaRefreshWhenInactive(false),
+@@ -3194,12 +3195,27 @@ nsDocShell::GetDisallowBFCache(bool* aEnabled) {
+ NS_IMETHODIMP
+ nsDocShell::SetDisallowBFCache(bool aEnabled) {
+   mDisallowBFCache = aEnabled;
    return NS_OK;
  }
  
@@ -94,11 +100,16 @@ index 16703bcea9..583ce3b917 100644
  bool nsDocShell::IsBypassCSPEnabled() {
    return GetRootDocShell()->mBypassCSPEnabled;
  }
+ 
+ NS_IMETHODIMP
+ nsDocShell::GetOverrideHasFocus(bool* aEnabled) {
 diff --git a/docshell/base/nsDocShell.h b/docshell/base/nsDocShell.h
-index 5d9a683361..4a86b3e0e9 100644
 --- a/docshell/base/nsDocShell.h
 +++ b/docshell/base/nsDocShell.h
-@@ -390,6 +390,9 @@ class nsDocShell final : public nsDocLoader,
+@@ -390,12 +390,15 @@ class nsDocShell final : public nsDocLoader,
+ 
+   bool IsFileInputInterceptionEnabled();
+   void FilePickerShown(mozilla::dom::Element* element);
  
    bool ShouldOverrideHasFocus() const;
  
@@ -108,7 +119,13 @@ index 5d9a683361..4a86b3e0e9 100644
    bool IsBypassCSPEnabled();
  
    RefPtr<mozilla::GeolocationService> GetGeolocationServiceOverride();
-@@ -1341,6 +1344,7 @@ class nsDocShell final : public nsDocLoader,
+ 
+   // Creates a real network channel (not a DocumentChannel) using the specified
+   // parameters.
+@@ -1387,12 +1390,13 @@ class nsDocShell final : public nsDocLoader,
+   bool mCSSErrorReportingEnabled : 1;
+   bool mFileInputInterceptionEnabled: 1;
+   bool mOverrideHasFocus : 1;
    bool mBypassCSPEnabled : 1;
    bool mForceActiveState : 1;
    bool mDisallowBFCache : 1;
@@ -116,11 +133,16 @@ index 5d9a683361..4a86b3e0e9 100644
    nsString mLanguageOverride;
    RefPtr<mozilla::GeolocationService> mGeolocationServiceOverride;
    ReducedMotionOverride mReducedMotionOverride;
+   ForcedColorsOverride mForcedColorsOverride;
+   ContrastOverride mContrastOverride;
+ 
 diff --git a/docshell/base/nsIDocShell.idl b/docshell/base/nsIDocShell.idl
-index 12d05dfcaf..48cee8fc26 100644
 --- a/docshell/base/nsIDocShell.idl
 +++ b/docshell/base/nsIDocShell.idl
-@@ -703,6 +703,23 @@ interface nsIDocShell : nsIDocShellTreeItem
+@@ -693,12 +693,29 @@ interface nsIDocShell : nsIDocShellTreeItem
+   attribute boolean bypassCSPEnabled;
+ 
+   attribute boolean forceActiveState;
  
    attribute boolean disallowBFCache;
  
@@ -144,3 +166,6 @@ index 12d05dfcaf..48cee8fc26 100644
    attribute AString languageOverride;
  
    boolean overrideTimezone(in AString timezoneId);
+ 
+   cenum ReducedMotionOverride : 8 {
+     REDUCED_MOTION_OVERRIDE_REDUCE,

@@ -25,9 +25,13 @@ import {
 	androidGpu,
 	androidGpus,
 	applyMobileMode,
+	type ContextIdentity,
 	clampScreenToDisplay,
 	clampWindowDimensions,
 	clampWindowPosition,
+	type DrawContextIdentityOptions,
+	drawContextIdentity,
+	drawVoiceConfig,
 	dropAudioSeed,
 	fixHardwareConcurrency,
 	fixNavigatorArch,
@@ -47,8 +51,8 @@ import {
 	raiseScreenToModernFloor,
 	Screen,
 	setAppVersion,
+	setCpuDefault,
 	setMediaDevicesDefaults,
-	targetOsFromPlatform,
 	voicePool,
 	WINDOWS_11_MARKER_FONTS,
 } from "./fingerprints.js";
@@ -59,18 +63,20 @@ import {
 	type Gpu,
 	hasCanvasPlaceholder,
 	hostGpu,
-	rendersOnHardware,
 	setWebgpu,
 } from "./host_rendering.js";
 import {
 	type ProxyConfig,
 	ProxyHelper,
+	proxyAuthEnv,
+	proxyAuthInitScript,
 	publicIP,
 	publicIPv6,
+	socks5Auth,
 	validIPv4,
 	validIPv6,
 } from "./ip.js";
-import { handleLocales } from "./locales.js";
+import { handleLocales, SELECTOR } from "./locales.js";
 import { INSTALL_DIR, LAUNCHER_CONSTANTS, OS_NAME } from "./paths.js";
 import {
 	buildFile,
@@ -99,15 +105,58 @@ import {
 	ValueError,
 } from "./pycompat.js";
 import { VirtualDisplay } from "./virtdisplay.js";
-import { FallbackWarning, LeakWarning, warn } from "./warnings.js";
+import {
+	FallbackWarning,
+	LeakWarning,
+	loadWarnings,
+	warn,
+} from "./warnings.js";
 import { firefoxGpus, sampleWebglForScreen, webglForGpu } from "./webgl.js";
 
 type ListOrString = string | string[];
+export function savedPref(
+	profileDir: string | undefined,
+	pref: string,
+): unknown {
+	if (!profileDir) return undefined;
+	let text: string;
+	try {
+		text = fs.readFileSync(path.join(profileDir, "prefs.js"), "utf-8");
+	} catch {
+		return undefined;
+	}
+	const escaped = pref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const m = new RegExp(`user_pref\\("${escaped}",\\s*(.+?)\\);`).exec(text);
+	if (!m) return undefined;
+	try {
+		return JSON.parse(m[1]);
+	} catch {
+		return m[1];
+	}
+}
+
+/** Write a toggle only when on, or to clear a persistent non-stock value. */
+export function setTogglePref(
+	prefs: Record<string, unknown>,
+	pref: string,
+	on: boolean,
+	stock: unknown,
+	toggled: unknown,
+	profileDir: string | undefined,
+): void {
+	if (on) {
+		prefs[pref] ??= toggled;
+		return;
+	}
+	const saved = savedPref(profileDir, pref);
+	if (saved !== undefined && saved !== stock) prefs[pref] ??= stock;
+}
+
 export type TargetOS = "mac" | "win" | "lin";
 type EnvVars = Record<string, string | number | boolean>;
 
 /** The OS names Camoufox takes, by target_os key. */
-const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
+export const OS_NAMES = { win: "windows", mac: "macos", lin: "linux" } as const;
 
 // Camoufox preferences to cache previous pages and requests
 export const CACHE_PREFS: Record<string, any> = LAUNCHER_CONSTANTS.cachePrefs;
@@ -250,6 +299,7 @@ export const utilsDeps = {
 	raiseScreenToModernFloor,
 	generateRandomFontSubset,
 	generateRandomVoiceSubset,
+	drawVoiceConfig,
 	setMediaDevicesDefaults,
 	hostGpu,
 	selectGpu,
@@ -627,6 +677,9 @@ export function validateConfig(
 	for (const [key, value] of Object.entries(configMap)) {
 		const entry = properties[key];
 		if (!entry) {
+			if (key === "voices:speechd") {
+				LeakWarning.warn("voices_unread");
+			}
 			utilsDeps.print(`Skipping unknown patch ${key} : ${pyStr(value)}`);
 			continue; // Property not supported by this browser version; skip silently
 		}
@@ -644,6 +697,9 @@ export function validateConfig(
 			);
 		}
 
+		if (key === "voices:speechd") {
+			validateSpeechdVoices(value);
+		}
 		if (key === "voices") {
 			validateVoices(value);
 		}
@@ -726,6 +782,29 @@ export function validateVoices(voices: any): void {
 			);
 		}
 	});
+}
+
+/**
+ * Validates a `voices:speechd` grid: {"languages": [[name, lang], ...],
+ * "variants": [name, ...]}, the shape MaskConfig::MSpeechdVoices() expands.
+ */
+export function validateSpeechdVoices(grid: any): void {
+	const { languages, variants } = grid ?? {};
+	const ok =
+		Array.isArray(languages) &&
+		languages.every(
+			(e: unknown) =>
+				Array.isArray(e) &&
+				e.length === 2 &&
+				e.every((x) => typeof x === "string"),
+		) &&
+		Array.isArray(variants) &&
+		variants.every((v: unknown) => typeof v === "string");
+	if (!ok) {
+		throw new InvalidPropertyType(
+			'Invalid voices:speechd: expected {"languages": [[name, lang], ...], "variants": [name, ...]}',
+		);
+	}
 }
 
 /**
@@ -818,6 +897,95 @@ function parseUaFamily(userAgent: string): string {
 		"Mobile Safari": "Mobile Safari",
 	};
 	return map[name] ?? name;
+}
+
+/**
+ * general.cpu_identity for the identity's CPU: 0 compute as the host, 1 Intel
+ * x86, 2 AMD x86, 3 ARM64 (every ARM64 CPU computes alike).
+ */
+export function cpuIdentityPref(config: Record<string, any>): number {
+	const arch = config["cpu:arch"] ?? null;
+	const maker = config["cpu:manufacturer"] ?? null;
+	const table: Record<string, number> = LAUNCHER_CONSTANTS.cpuIdentityPref;
+	if (arch === "arm") return table.arm;
+	if (arch !== "x86" && arch !== null) return 0;
+	const key = `x86/${pyStr(maker)}`;
+	return Object.hasOwn(table, key) ? table[key] : 0;
+}
+
+/**
+ * media.libvpx.realtime_only: Firefox builds libvpx realtime-only for Windows
+ * and Linux on ARM64 (not macOS), which changes the WebCodecs VP8/VP9 encoders'
+ * output and rejects quality-mode VP8 outright.
+ */
+export function vpxRealtimeOnly(
+	config: Record<string, any>,
+	targetOs: string,
+): boolean {
+	return (
+		config["cpu:arch"] === "arm" && (targetOs === "win" || targetOs === "lin")
+	);
+}
+
+const CPU_OS_NAMES: Record<string, string> = {
+	windows: "win",
+	macos: "mac",
+	linux: "lin",
+};
+
+/**
+ * The OSes a machine with this CPU can run, among those asked for, as
+ * utils._os_for_cpu. Throws ValueError when the CPU is malformed or none of
+ * them can. With no OS asked for, only OSes with a GPU fpgen recorded beside
+ * such a CPU are drawn: an ARM identity is a Mac, or Linux rendering with
+ * llvmpipe, until Windows-on-ARM or Linux-on-ARM GPUs are recorded.
+ */
+export async function osForCpu(
+	cpu: unknown,
+	osValue: ListOrString | null | undefined,
+): Promise<ListOrString> {
+	const asked =
+		typeof osValue === "string"
+			? [osValue]
+			: osValue?.length
+				? [...osValue]
+				: Object.keys(CPU_OS_NAMES);
+	checkValidOs(asked);
+	const errors: string[] = [];
+	const fits: string[] = [];
+	for (const name of asked) {
+		let resolved: Record<string, string>;
+		try {
+			resolved = coherence.resolveCpu(cpu, CPU_OS_NAMES[name]);
+		} catch (e) {
+			if (!(e instanceof ValueError)) throw e;
+			errors.push(e.message);
+			continue;
+		}
+		if (osValue === null || osValue === undefined) {
+			const gpus = await utilsDeps.firefoxGpus(CPU_OS_NAMES[name]);
+			if (
+				!gpus.some(([, r]) =>
+					coherence.gpuFitsCpu(
+						r,
+						CPU_OS_NAMES[name],
+						resolved["cpu:arch"],
+						resolved["cpu:manufacturer"],
+					),
+				)
+			) {
+				errors.push(`fpgen has recorded no ${name} GPU beside that CPU`);
+				continue;
+			}
+		}
+		fits.push(name);
+	}
+	if (!fits.length) {
+		throw new ValueError(
+			`cpu=${pyRepr(cpu)}: ${[...new Set(errors)].join("; ")}`,
+		);
+	}
+	return fits.length === 1 ? fits[0] : fits;
 }
 
 /**
@@ -930,6 +1098,25 @@ async function keepsIPv6(
 	}
 	LeakWarning.warn("ipv6_elsewhere", iKnowWhatImDoing);
 	return false;
+}
+
+/**
+ * Warns for each coherence violation the launch left in place because the
+ * caller set the values involved. Camoufox does not overwrite what the caller
+ * passed, but an identity no real machine presents is detectable, and a caller
+ * that records its identities needs to know that it holds one (#956).
+ */
+function warnKeptIncoherent(violations: coherence.Violation[]): void {
+	for (const violation of violations) {
+		if (!violation.kept?.length) continue;
+		const keys = violation.kept.join(", ");
+		warn(
+			loadWarnings()
+				.caller_value_incoherent.replaceAll("{keys}", keys)
+				.replace("{detail}", () => violation.detail),
+			"LeakWarning",
+		);
+	}
 }
 
 /**
@@ -1107,8 +1294,8 @@ export function launchesMobile(fromOptions: Record<string, any>): boolean {
 /**
  * What a launch's contexts share because the browser has one of each, as
  * generateContextFingerprint() arguments: the cores a page can measure
- * (fixHardwareConcurrency), and a phone launch's pixel ratio (applyMobileMode),
- * which the whole browser renders at.
+ * (fixHardwareConcurrency), and the pixel ratio the whole browser renders at
+ * when the launch sets one (a phone's, or a desktop's display scale).
  */
 export function launchMachine(fromOptions: Record<string, any>): {
 	hardware_concurrency: number | null;
@@ -1116,11 +1303,12 @@ export function launchMachine(fromOptions: Record<string, any>): {
 } {
 	const blob = camouConfigBlob(fromOptions);
 	const config = blob ? JSON.parse(blob) : {};
-	const dpr = fromOptions.firefoxUserPrefs?.["layout.css.devPixelsPerPx"];
+	const dpr = Number(
+		fromOptions.firefoxUserPrefs?.["layout.css.devPixelsPerPx"] || -1,
+	);
 	return {
 		hardware_concurrency: config["navigator.hardwareConcurrency"] ?? null,
-		device_pixel_ratio:
-			dpr && coherence.isMobileConfig(config) ? Number(dpr) : null,
+		device_pixel_ratio: dpr > 0 ? dpr : null,
 	};
 }
 
@@ -1136,6 +1324,38 @@ export function attachTouchDefault<T>(target: T): T {
 		(target as any)[name] = (options?: Record<string, any>, ...rest: any[]) =>
 			original.call(target, { hasTouch: true, ...options }, ...rest);
 	}
+	return target;
+}
+
+const CAMOUFOX_SOCKS5_AUTH = Symbol.for("camoufox.socks5Auth");
+
+/**
+ * Let newContext()/newPage() of `target` take a SOCKS5 proxy with a username
+ * and password (python/src/camoufox/utils.py attach_socks5_auth).
+ *
+ * Playwright refuses one ("Browser does not support socks5 proxy
+ * authentication"). The context is made with the proxy alone, and an init
+ * script hands Juggler the credentials before newContext() resolves
+ * (socks5Auth, proxyAuthInitScript). Playwright's newPage() makes its context
+ * through newContext(), so it is covered too.
+ */
+export function attachSocks5Auth<T>(target: T): T {
+	const owner = target as any;
+	const original = owner?.newContext;
+	if (typeof original !== "function" || original[CAMOUFOX_SOCKS5_AUTH])
+		return target;
+	const newContext = async (options?: Record<string, any>, ...rest: any[]) => {
+		const [proxy, auth] = socks5Auth(options?.proxy);
+		const context = await original.call(
+			target,
+			options && auth ? { ...options, proxy } : options,
+			...rest,
+		);
+		if (auth) await context.addInitScript(proxyAuthInitScript(auth));
+		return context;
+	};
+	(newContext as any)[CAMOUFOX_SOCKS5_AUTH] = true;
+	owner.newContext = newContext;
 	return target;
 }
 
@@ -1167,10 +1387,10 @@ export type HostIdentity = [TargetOS | null, Gpu | null];
  * Whether the canvas is covered, and the host GPU the identity claims.
  *
  * The canvas renders on the host, so the identity claims the host's GPU when it
- * can: on the host's OS, with no GPU named, on a hardware GPU fpgen has
- * recorded there. A software renderer matches any GPU, and with WebGL off no GPU
- * is claimed. Any other identity contradicts the pixels, so the canvas is
- * covered unless the caller chose canvas_noise: false.
+ * can: on the host's OS, with no GPU named, a GPU or software renderer fpgen has
+ * recorded there. With WebGL off no GPU is claimed. Any other identity
+ * contradicts the pixels, so the canvas is covered unless the caller chose
+ * canvas_noise: false.
  */
 export async function planRendering(
 	targetOs: string | null,
@@ -1182,7 +1402,7 @@ export async function planRendering(
 	if (canvasNoise) return [true, null];
 	if (targetOs && targetOs === utilsDeps.hostOsKey() && !namedGpu) {
 		const host = webglDisabled ? null : await probe();
-		if (!rendersOnHardware(host)) return [false, null];
+		if (host === null) return [false, null];
 		const recorded = await utilsDeps.firefoxGpus(targetOs);
 		if (
 			recorded.some(
@@ -1226,40 +1446,203 @@ export async function hostIdentity(
 	return covered ? null : [hostOs, gpu];
 }
 
+/** What launchMachine() records: what every context of a browser shares. */
+export interface Machine {
+	hardware_concurrency: number | null;
+	device_pixel_ratio: number | null;
+}
+
 /**
- * The OS and GPU a new context on `browser` claims (null: drawn).
- *
- * On a browser without the canvas placeholder they are the host's, since the
- * canvas renders there; asking for anything else throws.
+ * What a browser the launcher did not start (firefox.connect()) tells a page
+ * about its machine, read once from a context without an identity of its own:
+ * the launch identity, and whether canvas readback is covered (random on each
+ * read, as RFP's placeholder is) or the host's pixels.
+ */
+export const MACHINE_PROBE = `() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 4;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#f60';
+    ctx.fillRect(0, 0, 4, 4);
+    const read = () => Array.from(ctx.getImageData(0, 0, 4, 4).data).join();
+    const gl = document.createElement('canvas').getContext('webgl');
+    const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
+    return {
+        userAgent: navigator.userAgent,
+        cores: navigator.hardwareConcurrency,
+        devicePixelRatio: window.devicePixelRatio,
+        covered: read() !== read(),
+        gpu: info ? [gl.getParameter(info.UNMASKED_VENDOR_WEBGL), gl.getParameter(info.UNMASKED_RENDERER_WEBGL)] : null,
+    };
+}`;
+
+export interface MachineFacts {
+	userAgent: string;
+	cores: number;
+	devicePixelRatio: number;
+	covered: boolean;
+	gpu: [string, string] | null;
+}
+
+/**
+ * The host identity and machine of a probed browser. An uncovered browser
+ * renders on its host, so its launch identity is the host's OS, and its GPU
+ * unless that is a software renderer, which matches any.
+ */
+export function machineFromProbe(
+	facts: MachineFacts,
+): [HostIdentity | null, Machine] {
+	const mobile = coherence.isMobileUserAgent(facts.userAgent);
+	const machine: Machine = {
+		hardware_concurrency: facts.cores,
+		device_pixel_ratio: mobile ? Number(facts.devicePixelRatio) : null,
+	};
+	if (facts.covered) return [null, machine];
+	const gpu: Gpu | null =
+		facts.gpu && !isSoftwareRenderer(facts.gpu[1])
+			? [facts.gpu[0], facts.gpu[1]]
+			: null;
+	return [[POOL_KEYS[osFromUserAgent(facts.userAgent)], gpu], machine];
+}
+
+function raiseUnbound(hostIdentity: HostIdentity): never {
+	const [hostOs, gpu] = hostIdentity;
+	throw new ValueError(
+		`This browser renders its canvas as this ${hostOs ? OS_NAMES[hostOs] : "unknown"} machine, so its contexts claim it` +
+			`${gpu ? ` and its GPU ${JSON.stringify(gpu)}` : ""}. Launch it with canvas_noise: true ` +
+			"to give a context another OS or GPU.",
+	);
+}
+
+/**
+ * The OS and GPU a new context draws (undefined/null: drawn). On a browser
+ * without the canvas placeholder they are the host's, since the canvas
+ * renders there.
+ */
+export function contextBinding(
+	hostIdentity: HostIdentity | null,
+	os: string | null | undefined,
+): [string | undefined, Gpu | null] {
+	if (!hostIdentity) return [os ?? undefined, null];
+	const [hostOs, gpu] = hostIdentity;
+	const hostName = hostOs ? OS_NAMES[hostOs] : undefined;
+	if (!hostName || POOL_KEYS[os || hostName] !== hostOs)
+		raiseUnbound(hostIdentity);
+	return [os || hostName, gpu];
+}
+
+/**
+ * Refuse an identity (drawn, a preset's, replayed or overridden) that claims
+ * another OS or GPU than the host a browser without the canvas placeholder
+ * renders on.
+ */
+export function checkContextBinding(
+	hostIdentity: HostIdentity | null,
+	config: Record<string, any>,
+): void {
+	if (!hostIdentity) return;
+	const [hostOs, gpu] = hostIdentity;
+	const claimsOs =
+		POOL_KEYS[osFromUserAgent(config["navigator.userAgent"] ?? "")];
+	if (
+		claimsOs !== hostOs ||
+		(gpu &&
+			(config["webGl:vendor"] !== gpu[0] ||
+				config["webGl:renderer"] !== gpu[1]))
+	)
+		raiseUnbound(hostIdentity);
+}
+
+/**
+ * drawContextIdentity() for a context of a browser with this host identity
+ * and machine, refusing one it cannot render.
  */
 export function contextIdentity(
-	browser: any,
-	os: string | undefined,
-	preset: Record<string, any> | undefined,
-): [string | undefined, Gpu | null] {
-	const hostIdentity: [TargetOS, Gpu | null] | undefined =
-		browser._camoufoxHostIdentity;
-	if (!hostIdentity) return [os, null];
-	const [hostOs, gpu] = hostIdentity;
-	const hostName = OS_NAMES[hostOs];
-	const hasPreset = pyTruthy(preset);
-	const presetGpu = preset?.webgl ?? {};
-	if (
-		POOL_KEYS[os || hostName] !== hostOs ||
-		(hasPreset &&
-			targetOsFromPlatform(preset?.navigator?.platform ?? "") !== hostName) ||
-		(gpu &&
-			hasPreset &&
-			(presetGpu.unmaskedVendor !== gpu[0] ||
-				presetGpu.unmaskedRenderer !== gpu[1]))
-	) {
-		throw new ValueError(
-			`This browser renders its canvas as this ${hostName} machine, so its contexts claim it` +
-				`${gpu ? ` and its GPU ${JSON.stringify(gpu)}` : ""}. Launch it with canvas_noise: true ` +
-				"to give a context another OS or GPU.",
-		);
-	}
-	return [os || hostName, gpu];
+	hostIdentity: HostIdentity | null,
+	machine: Machine,
+	identity: ContextIdentity | null | undefined,
+	ffVersion: string,
+	{ os, ...draw }: DrawContextIdentityOptions,
+): ContextIdentity {
+	const [contextOs, webglConfig] = contextBinding(hostIdentity, os);
+	const drawn = drawContextIdentity(identity, {
+		...draw,
+		os: contextOs,
+		webgl_config: webglConfig,
+		ff_version: ffVersion,
+		...machine,
+	});
+	checkContextBinding(hostIdentity, drawn.config);
+	return drawn;
+}
+
+/** The stored identity's own locale, if it has one. */
+function storedLocale(identity: ContextIdentity | null | undefined): unknown {
+	const config = identity?.config ?? {};
+	return (
+		config["locale:all"] ||
+		(config["locale:language"] && config["navigator.language"])
+	);
+}
+
+/** Whether a context behind a proxy needs to look up where the proxy exits:
+ * unless the caller gave every value placeAtExit() would fill. */
+export function needsExitGeo(
+	identity: ContextIdentity | null | undefined,
+	webrtcIp: string | null | undefined,
+	geolocation: unknown,
+	timezone: string | null | undefined,
+	locale: string | null | undefined,
+): boolean {
+	return !(
+		webrtcIp &&
+		geolocation &&
+		timezone &&
+		(locale || storedLocale(identity))
+	);
+}
+
+/**
+ * Put a context behind a proxy where the proxy exits, as geoip places a
+ * launch: its WebRTC IP, clock and position follow the exit, and a new
+ * identity's locale is drawn for the exit's country. A clock that moved
+ * without the position named two places at once. A replayed identity keeps
+ * its locale, and a value the caller gave is kept.
+ */
+export async function placeAtExit(
+	geo: {
+		ip: string;
+		timezone: string;
+		country: string;
+		latitude: number;
+		longitude: number;
+	},
+	identity: ContextIdentity | null | undefined,
+	webrtcIp: string | null | undefined,
+	geolocation:
+		| { latitude: number; longitude: number; accuracy?: number }
+		| null
+		| undefined,
+	timezone: string | null | undefined,
+	locale: string | null | undefined,
+): Promise<{
+	webrtcIp: string;
+	geolocation: { latitude: number; longitude: number; accuracy?: number };
+	timezone: string;
+	locale: string | null | undefined;
+}> {
+	let loc = locale;
+	if (!loc && !storedLocale(identity))
+		loc = (await SELECTOR.fromRegion(geo.country)).asString;
+	return {
+		webrtcIp: webrtcIp || geo.ip,
+		geolocation: geolocation || {
+			latitude: geo.latitude,
+			longitude: geo.longitude,
+		},
+		timezone: timezone || geo.timezone,
+		locale: loc,
+	};
 }
 
 /**
@@ -1462,6 +1845,22 @@ export interface LaunchOptions {
 	 * a warning. Defaults to the CAMOUFOX_WEBGL_CONFIG environment variable
 	 * ("Vendor|Renderer"), below a preset's own GPU. */
 	webgl_config?: [string, string];
+	/** The CPU the identity computes as: { arch: "x86" or "arm", manufacturer },
+	 * either key optional (a manufacturer implies its arch). Firefox never
+	 * reports it, but canvas pixels, Web Audio samples, encoded Opus,
+	 * relaxed-SIMD wasm and NaN signs differ between x86-64 and ARM64, and
+	 * canvas and Opus between Intel and AMD; the browser computes them as the
+	 * claimed CPU does. Manufacturers per OS: macos x86 intel, arm apple;
+	 * windows x86 intel or amd, arm qualcomm; linux x86 intel or amd, arm
+	 * apple, qualcomm, broadcom, nvidia, ampere, rockchip, mediatek, amlogic or
+	 * allwinner. A pair no machine on the OS has (an AMD Mac, an Apple x86 CPU),
+	 * or one the GPU contradicts (an Apple GPU on x86, an Intel iGPU on AMD),
+	 * throws ValueError. Without `os`, the OS is drawn among those with a
+	 * recorded GPU for the CPU. By default the CPU follows the GPU (Apple GPU:
+	 * Apple ARM; Intel iGPU or Intel Mac: Intel; Radeon iGPU: AMD) and a core
+	 * count only Intel ships, otherwise x86 drawn 81% Intel, as among
+	 * Firefox's x86 users. */
+	cpu?: { arch?: "x86" | "arm"; manufacturer?: string };
 	/** Calculate longitude, latitude, timezone, country, & locale based on the IP
 	 * address. Pass the target IP address to use, or `true` to find it. */
 	geoip?: string | boolean;
@@ -1490,7 +1889,9 @@ export interface LaunchOptions {
 	fingerprint_preset?: boolean | Record<string, any>;
 	/** Firefox version to use. Defaults to the current Camoufox version. */
 	ff_version?: number;
-	/** Whether to run the browser in headless mode. Defaults to false. */
+	/** Whether to run the browser in headless mode. Defaults to false.
+	 * NewBrowser and launchServer run headless: true on Linux on Xvfb when available;
+	 * launchOptions() alone starts no display. */
 	headless?: boolean;
 	/** Whether to enable running scripts in the main world ("mw:" prefix). */
 	main_world_eval?: boolean;
@@ -1603,6 +2004,7 @@ export async function launchOptions({
 	block_webgl,
 	disable_coop,
 	webgl_config,
+	cpu,
 	geoip,
 	geoip_db,
 	humanize,
@@ -1686,6 +2088,10 @@ export async function launchOptions({
 	if (!i_know_what_im_doing) {
 		warnManualConfig(config);
 	}
+	if (cpu !== undefined && cpu !== null) {
+		targetOsOption = await osForCpu(cpu, targetOsOption);
+	}
+	const callerKeys: ReadonlySet<string> = new Set(Object.keys(config));
 
 	// Snapshot which domains the USER set before fingerprint generation fills in
 	// the rest. The post-generation corrections below must only touch generated
@@ -1704,7 +2110,7 @@ export async function launchOptions({
 	const userSetTouchPoints = "navigator.maxTouchPoints" in config;
 	const userSetMediaDevices = isDomainSet(config, "mediaDevices:");
 	const userSetFonts = Boolean(fonts?.length) || isDomainSet(config, "fonts");
-	const userSetVoices = isDomainSet(config, "voices");
+	const userSetVoices = isDomainSet(config, "voices", "voices:speechd");
 	const userSetDnt = "navigator.doNotTrack" in config;
 	const userSetGpc = "navigator.globalPrivacyControl" in config;
 	const userSetAcceptEncoding = "headers.Accept-Encoding" in config;
@@ -1840,6 +2246,45 @@ export async function launchOptions({
 	if (pyTruthy(userUa) && !userSetAppVersion) setAppVersion(config);
 
 	const targetOs = getTargetOs(config);
+	if (cpu !== undefined && cpu !== null) {
+		Object.assign(config, coherence.resolveCpu(cpu, targetOs));
+	}
+
+	// fpgen.yml leaves devicePixelRatio unmapped, so the page reports the
+	// rendering scale while the screen keeps fpgen's CSS sizes. A drawn ratio no
+	// display offers is a browser zoom that shrank those sizes (1760x990 at
+	// 1.0909 is a 1920x1080 monitor at 110%): it moves to the display's scale
+	// with the geometry rescaled, so the screen is the display it was recorded
+	// on. Here, before the display clamp and the available area are derived
+	// from it. A phone's ratio is its recorded device's, which no desktop
+	// display offers.
+	if (
+		!usedPreset &&
+		fingerprint != null &&
+		typeof fingerprint === "object" &&
+		!userSetScreenWindow &&
+		!coherence.isMobileConfig(config)
+	) {
+		const drawnDpr = (fingerprint as Record<string, any>).window
+			?.devicePixelRatio;
+		if (
+			!("window.devicePixelRatio" in config) &&
+			coherence.isZoomedRatio(drawnDpr, targetOs)
+		) {
+			// A caller's layout.css.devPixelsPerPx is the scale the page renders
+			// at, so the ratio moves to that: otherwise the page reports one
+			// devicePixelRatio and matches another in matchMedia('(resolution)').
+			const callerScale = Number(
+				firefox_user_prefs["layout.css.devPixelsPerPx"] ?? -1,
+			);
+			config["window.devicePixelRatio"] = drawnDpr;
+			coherence.repairDevicePixelRatio(
+				config,
+				targetOs,
+				callerScale > 0 ? callerScale : undefined,
+			);
+		}
+	}
 
 	// A phone -- os="android", or an Android user agent the caller passed -- has
 	// to behave like one. The device pixel ratio moves only where there is no
@@ -1961,6 +2406,14 @@ export async function launchOptions({
 	} else {
 		setInto(firefox_user_prefs, "ui.useOverlayScrollbars", 1);
 	}
+
+	// Stock doubles a wheel's lines on Windows and Linux and never on macOS, and
+	// a page reads the result in deltaY (docs/input-dispatch.md).
+	setInto(
+		firefox_user_prefs,
+		"mousewheel.system_scroll_override.enabled",
+		targetOs !== "mac",
+	);
 
 	// A Windows identity on another host: answers that come from the host
 	// build's platform code are set to what stock Windows Firefox gives.
@@ -2117,7 +2570,10 @@ export async function launchOptions({
 	// `voices` unset exposes every native voice on the box (#731). Drawn after
 	// the locale is resolved: the Windows voice list is the display language's
 	// pack.
-	if (!userSetVoices || !("voices" in config)) {
+	if (
+		!userSetVoices ||
+		(!("voices" in config) && !("voices:speechd" in config))
+	) {
 		const osNameV = OS_NAMES[targetOs] ?? "macos";
 		let voiceLocale = config["navigator.language"];
 		if (pyTruthy(config["locale:language"])) {
@@ -2126,10 +2582,13 @@ export async function launchOptions({
 				.join("-");
 		}
 		try {
-			config.voices = utilsDeps.generateRandomVoiceSubset(
-				osNameV,
-				voiceLocale ?? null,
-				utilsDeps.identitySeed(config, salt),
+			Object.assign(
+				config,
+				utilsDeps.drawVoiceConfig(
+					osNameV,
+					voiceLocale ?? null,
+					utilsDeps.identitySeed(config, salt),
+				),
 			);
 		} catch (e) {
 			if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
@@ -2184,19 +2643,36 @@ export async function launchOptions({
 	)
 		LeakWarning.warn("plugins_pdf_mismatch", i_know_what_im_doing);
 
-	// Set Firefox user preferences. Each toggle writes its pref on or off: a
-	// persistent profile keeps a user.js pref in prefs.js after the launch that
-	// set it, so a flag that only wrote when on stayed on for good.
+	// Fresh profiles get a toggle's pref only when on. A persistent profile
+	// may need the stock value written once to clear an earlier toggled value.
 	if (block_images) {
 		LeakWarning.warn("block_images", i_know_what_im_doing);
 	}
 	if (disable_coop) {
 		LeakWarning.warn("disable_coop", i_know_what_im_doing);
 	}
-	firefox_user_prefs["permissions.default.image"] ??= block_images ? 2 : 1;
-	firefox_user_prefs["media.peerconnection.enabled"] ??= !block_webrtc;
-	firefox_user_prefs["browser.tabs.remote.useCrossOriginOpenerPolicy"] ??=
-		!disable_coop;
+	const profileDir = (passthrough.user_data_dir ?? passthrough.userDataDir) as
+		| string
+		| undefined;
+	for (const [on, pref, stock, toggled] of [
+		[block_images, "permissions.default.image", 1, 2],
+		[block_webrtc, "media.peerconnection.enabled", true, false],
+		[
+			disable_coop,
+			"browser.tabs.remote.useCrossOriginOpenerPolicy",
+			true,
+			false,
+		],
+	] as [unknown, string, unknown, unknown][]) {
+		setTogglePref(
+			firefox_user_prefs,
+			pref,
+			Boolean(on),
+			stock,
+			toggled,
+			profileDir,
+		);
+	}
 	// A persistent context takes its context options here.
 	if (
 		(passthrough.is_mobile || passthrough.isMobile) &&
@@ -2208,7 +2684,9 @@ export async function launchOptions({
 	// Drop values the source supplied that this identity cannot keep, before the
 	// WebGL pool below defers to them. Here, not earlier, because the check
 	// reads the core count and the screen, which the launch replaces above.
-	coherence.dropIncoherentSourceValues(config, targetOs);
+	warnKeptIncoherent(
+		coherence.dropIncoherentSourceValues(config, targetOs, callerKeys),
+	);
 	if (
 		defaultWebglConfig &&
 		!(pyTruthy(config["webGl:vendor"]) && pyTruthy(config["webGl:renderer"]))
@@ -2249,8 +2727,9 @@ export async function launchOptions({
 	// A context's voices follow its own OS and locale. The browser registers
 	// every voice such a draw can take, and shows each context the ones it
 	// lists. Without canvas noise a context claims the launch's OS.
-	config["voices:pool"] = voicePool(
-		coverCanvas ? ["mac", "win", "lin"] : [targetOs],
+	Object.assign(
+		config,
+		voicePool(coverCanvas ? ["mac", "win", "lin"] : [targetOs]),
 	);
 
 	if (block_webgl) {
@@ -2317,6 +2796,7 @@ export async function launchOptions({
 				config["screen.height"],
 				seed(),
 				config["navigator.hardwareConcurrency"],
+				config,
 			);
 		}
 		const enableWebgl2 = webglFp.webGl2Enabled;
@@ -2331,10 +2811,20 @@ export async function launchOptions({
 		});
 	}
 
+	// The CPU follows the GPU, so it is drawn once the GPU is final. A CPU the
+	// caller named that the GPU contradicts (a preset's, webgl_config's, the
+	// host's) is no machine at all.
+	if (cpu !== undefined && cpu !== null) {
+		const conflict = coherence.cpuConflict(config, targetOs);
+		if (conflict) throw new ValueError(`cpu=${pyRepr(cpu)}: ${conflict}`);
+	}
+	setCpuDefault(config, targetOs, salt);
+
 	// Every identity passes the whole-identity checks, whatever built it. The
 	// pools are sampled independently, so a machine that never existed can be
 	// assembled from parts that are each fine on their own. See coherence.ts.
-	const incoherent = coherence.apply(config, targetOs);
+	const incoherent = coherence.apply(config, targetOs, callerKeys);
+	warnKeptIncoherent(incoherent);
 	if (incoherent.length && debug) {
 		for (const violation of incoherent) {
 			console.log(
@@ -2343,11 +2833,30 @@ export async function launchOptions({
 		}
 	}
 
+	// The browser computes canvas, audio, Opus, wasm and NaNs as the claimed
+	// CPU does (cpu-identity.patch). A build without the patch ignores the pref
+	// and computes as the host does.
+	const cpuPref = cpuIdentityPref(config);
+	if (cpuPref && !("general.cpu_identity" in firefox_user_prefs)) {
+		firefox_user_prefs["general.cpu_identity"] = cpuPref;
+	}
+	if (
+		vpxRealtimeOnly(config, targetOs) &&
+		!("media.libvpx.realtime_only" in firefox_user_prefs)
+	) {
+		firefox_user_prefs["media.libvpx.realtime_only"] = true;
+	}
+
 	// Render at the claimed display scale, so (resolution) and the CSS geometry
 	// agree with devicePixelRatio as on the real machine (#933). That includes 1:
 	// on a HiDPI host the host's own scale would otherwise reach (resolution).
+	// A phone's scale is applyMobileMode's, which keeps a headful window at 1.
 	const dpr = Number(config["window.devicePixelRatio"]);
-	if (dpr && !("layout.css.devPixelsPerPx" in firefox_user_prefs)) {
+	if (
+		dpr &&
+		!coherence.isMobileConfig(config) &&
+		!("layout.css.devPixelsPerPx" in firefox_user_prefs)
+	) {
 		firefox_user_prefs["layout.css.devPixelsPerPx"] = String(dpr);
 	}
 	if (headless === false && !virtual_display && screenCons) {
@@ -2388,10 +2897,15 @@ export async function launchOptions({
 	warnIfExecutablePredatesPlaywright(executable_path);
 	utilsDeps.validateConfig(config, executable_path);
 
+	// A SOCKS5 proxy's credentials go to Juggler, not through Playwright, which
+	// refuses them (socks5Auth).
+	const [launchProxy, proxyAuth] = socks5Auth(proxy);
+
 	// Prepare environment variables to pass to Camoufox
 	const envVars: EnvVars = {
 		...utilsDeps.getEnvVars(config, targetOs, executable_path),
 		...getPrefEnvVars(firefox_user_prefs),
+		...(proxyAuth ? proxyAuthEnv(proxyAuth) : {}),
 		...env,
 	};
 
@@ -2406,8 +2920,8 @@ export async function launchOptions({
 	// Only include proxy if it's set (Playwright validates this)
 	// https://github.com/coryking/camoufox/commit/1336e8e509e8c12a896a09d9ee51f131f739f106
 	// Thanks @coryking
-	if (proxy != null) {
-		result.proxy = proxy;
+	if (launchProxy != null) {
+		result.proxy = launchProxy;
 	}
 
 	return result;

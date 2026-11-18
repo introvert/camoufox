@@ -12,4 +12,5 @@ export {
 	type NewBrowserOptions,
 	NewContext as AsyncNewContext,
 	type NewContextOptions,
+	NewIdentity as AsyncNewIdentity,
 } from "./sync_api.js";

@@ -2,6 +2,7 @@
 CLI package manager for Camoufox
 """
 
+import dataclasses
 from collections import Counter
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
@@ -297,7 +298,7 @@ def fetch(version):
         # This library release pairs with exactly one browser build.
         repo_name, spec, tag = pin.repo_name, pin.spec, pin.tag
 
-    repo_config, selected = (tag and _tagged_build(repo_name, tag, spec)) or _synced_build(
+    repo_config, selected = (tag and _tagged_build(repo_name, tag, spec, pin and pin.repo)) or _synced_build(
         config, repo_name, spec, pin
     )
     try:
@@ -326,15 +327,18 @@ def _fail(message: str) -> NoReturn:
 
 
 def _tagged_build(
-    repo_name: str, tag: str, spec: str
+    repo_name: str, tag: str, spec: str, repo: Optional[str] = None
 ) -> Optional[Tuple[RepoConfig, AvailableVersion]]:
     """
     The build `spec` names, read from its own release with one API call. None
     when the source has no such tag: early builds were published under others.
+    `repo` is the repository a pin names, which a fork adds to the source's own.
     """
     repo_config = RepoConfig.find_by_name(repo_name)
     if repo_config is None:
         return None
+    if repo and repo not in repo_config.repos:
+        repo_config = dataclasses.replace(repo_config, repos=[repo, *repo_config.repos])
     try:
         versions = tagged_versions(repo_config, tag)
     except requests.RequestException as e:

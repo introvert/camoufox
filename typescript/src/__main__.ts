@@ -7,6 +7,7 @@
  * pickers (`set`, `set --geoip`, `remove --select`) use a numbered
  * prompt in place of inquirer's arrow-key list.
  */
+import "./node-floor.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
@@ -448,9 +449,16 @@ async function taggedBuild(
 	repoName: string,
 	tag: string,
 	spec: string,
+	repo?: string,
 ): Promise<[RepoConfig, AvailableVersion] | null> {
-	const repoConfig = RepoConfig.findByName(repoName);
-	if (!repoConfig) return null;
+	const found = RepoConfig.findByName(repoName);
+	if (!found) return null;
+	// A pin names the repository its release was published in, which a fork
+	// adds to the source's own.
+	const repoConfig =
+		repo && !found.repos.includes(repo)
+			? new RepoConfig({ ...found, repos: [repo, ...found.repos] })
+			: found;
 	const match = (await taggedVersions(repoConfig, tag)).find(
 		(v) => v.version.fullString === spec,
 	);
@@ -654,7 +662,10 @@ program
 		}
 
 		const [repoConfig, selected] =
-			(repoName && spec && tag && (await taggedBuild(repoName, tag, spec))) ||
+			(repoName &&
+				spec &&
+				tag &&
+				(await taggedBuild(repoName, tag, spec, pin?.repo))) ||
 			(await syncedBuild(config, repoName, spec, pin));
 		try {
 			const updater = await new CamoufoxUpdate(repoConfig, selected).init();

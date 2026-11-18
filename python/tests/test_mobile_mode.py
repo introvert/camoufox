@@ -18,6 +18,7 @@ Run with:
 
 import json
 import re
+import types
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
@@ -259,7 +260,10 @@ class TestLaunchOptions:
         config, prefs = launch(os=os_name)
         assert 'mobile' not in config
         assert not set(MOBILE_FIREFOX_PREFS) & set(prefs)
-        assert 'layout.css.devPixelsPerPx' not in prefs
+        # A desktop renders at its own display scale (#933), set only for a
+        # zoomed draw, never at a phone's ratio.
+        if 'layout.css.devPixelsPerPx' in prefs:
+            assert prefs['layout.css.devPixelsPerPx'] == f"{float(config['window.devicePixelRatio']):g}"
 
     @pytest.mark.parametrize('os_name', ['windows', 'macos', 'linux', 'android'])
     def test_browser_owned_navigator_values_are_firefoxs(self, os_name):
@@ -301,6 +305,8 @@ class TestLaunchOptions:
 class _FakeBrowser:
     def __init__(self):
         self.kwargs = None
+        # Playwright's implementation object, which attach_socks5_auth wraps.
+        self._impl_obj = types.SimpleNamespace()
 
     def new_page(self, **kwargs):
         self.kwargs = kwargs
@@ -534,11 +540,9 @@ class TestIsMobileWarning:
         assert not [w for w in recwarn if 'built for desktops' in str(w.message)]
 
     def test_android_context_on_a_linux_host_keeps_android(self):
-        browser = mock.Mock(spec=[])
-        browser._camoufox_host_identity = ('lin', None)
-        assert utils.context_identity(browser, 'android', None) == ('android', None)
+        assert utils.context_binding(('lin', None), 'android') == ('android', None)
         with pytest.raises(ValueError, match='canvas_noise=True'):
-            utils.context_identity(browser, 'windows', None)
+            utils.context_binding(('lin', None), 'windows')
 
 
 class TestFleetGpu:

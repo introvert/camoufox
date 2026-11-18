@@ -16,7 +16,11 @@ import * as path from "node:path";
 import { generate, InvalidConstraints } from "fpgen-js";
 import * as random from "python-random";
 import * as coherence from "./coherence.js";
-import { BROWSER_CHROME_HEIGHT, isMobileConfig } from "./coherence.js";
+import {
+	BROWSER_CHROME_HEIGHT,
+	hardwareCpu,
+	isMobileConfig,
+} from "./coherence.js";
 import {
 	supported as cpuAffinitySupported,
 	hostCoreCount,
@@ -33,12 +37,14 @@ import {
 	KeyError,
 	num,
 	orjsonDumps,
+	pyRepr,
 	pyStr,
 	pySum,
 	pySumFloats,
 	pyTruthy,
 	ValueError,
 } from "./pycompat.js";
+import { determineUaOs, OS_NAMES, validateVoices } from "./utils.js";
 import {
 	FallbackWarning,
 	LeakWarning,
@@ -355,17 +361,22 @@ function loadFontBases(): Record<string, FontBase[]> {
 	return fontBasesCache;
 }
 
-/** Draw one OS-version base by its real-world weight. */
-function pickBase(osKey: string, r: random.Random): string[] {
+/**
+ * Draw the OS version a machine runs (a font-bases.json entry) by its
+ * real-world weight (`_pick_release`). It is the identity's first draw, so the
+ * font list and the voice list, drawn from the same seed, land on the same
+ * version.
+ */
+function pickRelease(osKey: string, r: random.Random): any | null {
 	const bases = loadFontBases()[osKey] ?? [];
-	if (!bases.length) return [];
+	if (!bases.length) return null;
 	const roll = r.random();
 	let cumulative = 0.0;
 	for (const base of bases) {
 		cumulative += base.weight ?? 0.0;
-		if (roll < cumulative) return [...base.fonts];
+		if (roll < cumulative) return base;
 	}
-	return [...bases[bases.length - 1].fonts];
+	return bases[bases.length - 1];
 }
 
 function localeMatches(
@@ -477,7 +488,8 @@ export function generateRandomFontSubset(
 		return result;
 	}
 
-	let base = pickBase(osKey, r);
+	const release = pickRelease(osKey, r);
+	let base: string[] = release ? [...release.fonts] : [];
 	if (!base.length) base = fullList.filter((f) => essential.has(f));
 	const result = [...base];
 	const chosen = new Set(result);
@@ -672,11 +684,55 @@ function codePointGreater(a: string, b: string): boolean {
 	return comparePyStr(a, b) > 0;
 }
 
+/** A Linux identity's speech-dispatcher voices (`voices:speechd`). */
+export interface SpeechdGrid {
+	languages: Array<[string, string]>;
+	variants: string[];
+}
+
+/**
+ * The speech-dispatcher voice grid of the Ubuntu release the identity runs
+ * (`_speechd_grid`).
+ */
+function speechdGrid(seed?: number | bigint | null): SpeechdGrid {
+	const release = pickRelease("lin", rng(seed));
+	const releases = loadVoiceManifests().lin.releases;
+	return release
+		? releases[release.id].speechd
+		: (Object.values(releases)[0] as any).speechd;
+}
+
+/**
+ * (name, lang) per voice in speech-dispatcher's order (`_speechd_voices`):
+ * each language alone, then with every variant.
+ */
+export function speechdVoices(grid: SpeechdGrid): Array<[string, string]> {
+	return grid.languages.flatMap(([name, lang]) => [
+		[name, lang] as [string, string],
+		...grid.variants.map((v) => [`${name}+${v}`, lang] as [string, string]),
+	]);
+}
+
+/**
+ * The identity's voices as the config keys the browser reads
+ * (`draw_voice_config`): `voices` on macOS and Windows, `voices:speechd` on
+ * Linux, whose ~15000 voices only fit in the environment as their grid.
+ */
+export function drawVoiceConfig(
+	targetOs: string,
+	locale?: string | null,
+	seed?: number | bigint | null,
+): Record<string, any> {
+	if (osKeyOf(targetOs) === "lin")
+		return { "voices:speechd": speechdGrid(seed) };
+	return { voices: generateRandomVoiceSubset(targetOs, locale, seed) };
+}
+
 /**
  * The speech voice list for the given OS as MaskConfig voice objects
  * (`_generate_random_voice_subset`), following the measured per-OS model in
  * voice-manifests.json. Seeded by the identity so it always reports the same
- * list. No voice is marked default: stock Firefox marks none.
+ * list. macOS marks its system voice default; Windows and Linux mark none.
  */
 export function generateRandomVoiceSubset(
 	targetOs: string,
@@ -685,6 +741,17 @@ export function generateRandomVoiceSubset(
 ): VoiceObject[] {
 	const r = rng(seed);
 	const osKey = osKeyOf(targetOs);
+	if (osKey === "lin") {
+		return speechdVoices(speechdGrid(seed)).map(([name, lang]) => ({
+			name,
+			lang,
+			voiceUri: voiceUri("lin", name, lang),
+			isDefault: false,
+			// SpeechDispatcherService registers voices as local only when one
+			// is named "default"; espeak-ng has none.
+			isLocalService: false,
+		}));
+	}
 	const manifests = loadVoiceManifests();
 	const manifest = pyTruthy(manifests[osKey])
 		? manifests[osKey]
@@ -777,10 +844,13 @@ export function generateRandomVoiceSubset(
 		}
 	}
 
-	return voiceObjects(osKey, [...out, ...legacy]);
+	const voices = voiceObjects(osKey, [...out, ...legacy]);
+	const systemVoice = manifest.systemVoice?.default;
+	const def = voices.find((v) => v.name === systemVoice);
+	if (def) def.isDefault = true;
+	return voices;
 }
 
-// No voice carries default=true: stock Firefox marks none on any OS.
 function voiceObjects(osKey: string, entries: string[]): VoiceObject[] {
 	return entries.map(splitVoiceEntry).map(([name, lang, vtype]) => ({
 		name,
@@ -792,16 +862,24 @@ function voiceObjects(osKey: string, entries: string[]): VoiceObject[] {
 }
 
 /**
- * Every voice the manifests record for these OSes, for `voices:pool`. The
- * browser registers them beside the launch's own voices, and a context sees
- * those its list names: the voices its draw took for its locale, which the
- * launch's draw need not have.
+ * Every voice the manifests record for these OSes, as the config keys the
+ * browser registers beside the launch's own voices: `voices:pool` for voice
+ * objects, `voices:pool:speechd` for each Ubuntu release's speech-dispatcher
+ * grid. A context sees those its list names: the voices its draw took for its
+ * locale and release, which the launch's draw need not have.
  */
-export function voicePool(osKeys: Iterable<string>): VoiceObject[] {
+export function voicePool(osKeys: Iterable<string>): {
+	"voices:pool"?: VoiceObject[];
+	"voices:pool:speechd"?: Record<string, any>[];
+} {
 	const manifests = loadVoiceManifests();
-	const pool: VoiceObject[] = [];
+	const objects: VoiceObject[] = [];
+	const grids: Record<string, any>[] = [];
 	for (const osKey of osKeys) {
 		const manifest = manifests[osKey];
+		for (const release of Object.values(manifest.releases ?? {}) as any[]) {
+			grids.push(release.speechd);
+		}
 		const entries: string[] = [...(manifest.base ?? [])];
 		for (const pack of Object.values(manifest.langPacks ?? {}) as any[]) {
 			entries.push(...(pack.oneCore ?? []), ...(pack.desktop ?? []));
@@ -809,9 +887,12 @@ export function voicePool(osKeys: Iterable<string>): VoiceObject[] {
 		for (const addition of manifest.additions ?? []) {
 			entries.push(...(addition.voices ?? []));
 		}
-		pool.push(...voiceObjects(osKey, [...new Set(entries)]));
+		objects.push(...voiceObjects(osKey, [...new Set(entries)]));
 	}
-	return pool;
+	return {
+		...(objects.length ? { "voices:pool": objects } : {}),
+		...(grids.length ? { "voices:pool:speechd": grids } : {}),
+	};
 }
 
 /**
@@ -1320,6 +1401,42 @@ export function setMediaDevicesDefaults(
 	Object.assign(config, drawMediaDevices(osKey, identitySeed(config, salt)));
 }
 
+/**
+ * Intel's share of the x86 desktop CPUs running Firefox (Firefox Public Data
+ * Report, week of 2026-11-02: Intel 76.86%, AMD 17.61%); fingerprints.py.
+ */
+export const X86_INTEL_SHARE: number = LAUNCHER_CONSTANTS.x86IntelShare;
+
+/**
+ * Fill in the identity's CPU (cpu:arch, cpu:manufacturer), as
+ * fingerprints.set_cpu_default does. The GPU decides what it can (an Apple
+ * GPU is an Apple ARM CPU, an Intel iGPU or Intel Mac an Intel one, a Radeon
+ * iGPU an AMD one), then a core count only Intel ships; any other x86
+ * identity's vendor is drawn at Firefox's own x86 split, seeded by the
+ * identity. An ARM identity whose GPU names no single SoC maker keeps its
+ * manufacturer unset: every ARM64 CPU computes alike. Run after the GPU and
+ * navigator.hardwareConcurrency are final. Keys the caller set are kept.
+ */
+export function setCpuDefault(
+	config: Config,
+	targetOs: string,
+	salt: number | bigint = 0,
+): void {
+	let [arch, maker]: [string | null, string | null] = hardwareCpu(
+		config,
+		targetOs,
+	);
+	arch =
+		(pyTruthy(config["cpu:arch"]) ? config["cpu:arch"] : null) || arch || "x86";
+	if (!("cpu:arch" in config)) config["cpu:arch"] = arch;
+	if ("cpu:manufacturer" in config || arch !== config["cpu:arch"]) return;
+	if (!maker && arch === "x86") {
+		const draw = rng((identitySeed(config, salt) ^ 0xc9d0) >>> 0).random();
+		maker = draw < X86_INTEL_SHARE ? "intel" : "amd";
+	}
+	if (maker) config["cpu:manufacturer"] = maker;
+}
+
 // ---------------------------------------------------------------------------
 // WebGL <-> screen coherence (#729)
 // ---------------------------------------------------------------------------
@@ -1595,10 +1712,9 @@ export function fromPreset(
 		}
 	}
 	try {
-		config.voices = generateRandomVoiceSubset(
-			targetOs,
-			null,
-			identitySeed(config, s),
+		Object.assign(
+			config,
+			drawVoiceConfig(targetOs, null, identitySeed(config, s)),
 		);
 	} catch (e) {
 		if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
@@ -1639,8 +1755,8 @@ export interface InitValues {
 	windowY?: number;
 	timezone?: string;
 	fontList?: string[];
-	speechVoices?: Array<string | VoiceObject>;
-	webrtcIP?: string;
+	speechVoices?: Array<string | VoiceObject> | { speechd: SpeechdGrid };
+	webrtcIP?: string | string[];
 	webglConfig?: Config;
 }
 
@@ -1713,14 +1829,20 @@ export function buildInitScript(values: InitValues): string {
 	}
 
 	// WebRTC IP
-	const ip = values.webrtcIP;
-	if (pyTruthy(ip)) {
-		validateIP(ip as string);
-		const fnName = validIPv4(ip as string) ? "setWebRTCIPv4" : "setWebRTCIPv6";
+	const ips =
+		typeof values.webrtcIP === "string"
+			? values.webrtcIP
+				? [values.webrtcIP]
+				: []
+			: (values.webrtcIP ?? []);
+	for (const ip of ips) {
+		validateIP(ip);
+		const fnName = validIPv4(ip) ? "setWebRTCIPv4" : "setWebRTCIPv6";
 		lines.push(
 			`  if (typeof w.${fnName} === "function") w.${fnName}(${pyJsonDumps(ip)});`,
 		);
-	} else {
+	}
+	if (!ips.length) {
 		lines.push(
 			'  if (typeof w.setWebRTCIPv4 === "function") w.setWebRTCIPv4("");',
 		);
@@ -1734,9 +1856,14 @@ export function buildInitScript(values: InitValues): string {
 		);
 	}
 
-	// Speech voices, one name per line, as names hold commas
+	// Speech voices: names one per line, as names hold commas, or a Linux
+	// identity's speech-dispatcher grid as JSON
 	const voices = values.speechVoices;
-	if (voices?.length) {
+	if (voices && !Array.isArray(voices)) {
+		lines.push(
+			`  if (typeof w.setSpeechVoices === "function") w.setSpeechVoices(${pyJsonDumps(asciiJson(voices))});`,
+		);
+	} else if (voices?.length) {
 		const names = voices.map((v) =>
 			v !== null && typeof v === "object" ? v.name : v,
 		);
@@ -1747,6 +1874,14 @@ export function buildInitScript(values: InitValues): string {
 
 	lines.push("})();");
 	return lines.join("\n");
+}
+
+/** Python's json.dumps(value, separators=(",", ":")) for plain JSON data. */
+function asciiJson(value: unknown): string {
+	return JSON.stringify(value).replace(
+		/[\u007f-\uffff]/g,
+		(c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+	);
 }
 
 /** json.dumps() with its defaults (ASCII-escaped, ", " / ": " separators) for scalars. */
@@ -1767,13 +1902,6 @@ function pyJsonDumps(value: unknown): string {
 	return String(value);
 }
 
-export interface ContextFingerprint {
-	init_script: string;
-	context_options: Record<string, any>;
-	config: Config;
-	preset: Preset;
-}
-
 /** The OS a navigator.platform value presents, as a Camoufox OS name. */
 export function targetOsFromPlatform(plat: string): SupportedOS {
 	if (plat === "Win32") return "windows";
@@ -1788,285 +1916,569 @@ function poolKeyFromPlatform(plat: string): TargetOS {
 	];
 }
 
+/** A context's identity: plain JSON to store and replay. The salt is a
+ * decimal string, as 64 bits do not survive a JSON number. */
+export interface ContextIdentity {
+	salt: string;
+	config: Config;
+}
+
+export interface ContextFingerprint {
+	init_script: string;
+	context_options: Record<string, any>;
+	config: Config;
+	identity: ContextIdentity;
+}
+
 /**
- * Fingerprint values for a single per-context identity: the init script plus
- * the Playwright context options (camelCase, for playwright-core).
- *
- * By default an fpgen fingerprint is generated; pass a preset to use a real
- * recorded one instead.
- *
- * @param timezone IANA timezone; takes priority over the preset's.
- * @param locale BCP-47 locale; also sets context_options.locale.
- * @param config_overrides CAMOU_CONFIG keys applied after the config is built
- *   and before the init script is rendered.
- * @param webgl_config The [vendor, renderer] a drawn identity claims, instead
- *   of drawing one.
- * @param device_pixel_ratio The pixel ratio the browser renders at, which an
- *   Android identity's device must have (a phone launch's).
- * @param hardware_concurrency The cores the browser reports, which a page can
- *   measure whatever the context claims (fixHardwareConcurrency).
- * @param i_know_what_im_doing Silences the warning that a phone takes its
- *   voices and GPU from the Linux pools.
+ * A context identity is these values, applied per context by the setters and
+ * Playwright's context options (docs/per-context-patches.md). The rest of a
+ * config describes the browser, which every context shares.
  */
-export function generateContextFingerprint({
-	preset,
-	os,
-	ff_version,
-	webrtc_ip,
-	timezone,
-	locale,
-	config_overrides,
-	webgl_config,
-	device_pixel_ratio,
-	hardware_concurrency,
-	i_know_what_im_doing = false,
-}: {
+export const CONTEXT_IDENTITY_KEYS: ReadonlySet<string> = new Set([
+	"navigator.userAgent",
+	"navigator.appVersion",
+	"navigator.platform",
+	"navigator.oscpu",
+	"navigator.hardwareConcurrency",
+	"screen.width",
+	"screen.height",
+	"screen.colorDepth",
+	"window.outerWidth",
+	"window.outerHeight",
+	"window.screenX",
+	"window.screenY",
+	"timezone",
+	"geolocation:latitude",
+	"geolocation:longitude",
+	"geolocation:accuracy",
+	"webrtc:ipv4",
+	"webrtc:ipv6",
+	"fonts",
+	"voices",
+	"window.devicePixelRatio",
+]);
+export const CONTEXT_IDENTITY_PREFIXES: readonly string[] = [
+	"webGl:",
+	"webGl2:",
+];
+
+// What the machine-dependent draws are seeded from (identitySeed): an override
+// of one of them describes another machine, whose fonts, voices and GPU are
+// drawn again.
+const MACHINE_KEYS = [
+	"navigator.userAgent",
+	"navigator.platform",
+	"screen.width",
+	"screen.height",
+];
+
+export function isContextIdentityKey(key: string): boolean {
+	return (
+		CONTEXT_IDENTITY_KEYS.has(key) ||
+		CONTEXT_IDENTITY_PREFIXES.some((p) => key.startsWith(p))
+	);
+}
+
+/** Refuse an override no context can carry, rather than drop it silently. */
+function checkOverrides(
+	overrides: Config,
+	hardwareConcurrency: number | null | undefined,
+): void {
+	const browserWide = Object.keys(overrides)
+		.filter((k) => !isContextIdentityKey(k))
+		.sort(comparePyStr);
+	if (browserWide.length) {
+		throw new ValueError(
+			`${browserWide.join(", ")} cannot differ between contexts of one browser: ` +
+				"pass them to the launch instead. A context carries " +
+				`${[...CONTEXT_IDENTITY_KEYS].sort(comparePyStr).join(", ")} and the ${CONTEXT_IDENTITY_PREFIXES.join(", ")} keys; ` +
+				"its locale is the `locale` option.",
+		);
+	}
+	const cores = overrides["navigator.hardwareConcurrency"];
+	if (hardwareConcurrency && !isNone(cores) && cores !== hardwareConcurrency) {
+		throw new ValueError(
+			`navigator.hardwareConcurrency ${pyStr(cores)}: this browser runs on ${hardwareConcurrency} cores, ` +
+				"which a page can measure whatever a context claims. Launch another browser for another count.",
+		);
+	}
+	for (const key of ["webrtc:ipv4", "webrtc:ipv6"])
+		if (key in overrides) validateIP(overrides[key]);
+	const fonts = overrides.fonts;
+	if (
+		fonts !== undefined &&
+		!(Array.isArray(fonts) && fonts.every((f) => typeof f === "string"))
+	)
+		throw new ValueError(
+			`fonts: ${pyRepr(fonts)} is not a list of font family names`,
+		);
+	if ("voices" in overrides) validateVoices(overrides.voices);
+}
+
+function jsonKind(value: unknown): string {
+	if (typeof value === "boolean") return "bool";
+	if (typeof value === "number" || typeof value === "bigint") return "number";
+	if (Array.isArray(value)) return "list";
+	if (value === null) return "null";
+	return typeof value;
+}
+
+/** An override replaces a value of its own type: a list of fonts with a list,
+ * a count with a whole number. */
+function checkOverrideTypes(config: Config, overrides: Config): void {
+	for (const [key, value] of Object.entries(overrides)) {
+		if (!(key in config)) continue;
+		const old = config[key];
+		if (
+			jsonKind(value) !== jsonKind(old) ||
+			(Number.isInteger(old) && !Number.isInteger(value))
+		)
+			throw new ValueError(
+				`${key}: ${pyRepr(value)} is not a ${jsonKind(old)} like ${pyRepr(old)}`,
+			);
+	}
+}
+
+/** A user agent and a platform of two OSes are no device: refuse them rather
+ * than redraw one to match the other, which would override the caller. */
+function checkOsAgrees(config: Config): void {
+	const uaOs = OS_NAMES[determineUaOs(config["navigator.userAgent"])];
+	const platformOs = targetOsFromPlatform(config["navigator.platform"]);
+	if (uaOs !== platformOs)
+		throw new ValueError(
+			`navigator.userAgent describes ${uaOs} but navigator.platform ` +
+				`${pyRepr(config["navigator.platform"])} describes ${platformOs}: override both.`,
+		);
+}
+
+/** Drop what was drawn from values that changed, so it is drawn again. */
+function forgetDerived(
+	config: Config,
+	before: Config,
+	keepKeys: Iterable<string>,
+	localeChanged: boolean,
+): void {
+	const keep = new Set(keepKeys);
+	const drop = (keys: string[], prefixes: string[] = []) => {
+		for (const key of Object.keys(config)) {
+			if (
+				(keys.includes(key) || prefixes.some((p) => key.startsWith(p))) &&
+				!keep.has(key)
+			)
+				delete config[key];
+		}
+	};
+	if (MACHINE_KEYS.some((k) => config[k] !== before[k])) {
+		drop(["fonts", "voices"], ["webGl:", "webGl2:"]);
+		if (config["navigator.userAgent"] !== before["navigator.userAgent"])
+			drop(["navigator.appVersion"]);
+		if (config["navigator.platform"] !== before["navigator.platform"])
+			drop(["navigator.oscpu"]);
+	} else if (
+		["webGl:vendor", "webGl:renderer"].some((k) => config[k] !== before[k])
+	) {
+		// Another GPU reports its own limits, extensions and precisions.
+		keep.add("webGl:vendor");
+		keep.add("webGl:renderer");
+		drop([], ["webGl:", "webGl2:"]);
+	}
+	if (localeChanged) drop(["voices"]);
+}
+
+/** Playwright's form: a tag, or a language list whose first entry is the
+ * locale (per-context-consistency.patch). */
+function setContextLocale(config: Config, locale: string): void {
+	const primary = locale.split(",")[0].trim();
+	let parsed: Locale;
+	if (primary.includes("-")) {
+		parsed = normalizeLocale(primary);
+	} else {
+		verifyLocale(primary);
+		parsed = new Locale(primary);
+	}
+	for (const key of [
+		"locale:language",
+		"locale:region",
+		"locale:script",
+		"locale:all",
+	])
+		delete config[key];
+	config["locale:language"] = parsed.language;
+	if (parsed.region) config["locale:region"] = parsed.region;
+	if (parsed.script) config["locale:script"] = parsed.script;
+	config["navigator.language"] = parsed.asString;
+	if (locale.includes(",")) config["locale:all"] = locale;
+}
+
+/** The locale a context is opened with: the list as given, else the tag. */
+function contextLocale(config: Config): string | undefined {
+	return config["locale:all"] || config["navigator.language"] || undefined;
+}
+
+function drawFonts(
+	osName: string,
+	seed: number,
+	key: unknown,
+): string[] | null {
+	try {
+		return generateRandomFontSubset(osName, seed);
+	} catch (e) {
+		if (!isPyError(e, "OSError", "ValueError")) throw e;
+		FallbackWarning.warn(
+			"Drawing the font list",
+			"the browser's launch-time fonts",
+			e,
+			key as string,
+		);
+		return null;
+	}
+}
+
+function drawVoices(
+	osName: string,
+	seed: number,
+	key: unknown,
+	locale: string | null,
+): Record<string, any> | null {
+	try {
+		return drawVoiceConfig(osName, locale, seed);
+	} catch (e) {
+		if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
+		FallbackWarning.warn(
+			"Drawing the speech voices",
+			"the browser's launch-time voices",
+			e,
+			key as string,
+		);
+		return null;
+	}
+}
+
+export interface DrawContextIdentityOptions {
 	preset?: Preset | null;
 	os?: string | null;
 	ff_version?: string | null;
-	webrtc_ip?: string | null;
-	timezone?: string | null;
 	locale?: string | null;
-	config_overrides?: Config | null;
+	timezone?: string | null;
+	webrtc_ip?: string | null;
+	geolocation?: {
+		latitude: number;
+		longitude: number;
+		accuracy?: number;
+	} | null;
+	overrides?: Config | null;
 	webgl_config?: [string, string] | null;
 	device_pixel_ratio?: number | null;
 	hardware_concurrency?: number | null;
 	i_know_what_im_doing?: boolean;
-} = {}): ContextFingerprint {
-	let config: Config;
-	let nav: Record<string, any>;
-	let screen: Record<string, any>;
-	let webgl: Record<string, any>;
-	let resolvedPreset: Preset;
+}
 
-	if (!isNone(preset)) {
-		const p = preset as Preset;
-		config = fromPreset(p, ff_version);
-		nav = p.navigator ?? {};
-		screen = p.screen ?? {};
-		webgl = p.webgl ?? {};
-		resolvedPreset = p;
-		// The preset names its GPU; the context also needs that GPU's recorded
-		// parameters, or it reports the launch GPU's limits beside it.
-		if (
-			pyTruthy(config["webGl:vendor"]) &&
-			pyTruthy(config["webGl:renderer"])
-		) {
-			const tables = webglForGpu(
-				poolKeyFromPlatform(pyStr(nav.platform ?? "")),
-				config["webGl:vendor"],
-				config["webGl:renderer"],
-			);
-			delete tables.webGl2Enabled;
-			Object.assign(config, tables);
-		}
-		if (hardware_concurrency) {
-			config["navigator.hardwareConcurrency"] = hardware_concurrency;
-			nav = { ...nav, hardwareConcurrency: hardware_concurrency };
-		}
+/**
+ * A context's identity, `{salt, config}`, plain JSON a caller can store and
+ * pass back to replay the same identity (Python: draw_context_identity).
+ *
+ * Without `identity`, a new one is drawn as a launch draws one. With it, its
+ * values are kept and nothing is drawn, except what depends on a value this
+ * call changes: another user agent, platform or screen is another machine,
+ * whose fonts, voices and GPU are drawn again from the same salt; another GPU
+ * brings its own WebGL tables; another locale draws the voices again.
+ * `overrides` sets context identity keys before the dependent draws; a key
+ * every context of the browser shares throws ValueError.
+ */
+export function drawContextIdentity(
+	identity: ContextIdentity | null | undefined,
+	{
+		preset,
+		os,
+		ff_version,
+		locale,
+		timezone,
+		webrtc_ip,
+		geolocation,
+		overrides,
+		webgl_config,
+		device_pixel_ratio,
+		hardware_concurrency,
+		i_know_what_im_doing = false,
+	}: DrawContextIdentityOptions = {},
+): ContextIdentity {
+	const ov: Config = { ...(overrides ?? {}) };
+	dropAudioSeed(ov);
+	checkOverrides(ov, hardware_concurrency);
+	if (Object.keys(ov).length)
+		LeakWarning.warn("context_overrides", i_know_what_im_doing);
+
+	let salt: bigint;
+	let config: Config;
+	let before: Config | null = null;
+	if (identity) {
+		salt = BigInt(identity.salt);
+		before = { ...identity.config };
+		config = { ...before };
+		// The device it was drawn as, which this browser must be able to be.
+		const stored: Config = {};
+		const cores = "navigator.hardwareConcurrency";
+		if (cores in before && !(cores in ov)) stored[cores] = before[cores];
+		checkOverrides(stored, hardware_concurrency);
+	} else if (!isNone(preset)) {
+		// As a launch from a preset dict: the same preset is the same identity.
+		salt = identitySalt(preset);
+		config = fromPreset(preset as Preset, ff_version, salt);
+		// A recorded device renders at its own ratio (Playwright's deviceScaleFactor).
+		const dpr = (preset as Preset).screen?.devicePixelRatio;
+		if (pyTruthy(dpr)) config["window.devicePixelRatio"] = dpr;
 	} else {
+		salt = identitySalt();
 		// A phone renders at the launch's pixel ratio whatever the context
-		// claims (layout.css.devPixelsPerPx is the whole browser's), so its
-		// text measured as another device's.
+		// claims (layout.css.devPixelsPerPx is the whole browser's).
 		const fp =
 			os === "android" && device_pixel_ratio
 				? generateAndroidFingerprint(device_pixel_ratio)
 				: generateFingerprint({ os: os ?? undefined });
 		config = fromFpgen(fp, ff_version);
 		// fpgen's Linux pool now and then pairs the Linux UA with a Windows
-		// platform and oscpu. launchOptions() corrects that; this path did not,
-		// so ~1.6% of Linux contexts said Win32 -- and, since the OS below is
-		// read from the platform, drew Windows fonts and voices as well.
+		// platform and oscpu, which launchOptions() corrects too.
 		if (pyStr(get(config, "navigator.userAgent", "")).includes("Linux"))
 			fixNavigatorArch(config, "lin");
-		if (hardware_concurrency)
-			config["navigator.hardwareConcurrency"] = hardware_concurrency;
+		if (isMobileConfig(config))
+			config["window.devicePixelRatio"] = fp.window?.devicePixelRatio;
+		else if (device_pixel_ratio) {
+			// The page renders at the launch's layout.css.devPixelsPerPx, so
+			// the ratio moves to it, as a launch's does to a caller's scale.
+			config["window.devicePixelRatio"] =
+				fp.window?.devicePixelRatio || device_pixel_ratio;
+			coherence.repairDevicePixelRatio(
+				config,
+				poolKeyFromPlatform(pyStr(get(config, "navigator.platform", ""))),
+				device_pixel_ratio,
+			);
+		}
+		// This path has no real display to reconcile against.
+		raiseScreenToModernFloor(config);
+	}
 
-		// A fresh identity: every seeded draw below gets its own salt.
-		const salt = identitySalt();
+	const oldLocale = contextLocale(config);
+	if (locale) setContextLocale(config, locale);
+	if (timezone) config.timezone = timezone;
+	if (webrtc_ip) {
+		validateIP(webrtc_ip);
+		delete config["webrtc:ipv4"];
+		delete config["webrtc:ipv6"];
+		config[validIPv4(webrtc_ip) ? "webrtc:ipv4" : "webrtc:ipv6"] = webrtc_ip;
+	}
+	if (geolocation) {
+		for (const key of ["latitude", "longitude", "accuracy"] as const) {
+			delete config[`geolocation:${key}`];
+			if (key in geolocation) config[`geolocation:${key}`] = geolocation[key];
+		}
+	}
+	checkOverrideTypes(config, ov);
+	Object.assign(config, ov);
+	const ratio = config["window.devicePixelRatio"];
+	if (
+		device_pixel_ratio &&
+		isMobileConfig(config) &&
+		!isNone(ratio) &&
+		ratio !== device_pixel_ratio
+	) {
+		throw new ValueError(
+			`window.devicePixelRatio ${pyStr(ratio)}: this phone launch renders at ${pyStr(device_pixel_ratio)} ` +
+				"(layout.css.devPixelsPerPx is the whole browser's). Launch another browser for another ratio.",
+		);
+	}
+	if (before)
+		forgetDerived(
+			config,
+			before,
+			Object.keys(ov),
+			contextLocale(config) !== oldLocale,
+		);
+	if ("navigator.userAgent" in ov || "navigator.platform" in ov)
+		checkOsAgrees(config);
+	if (hardware_concurrency)
+		config["navigator.hardwareConcurrency"] = hardware_concurrency;
 
-		const osName = targetOsFromPlatform(
+	completeContextIdentity(
+		config,
+		salt,
+		os,
+		webgl_config,
+		new Set(Object.keys(ov)),
+		hardware_concurrency,
+		device_pixel_ratio,
+	);
+	return { salt: salt.toString(), config: asJson(config) as Config };
+}
+
+/**
+ * An identity is stored as JSON. fpgen's tables hold a few integers above
+ * 2**53 (parsePyJson keeps them as bigint); they were recorded as JSON numbers,
+ * so a number holds them with the same digits.
+ */
+function asJson(value: unknown): unknown {
+	if (typeof value === "bigint") {
+		const n = Number(value);
+		if (String(n) !== value.toString())
+			throw new Error(`${value} cannot be stored as a JSON number`);
+		return n;
+	}
+	if (Array.isArray(value)) return value.map(asJson);
+	if (value && typeof value === "object")
+		return Object.fromEntries(
+			Object.entries(value).map(([k, v]) => [k, asJson(v)]),
+		);
+	return value;
+}
+
+/** Draw what the identity lacks, from its salt, and repair it as a launch does. */
+function completeContextIdentity(
+	config: Config,
+	salt: bigint,
+	os: string | null | undefined,
+	webglConfig: [string, string] | null | undefined,
+	overridden: Set<string>,
+	hardwareConcurrency: number | null | undefined,
+	devicePixelRatio: number | null | undefined,
+): void {
+	if (!("navigator.appVersion" in config)) setAppVersion(config);
+	if (!("navigator.oscpu" in config)) {
+		const oscpu = oscpuFromPlatform(
 			pyStr(get(config, "navigator.platform", "")),
 		);
+		if (oscpu) config["navigator.oscpu"] = oscpu;
+	}
 
-		if (!("fonts" in config) && isMobileConfig(config))
-			config.fonts = androidFonts();
-		if (!("fonts" in config)) {
-			try {
-				config.fonts = generateRandomFontSubset(
-					osName,
-					identitySeed(config, salt),
-				);
-			} catch (e) {
-				if (!isPyError(e, "OSError", "ValueError")) throw e;
-				FallbackWarning.warn(
-					"Drawing the font list",
-					"the browser's launch-time fonts",
-					e,
-					config["navigator.userAgent"],
-				);
-			}
-		}
-		if (!("voices" in config)) {
-			try {
-				config.voices = generateRandomVoiceSubset(
-					osName,
-					null,
-					identitySeed(config, salt),
-				);
-			} catch (e) {
-				if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
-				FallbackWarning.warn(
-					"Drawing the speech voices",
-					"the browser's launch-time voices",
-					e,
-					config["navigator.userAgent"],
-				);
-			}
-		}
-		if (!("navigator.oscpu" in config)) {
-			const oscpu = oscpuFromPlatform(
-				pyStr(get(config, "navigator.platform", "")),
-			);
-			if (oscpu) config["navigator.oscpu"] = oscpu;
-		}
+	const plat = pyStr(get(config, "navigator.platform", ""));
+	const osName = targetOsFromPlatform(plat);
+	const targetOs: TargetOS = POOL_KEYS[os ?? ""] ?? poolKeyFromPlatform(plat);
+	const mobile = isMobileConfig(config);
+	const key = config["navigator.userAgent"];
+	const seed = identitySeed(config, salt);
 
-		if (
-			!pyTruthy(config["webGl:vendor"]) ||
-			!pyTruthy(config["webGl:renderer"])
-		) {
-			const targetOs: TargetOS =
-				POOL_KEYS[os ?? ""] ??
-				poolKeyFromPlatform(pyStr(get(config, "navigator.platform", "")));
-			// Same coherence treatment launchOptions applies (#729): lift netbook
-			// geometry, then keep the GPU consistent with the resulting screen.
-			raiseScreenToModernFloor(config);
-			let webglFp: Record<string, any>;
-			if (webgl_config) {
-				webglFp = webglForGpu(targetOs, ...webgl_config);
-			} else if (isMobileConfig(config)) {
-				const [vendor, renderer] = androidGpu();
-				webglFp = {
-					"webGl:vendor": vendor,
-					"webGl:renderer": renderer,
-					webGl2Enabled: true,
-				};
-			} else {
-				webglFp = sampleWebglForScreen(
+	if (!("fonts" in config)) {
+		const fonts = mobile ? androidFonts() : drawFonts(osName, seed, key);
+		if (fonts !== null) config.fonts = fonts;
+	}
+	if (!("voices" in config) && !("voices:speechd" in config)) {
+		const voices = drawVoices(
+			osName,
+			seed,
+			key,
+			config["navigator.language"] ?? null,
+		);
+		if (voices !== null) Object.assign(config, voices);
+	}
+
+	if (
+		!pyTruthy(config["webGl:vendor"]) ||
+		!pyTruthy(config["webGl:renderer"])
+	) {
+		if (webglConfig) {
+			Object.assign(config, webglForGpu(targetOs, ...webglConfig, seed));
+		} else if (mobile) {
+			[config["webGl:vendor"], config["webGl:renderer"]] = androidGpu(seed);
+		} else {
+			// The GPU agrees with the screen and cores, as at launch (#729).
+			Object.assign(
+				config,
+				sampleWebglForScreen(
 					targetOs,
 					config["screen.width"],
 					config["screen.height"],
-					undefined,
+					seed,
 					config["navigator.hardwareConcurrency"],
-				);
-			}
-			delete webglFp.webGl2Enabled;
-			Object.assign(config, webglFp);
-			// The whole-identity repairs launchOptions applies, so the context
-			// reports what a relaunch with its identity does. The browser's own
-			// cores still win: a page measures them whatever the context claims.
-			coherence.apply(config, targetOs);
-			if (hardware_concurrency)
-				config["navigator.hardwareConcurrency"] = hardware_concurrency;
-		}
-
-		nav = {
-			platform: config["navigator.platform"],
-			hardwareConcurrency: config["navigator.hardwareConcurrency"],
-		};
-		screen = {
-			width: config["screen.width"],
-			height: config["screen.height"],
-			colorDepth: config["screen.colorDepth"],
-			// A desktop stays at 1 (see fpgen.yml); a phone at 1 dppx is the
-			// stranger claim.
-			devicePixelRatio: isMobileConfig(config)
-				? (fp.window?.devicePixelRatio ?? null)
-				: null,
-		};
-		webgl = {
-			unmaskedVendor: config["webGl:vendor"],
-			unmaskedRenderer: config["webGl:renderer"],
-		};
-		resolvedPreset = { navigator: nav, screen, webgl };
-	}
-
-	if (timezone) config.timezone = timezone;
-	if (locale) {
-		// Playwright's form: a tag, or a language list whose first entry is the
-		// locale (per-context-consistency.patch).
-		const primary = locale.split(",")[0].trim();
-		let parsed: Locale;
-		if (primary.includes("-")) {
-			parsed = normalizeLocale(primary);
-		} else {
-			verifyLocale(primary);
-			parsed = new Locale(primary);
-		}
-		config["locale:language"] = parsed.language;
-		if (parsed.region) config["locale:region"] = parsed.region;
-		config["navigator.language"] = parsed.asString;
-		if (parsed.script) config["locale:script"] = parsed.script;
-		// The Windows voice list is the display language's pack, so the voices
-		// are drawn again for the locale, as launchOptions() draws them after
-		// resolving its own.
-		try {
-			config.voices = generateRandomVoiceSubset(
-				targetOsFromPlatform(pyStr(get(config, "navigator.platform", ""))),
-				parsed.asString,
-				identitySeed(config, identitySalt()),
-			);
-		} catch (e) {
-			if (!isPyError(e, "OSError", "ValueError", "KeyError")) throw e;
-			FallbackWarning.warn(
-				"Drawing the speech voices",
-				"the locale-blind draw",
-				e,
-				config["navigator.userAgent"],
+				),
 			);
 		}
+	} else if (
+		!mobile &&
+		!Object.keys(config).some(
+			(k) =>
+				k.startsWith("webGl:parameters") ||
+				k.startsWith("webGl:supportedExtensions"),
+		)
+	) {
+		// A named GPU reports that GPU's limits, not the launch's.
+		Object.assign(
+			config,
+			webglForGpu(
+				targetOs,
+				config["webGl:vendor"],
+				config["webGl:renderer"],
+				seed,
+			),
+		);
 	}
+	delete config.webGl2Enabled;
 
-	if (config_overrides) {
-		const overrides = { ...config_overrides };
-		dropAudioSeed(overrides);
-		Object.assign(config, overrides);
+	// The whole-identity repairs launchOptions() applies, so the context
+	// reports what a relaunch with its identity does. What the caller set wins.
+	const pinned: Config = {};
+	for (const k of overridden) if (k in config) pinned[k] = config[k];
+	const ratio = config["window.devicePixelRatio"];
+	if (pyTruthy(ratio) && (mobile || ratio === devicePixelRatio)) {
+		// A phone's ratio is its device's, and either is the one the launch
+		// renders at; the desktop display modes coherence knows do not apply.
+		pinned["window.devicePixelRatio"] = ratio;
 	}
+	coherence.apply(config, targetOs);
+	Object.assign(config, pinned);
+	// The browser's own cores win: a page measures them whatever the context claims.
+	if (hardwareConcurrency)
+		config["navigator.hardwareConcurrency"] = hardwareConcurrency;
 
 	// The window the identity claims, fitted to the screen the browser reports
 	// for it as launchOptions() fits the launch's.
-	followBaselineProtection(
-		config,
-		poolKeyFromPlatform(String(config["navigator.platform"] ?? "")),
-	);
+	followBaselineProtection(config, poolKeyFromPlatform(plat));
 	clampWindowDimensions(config);
 	clampWindowPosition(config);
 	// Unset, a launch reports where its window is: 0, 0 for an unplaced one.
-	for (const key of ["window.screenX", "window.screenY"])
-		config[key] = config[key] || 0;
+	for (const k of ["window.screenX", "window.screenY"])
+		config[k] = config[k] || 0;
+}
 
-	const initValues: InitValues = {
-		navigatorPlatform: nav.platform,
+/**
+ * The init script and Playwright context options (camelCase) that put
+ * `identity` on a context. Draws nothing: the same identity always renders
+ * the same.
+ */
+export function renderContextIdentity(
+	identity: ContextIdentity,
+	ffVersion?: string | null,
+	iKnowWhatImDoing = false,
+): Omit<ContextFingerprint, "identity"> {
+	const config: Config = { ...identity.config };
+	if (ffVersion && pyTruthy(config["navigator.userAgent"])) {
+		// A stored identity opened on a newer browser claims that browser.
+		config["navigator.userAgent"] = String(config["navigator.userAgent"])
+			.replace(/Firefox\/\d+\.0/, `Firefox/${ffVersion}.0`)
+			.replace(/rv:\d+\.0/, `rv:${ffVersion}.0`);
+	}
+	const mobile = isMobileConfig(config);
+
+	const initScript = buildInitScript({
+		navigatorPlatform: config["navigator.platform"],
 		navigatorOscpu: config["navigator.oscpu"],
 		navigatorUserAgent: config["navigator.userAgent"],
 		navigatorAppVersion: config["navigator.appVersion"],
-		hardwareConcurrency: pyTruthy(nav.hardwareConcurrency)
-			? nav.hardwareConcurrency
-			: config["navigator.hardwareConcurrency"],
-		webglVendor: webgl.unmaskedVendor,
-		webglRenderer: webgl.unmaskedRenderer,
-		screenWidth: screen.width,
-		screenHeight: screen.height,
-		screenColorDepth: screen.colorDepth,
-		windowX: config["window.screenX"],
-		windowY: config["window.screenY"],
-		timezone:
-			typeof resolvedPreset.timezone === "string"
-				? resolvedPreset.timezone
-				: config.timezone,
+		hardwareConcurrency: config["navigator.hardwareConcurrency"],
+		webglVendor: config["webGl:vendor"],
+		webglRenderer: config["webGl:renderer"],
+		screenWidth: config["screen.width"],
+		screenHeight: config["screen.height"],
+		screenColorDepth: config["screen.colorDepth"],
+		windowX: config["window.screenX"] ?? 0,
+		windowY: config["window.screenY"] ?? 0,
+		timezone: config.timezone,
 		fontList: config.fonts,
-		speechVoices: config.voices,
-		webrtcIP: webrtc_ip || "",
+		speechVoices:
+			"voices:speechd" in config
+				? { speechd: config["voices:speechd"] }
+				: config.voices,
+		webrtcIP: ["webrtc:ipv4", "webrtc:ipv6"]
+			.filter((k) => config[k])
+			.map((k) => config[k]),
 		webglConfig: Object.fromEntries(
 			Object.entries(config).filter(
 				([k]) =>
@@ -2075,15 +2487,13 @@ export function generateContextFingerprint({
 					k !== "webGl:renderer",
 			),
 		),
-	};
-	const initScript = buildInitScript(initValues);
+	});
 
 	const contextOptions: Record<string, any> = {};
-	const ua = config["navigator.userAgent"];
-	if (pyTruthy(ua)) contextOptions.userAgent = ua;
-	const sw = screen.width;
-	const sh = screen.height;
-	const mobile = isMobileConfig(config);
+	if (pyTruthy(config["navigator.userAgent"]))
+		contextOptions.userAgent = config["navigator.userAgent"];
+	const sw = config["screen.width"];
+	const sh = config["screen.height"];
 	if (mobile) {
 		// The launch-wide `mobile` switch cannot differ per context, but
 		// Playwright's own options reach the same places through Juggler:
@@ -2091,11 +2501,13 @@ export function generateContextFingerprint({
 		// meta viewport (Responsive Design Mode, for an Android UA only).
 		contextOptions.hasTouch = true;
 		if (firefoxAcceptsIsMobile()) contextOptions.isMobile = true;
-		LeakWarning.warn("mobile_resources", i_know_what_im_doing);
+		LeakWarning.warn("mobile_resources", iKnowWhatImDoing);
 		// Juggler reads the screen size to report screen.orientation.
 		if (pyTruthy(sw) && pyTruthy(sh))
 			contextOptions.screen = { width: sw, height: sh };
 	}
+	if (pyTruthy(config["window.devicePixelRatio"]))
+		contextOptions.deviceScaleFactor = config["window.devicePixelRatio"];
 	if (pyTruthy(sw) && pyTruthy(sh)) {
 		// Juggler sizes the real window to this viewport plus the browser's
 		// chrome, and outerWidth/outerHeight report that window. The config
@@ -2110,19 +2522,46 @@ export function generateContextFingerprint({
 			config["window.innerHeight"] = viewport.height;
 		}
 	}
-	const dpr = screen.devicePixelRatio;
-	if (pyTruthy(dpr)) contextOptions.deviceScaleFactor = dpr;
-	let tz = config.timezone;
-	if (!pyTruthy(tz)) tz = resolvedPreset.timezone;
-	if (pyTruthy(tz)) contextOptions.timezoneId = tz;
-	const navLang = locale || config["navigator.language"];
-	if (pyTruthy(navLang)) contextOptions.locale = navLang;
+	if (pyTruthy(config.timezone)) contextOptions.timezoneId = config.timezone;
+	const locale = contextLocale(config);
+	if (locale) contextOptions.locale = locale;
+	if ("geolocation:latitude" in config && "geolocation:longitude" in config) {
+		contextOptions.geolocation = {
+			latitude: config["geolocation:latitude"],
+			longitude: config["geolocation:longitude"],
+			...("geolocation:accuracy" in config
+				? { accuracy: config["geolocation:accuracy"] }
+				: {}),
+		};
+		contextOptions.permissions = ["geolocation"];
+	}
 
+	return { init_script: initScript, context_options: contextOptions, config };
+}
+
+/**
+ * Draw (or replay) a context identity and render it (Python:
+ * generate_context_fingerprint).
+ */
+export function generateContextFingerprint({
+	identity,
+	config_overrides,
+	...options
+}: DrawContextIdentityOptions & {
+	identity?: ContextIdentity | null;
+	config_overrides?: Config | null;
+} = {}): ContextFingerprint {
+	const drawn = drawContextIdentity(identity, {
+		...options,
+		overrides: config_overrides,
+	});
 	return {
-		init_script: initScript,
-		context_options: contextOptions,
-		config,
-		preset: resolvedPreset,
+		...renderContextIdentity(
+			drawn,
+			options.ff_version,
+			options.i_know_what_im_doing,
+		),
+		identity: drawn,
 	};
 }
 

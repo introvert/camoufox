@@ -18,6 +18,10 @@ launch's or followed only part of the identity:
   phone      text measured at the launch's pixel ratio beside the context's
              devicePixelRatio: the browser renders at one ratio, so a phone
              context is now the launch's device
+  scale      a desktop launch drawn at a display scale renders every page at
+             it, and a context claimed none, so its text was measured at 1.25
+             where a relaunch with its identity renders at 1; a drawn context
+             now claims the launch's scale
 
 For each OS, a browser launches with an identity of its own and opens a context
 with the identity NewContext would draw on it. Another browser launches with
@@ -125,10 +129,10 @@ def main() -> int:
                 context = browser.new_context(**{**fp["context_options"], "timezone_id": TIMEZONE})
                 context.add_init_script(fp["init_script"])
                 swap = read(context.new_page(), base, f"/{target_os}-swap", fonts)
-            # The relaunch takes the locale as a launch does, and a phone's pixel
-            # ratio is a pref, not a config key.
+            # The relaunch takes the locale as a launch does, and the pixel ratio
+            # the context renders at is a pref, not a config key.
             config = {k: v for k, v in fp["config"].items() if k not in LOCALE_KEYS}
-            dpr = fp["preset"]["screen"].get("devicePixelRatio")
+            dpr = config.pop("window.devicePixelRatio", None)
             prefs = {"layout.css.devPixelsPerPx": str(dpr)} if dpr else {}
             with Camoufox(**launch_kwargs(**common, locale=LOCALE, firefox_user_prefs=prefs,
                                           config={**config, "timezone": TIMEZONE})) as browser:

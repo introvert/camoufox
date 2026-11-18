@@ -124,7 +124,7 @@ index b72361e28b..e89655b919 100644
 +# DOM Mask
 +LOCAL_INCLUDES += ["/camoucfg"]
 diff --git a/netwerk/protocol/http/nsHttpHandler.cpp b/netwerk/protocol/http/nsHttpHandler.cpp
-index e62b4d0b83..8e1acfcf91 100644
+index e62b4d0b83..e9c223f0d0 100644
 --- a/netwerk/protocol/http/nsHttpHandler.cpp
 +++ b/netwerk/protocol/http/nsHttpHandler.cpp
 @@ -12,6 +12,7 @@
@@ -178,19 +178,32 @@ index e62b4d0b83..8e1acfcf91 100644
    nsAutoCString acceptLanguages;
    intl::LocaleService::GetInstance()->GetAcceptLanguages(acceptLanguages);
  
-@@ -2134,6 +2159,18 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
+@@ -2134,6 +2159,31 @@ nsresult nsHttpHandler::SetAcceptLanguages() {
  
  nsresult nsHttpHandler::SetAcceptEncodings(const char* aAcceptEncodings,
                                             bool isSecure, bool isDictionary) {
-+  // Camoufox: headers.Accept-Encoding replaces the list sent over https only.
-+  // Firefox keeps three lists -- plain http ("gzip, deflate"), https and
-+  // dictionary-eligible requests (adds "dcb, dcz") -- and one value written
-+  // over all three makes http:// requests claim encodings no Firefox sends
-+  // there.
++  // Camoufox: headers.Accept-Encoding replaces the list sent over https, and
++  // the dictionary list built from it. Firefox keeps three lists -- plain http
++  // ("gzip, deflate"), https and dictionary-eligible requests (adds "dcb,
++  // dcz") -- and one value written over all three makes http:// requests claim
++  // encodings no Firefox sends there.
 +  nsCString encodingOverride;
-+  if (isSecure && !isDictionary) {
++  if (isSecure || isDictionary) {
 +    if (auto value = MaskConfig::GetString("headers.Accept-Encoding")) {
 +      encodingOverride.Assign(value.value().c_str());
++      // Camoufox: stock builds the dictionary list as the secure list plus
++      // network.http.accept-encoding.dictionary (PrefsChanged). The override
++      // stands for the secure list, so a request that offers a dictionary still
++      // names dcb/dcz after it, as stock's does.
++      if (isDictionary) {
++        nsAutoCString dictionaryEncodings;
++        if (NS_SUCCEEDED(Preferences::GetCString(
++                HTTP_PREF("accept-encoding.dictionary"), dictionaryEncodings)) &&
++            !dictionaryEncodings.IsEmpty()) {
++          encodingOverride.Append(", "_ns);
++          encodingOverride.Append(dictionaryEncodings);
++        }
++      }
 +      aAcceptEncodings = encodingOverride.get();
 +    }
 +  }

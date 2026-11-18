@@ -47,6 +47,7 @@ it("a failed write rejects, and the partial install is removed", async () => {
 	const fetcher = Object.create(DiskFull.prototype);
 	const own = (value: unknown) => ({ value, configurable: true });
 	Object.defineProperties(fetcher, {
+		repoConfig: own({ name: "Example" }),
 		githubRepo: own("example/camoufox"),
 		version: own("152.0.4"),
 		build: own("beta.99"),

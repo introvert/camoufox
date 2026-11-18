@@ -30,7 +30,7 @@ for the calling window's context, and is gone before any page script runs
 | `setWebGLRenderer(renderer)` | `webgl-spoofing.patch` | `UNMASKED_RENDERER_WEBGL` |
 | `setWebGLConfig(json)` | `webgl-spoofing.patch` | The GPU's limits, extensions and shader precisions: a JSON object of the `webGl:*` and `webGl2:*` config keys, which replaces the launch's for the context (`{}`: the host's) |
 | `setFontList(fonts)` | `font-list-spoofing.patch` | Which fonts exist (comma-separated, case-insensitive) |
-| `setSpeechVoices(voices)` | `speech-voices-spoofing.patch` | `speechSynthesis.getVoices()` (one name per line) |
+| `setSpeechVoices(voices)` | `speech-voices-spoofing.patch` | `speechSynthesis.getVoices()` (one name per line, or a JSON `{"speechd": grid}` for a Linux identity) |
 
 Supporting patches, with no setter of their own:
 
@@ -75,8 +75,9 @@ await browser.close();
 ```
 
 Values set this way must still describe one plausible machine. The launchers'
-`generate_context_fingerprint()` (`fingerprints.py`) draws them together and
-builds this script; prefer it to hand-picked values.
+`draw_context_identity()` (`fingerprints.py`) draws them together and
+`render_context_identity()` builds this script and the context options; prefer
+them to hand-picked values.
 
 ## Architecture
 
@@ -157,10 +158,9 @@ real value.
 | Pref | Why |
 |---|---|
 | `fission.autostart = true` | Disabled Fission is detectable; cross-process storage makes per-context values work with it |
-| `fission.webContentIsolationStrategy = 0` | Cross-site iframes stay in their parent's process |
-| `dom.ipc.processPrelaunch.enabled = false` | A prelaunched process could carry stale values |
+| `fission.webContentIsolationStrategy = 0` | Cross-site iframes stay in their parent's process. Set by Juggler when a driver is attached; otherwise Firefox's default |
 
-`dom.ipc.processCount` is not overridden.
+`dom.ipc.processCount` and `dom.ipc.processPrelaunch.enabled` are not overridden: a prelaunched process takes its context's values like any other (measured 2026-10-26, 3 contexts x 3 rounds).
 
 ## Patch details
 
@@ -172,7 +172,7 @@ real value.
 | `webrtc-ip-spoofing.patch` | `SanitizeSDPForIPLeak`, `CandidateReady`, candidate `.address`/`.relatedAddress`, `getStats()`, `UpdateDefaultCandidate`, `NrSocketBase::CreateSocket` | Forces `default_address_only` while spoofing; loopback, link-local and private addresses are left alone. UDP candidate ports come from the ephemeral range of the identity's OS (`MaskConfig::SpoofedEphemeralPorts()`), so a Windows identity on Linux never shows a Linux port. |
 | `webgl-spoofing.patch` | `ClientWebGLContext::GetParameter`, `GetShaderPrecisionFormat`, `IsSupported`, `GetSupportedExtensions` | Per context: vendor, renderer, and the parameters, extensions and shader precisions of that GPU, else `CAMOU_CONFIG`'s. Works from `OffscreenCanvas` in workers. |
 | `font-list-spoofing.patch` | `gfxPlatformFontList::MaskedFontListBlocks`, which `FindAndAddFamiliesLocked`, `GlobalFontFallback` and `local()` sources consult | A context's list replaces the launch `fonts` list for its documents; it does not narrow it. Chrome documents and contexts without a list keep the launch list. A thread-local context id, set by an RAII guard in `FontFaceSet::Check/Load`, `gfxFontGroup::EnsureFontList` and `gfxFontGroup::FindFontForChar`, avoids changing ~50 signatures. A fallback lookup under a context's list is not cached process-wide. The list is in the shared store, so it holds in every content process. An `OffscreenCanvas` in a worker takes the worker's context (`anti-font-fingerprinting.patch`); other worker lookups are not filtered. |
-| `speech-voices-spoofing.patch` | `SpeechSynthesis::GetVoices` | Shows the registered voices the context lists, in its order. The launcher registers the launch's voices and, as `voices:pool`, every voice a context's draw can take (`voice-spoofing.patch`); a page outside such a context sees only the launch's. |
+| `speech-voices-spoofing.patch` | `SpeechSynthesis::GetVoices` | Shows the registered voices the context lists, in its order: a speech-dispatcher grid's in the order stock registers it (`SpeechVoicesManager::SpeechdVoicesInOrder`). The launcher registers the launch's voices and, as `voices:pool` and `voices:pool:speechd` (each Ubuntu release's grid), every voice a context's draw can take (`voice-spoofing.patch`); a page outside such a context sees only the launch's. |
 
 Global-only patches (no setter) read `CAMOU_CONFIG` at startup:
 
@@ -213,9 +213,9 @@ The User-Agent's version is rewritten to the running browser's.
 | Screen, color depth | fpgen or the preset |
 | WebGL | The preset's GPU, or one fpgen recorded for Firefox on that OS, weighted by its share and checked against the machine (`coherence.gpu_fits_machine()`); `webgl_for_gpu()` adds its parameters, extensions and shader precisions |
 | Fonts | `_generate_random_font_subset()`: one OS-version base plus measured additions ([FONTS.md](FONTS.md)); never from presets |
-| Voices | `_generate_random_voice_subset()`, from `voice-manifests.json`, seeded by the identity and drawn for the locale; never from presets. `voices:pool` holds every voice of the manifests for the OSes a context may claim |
+| Voices | `draw_voice_config()`, from `voice-manifests.json`, seeded by the identity and drawn for the locale; never from presets. A Linux identity's voices come from the same Ubuntu release as its fonts, sent as a `voices:speechd` grid (languages x variants) that `MaskConfig::ExpandSpeechdGrid` expands: ~14000 voice objects do not fit in the environment. macOS uses the list measured on macOS 27 with its system voice default; Windows its OneCore packs. `voices:pool` holds every voice of the manifests for the OSes a context may claim, and `voices:pool:speechd` every Ubuntu release's grid |
 | Timezone | The preset, or `timezone` in `CAMOU_CONFIG` (from geoip); with a proxy, `NewContext` takes the exit IP's |
-| Locale | Playwright's `locale`; with a proxy, `NewContext` draws one for the exit IP's country, as geoip does at launch. A tag ("de-DE") also gives the languages a Firefox set to it reports ("de-DE, de"); a list ("de, en-US, en") is the languages as given, and its first entry the locale of `Intl` and Firefox's own strings |
+| Locale | Playwright's `locale`; with a proxy, a new identity draws one for the exit IP's country, as geoip does at launch, and a stored one keeps its own. A tag ("de-DE") also gives the languages a Firefox set to it reports ("de-DE, de"); a list ("de, en-US, en") is the languages as given, and its first entry the locale of `Intl` and Firefox's own strings |
 | WebRTC IP | `NewContext`'s `webrtc_ip` or the proxy's exit IP, to the IPv4 or IPv6 setter; an invalid address raises `InvalidIP` |
 | Geolocation | The `geolocation` argument, via Playwright; with a proxy, the exit IP's position |
 
@@ -231,6 +231,93 @@ launch draws one, from the same fpgen model and pools. Playwright's own
 `new_context()` draws nothing, and its pages report the launch's identity. An existing context keeps the identity it was
 created with: the setters are offered once, so a page cannot change it, and its
 cookies, storage, cache and open pages would tie the old identity to the new one.
+
+### A context identity
+
+What `NewContext` puts in a context is one JSON object, the same in both
+launchers:
+
+```json
+{"salt": "8027429394483719053", "config": {"navigator.userAgent": "...", "fonts": ["..."], "...": "..."}}
+```
+
+`config` holds the per-context keys of the table below, and the device's other launch keys (below). `salt`
+is the 64-bit value every seeded draw of the identity keys from (fonts, voices,
+the GPU and its WebGL tables), together with the user agent, platform, screen
+and cores (`identity_seed()`). `draw_context_identity()` makes one and
+`render_context_identity()` turns one into the init script and context
+options, so a stored identity renders to the same script on every replay, with
+only the user agent's Firefox version following the running browser.
+
+Changing a stored identity (`overrides`, `locale`, `timezone`, ...) keeps every
+value except the changed ones and what is drawn from them
+(`_forget_derived()`): another user agent, platform or screen is another
+machine, whose appVersion, oscpu, fonts, voices and GPU are drawn again from the
+same salt; another `webGl:vendor`/`webGl:renderer` brings that GPU's recorded
+tables; another locale draws the voices again. The result then goes through
+`coherence.apply()` as a launch draw does. Keys every context of a browser
+shares raise instead of being silently ignored, as do a user agent and a
+platform of two OSes, a value of another type than the one it replaces, and a
+stored identity on a browser with other cores (or, on a phone launch, another
+pixel ratio). Besides the context's values, `config` keeps the rest of that
+device's launch config (its avail area, encodings), so launching with it
+reports the same values.
+
+A browser from `firefox.connect()` has no launch config to say what it shares.
+`NewContext` asks it once (`MACHINE_PROBE`): the cores, the pixel ratio, the
+OS, the GPU, and whether its canvas is covered, read as two readbacks of one
+drawing that differ. An uncovered browser binds its contexts to its OS and GPU,
+as a launch without `canvas_noise` does.
+
+### Every launch key, per context
+
+How each config key a launch draw sets reaches a context. Checked on
+v159.0-beta.43 by opening contexts of each OS on one browser and reading the
+values in the page.
+
+| Key | Mechanism |
+|---|---|
+| `navigator.userAgent`, `platform`, `oscpu`, `appVersion` | Setter. `headers.User-Agent` follows from Playwright's `userAgent`, which the launcher sets to the same string |
+| `navigator.hardwareConcurrency` | Setter, held to the browser's cores (above) |
+| `navigator.language`, `languages`, `headers.Accept-Language`, `locale:*` | Playwright's `locale` (`per-context-consistency.patch`). `Intl` in the page and in workers takes the context's locale |
+| `navigator.maxTouchPoints`, the `pointer`/`hover` media features | Playwright's `hasTouch` and `isMobile`, which the launcher sets for a phone identity |
+| `screen.width`, `height`, `colorDepth`, `pixelDepth` | Setters; `pixelDepth` reports `colorDepth` |
+| `screen.availWidth`, `availHeight` | Derived by Firefox from the context's screen, for a desktop context. A phone context on a desktop launch reports its window's height instead (below) |
+| `window.screenX`, `screenY` | Setter |
+| `window.outerWidth`, `outerHeight`, `innerWidth`, `innerHeight` | Playwright's `viewport`: the launcher sets the inner size to the outer size less the browser chrome, and the outer size follows |
+| `window.devicePixelRatio` | Playwright's `deviceScaleFactor`, set when the identity records a ratio (a preset, a phone, an override, or a draw on a browser that renders at one). Pages render at it, not only report it. A launch that sets `layout.css.devPixelsPerPx` (a phone's ratio, or a desktop's display scale) renders every page at it, so a drawn context claims it, and a phone context must |
+| `mobile` (meta viewport, phone layout) | Playwright's `isMobile`, for an Android user agent (`PageTarget._usesRDM`) |
+| `timezone` | Setter |
+| `geolocation:*` | Playwright's `geolocation`, with the permission granted |
+| `webrtc:ipv4`, `webrtc:ipv6` | Setters |
+| `webGl:*`, `webGl2:*` | Setters (`setWebGLVendor`, `setWebGLRenderer`, `setWebGLConfig`) |
+| `fonts` | Setter |
+| `voices`, `voices:speechd` | Setter, choosing among the launch's `voices:pool` and `voices:pool:speechd` |
+| `mediaDevices:*` | Launch only (below) |
+| `AudioContext:*` | Launch only: the output device's rate, latency and channels, which the machine has one of |
+| `navigator.doNotTrack`, `globalPrivacyControl`, `headers.Accept-Encoding` | Launch only: browser settings, not draws |
+| `window.history.length` | Not spoofed: a new context has a real history of 1 |
+| `canvas:seed`, `audio:seed`, `fonts:spacing_seed`, `canvas:aaOffset`, `canvas:aaCapOffset`, `battery:*` | Removed and inert (`properties.json`): nothing reads them, so two launches that differ only in them present the same device |
+
+A phone context on a browser launched as a desktop renders at the context's
+`deviceScaleFactor`, but reports `screen.availHeight` and `window.outerHeight`
+from the window rather than the identity's values. A phone identity belongs on a
+phone launch (`os="android"`), where every value matches.
+
+### What contexts of one browser share
+
+Each context is a Firefox container (`userContextId`), and origin attributes
+keep its cookies, storage, HTTP cache, service workers and connections apart
+from every other context's. With Fission, a site in one context gets a content
+process of its own, since the process key includes the container. What every
+context shares is the browser itself: the build, the prefs, the parent and GPU
+processes, the fonts installed for the launch's OS, and the launch-only keys
+above. Two contexts of one browser therefore read as two people on one machine,
+not as two machines. Caches that warm with use and are kept per process rather
+than per context, such as the GPU process's shader cache and the system font
+list, could in principle be timed from one context to learn what another
+loaded; that has not been measured. `performance.timeOrigin` is the document's
+own navigation start, and no API reports how long the process has run.
 
 A few values stay the launch's for every context:
 

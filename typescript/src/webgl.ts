@@ -10,7 +10,7 @@ import {
 	traceWithEvidence,
 } from "fpgen-js";
 import { Random, type Seed } from "python-random";
-import { gpuFitsMachine, gpuFitsOs } from "./coherence.js";
+import { gpuFitsCpu, gpuFitsMachine, gpuFitsOs } from "./coherence.js";
 import {
 	FPGEN_OS,
 	gpuScreenIsPlausible,
@@ -23,6 +23,7 @@ import {
 	parsePyJson,
 	pyStr,
 	pyStrRepr,
+	pyTruthy,
 	ValueError,
 } from "./pycompat.js";
 
@@ -36,11 +37,11 @@ export interface WebGLData {
 	[key: string]: any;
 }
 
-// Extensions a release Firefox never takes from a recording (draft extensions
-// behind webgl.enable-draft-extensions, or mobile-only): fpgen's corpus carries
-// some of them, and a spoofed list that names one is a tell on its own.
-// EXT_texture_norm16 left the drafts in Firefox 159, which exposes it by
-// backend (NORM16 below).
+// Extensions a release Firefox never exposes (draft extensions behind
+// webgl.enable-draft-extensions, or mobile-only): fpgen's corpus carries some
+// of them, and a spoofed list that names one is a tell on its own.
+// EXT_texture_norm16 left draft in Firefox 159; where it is exposed,
+// TEXTURE_NORM16 adds it back.
 const NEVER_EXPOSED_EXTENSIONS: ReadonlySet<string> = new Set([
 	"WEBGL_multi_draw",
 	"WEBGL_clip_cull_distance",
@@ -55,12 +56,11 @@ const HOST_DEPENDENT_EXTENSIONS: ReadonlySet<string> = new Set([
 	"OVR_multiview2",
 ]);
 
-// Extensions the claimed OS's backend exposes on every GPU, which fpgen's
-// Firefox 146 records lack. ANGLE sets depthClampEXT (Firefox 156) and
-// textureMirrorClampToEdgeEXT (159) on every D3D11 feature level
-// (renderer11_utils.cpp); 146's ANGLE set neither.
+// Extensions the claimed OS's backend exposes on every GPU in Firefox 156,
+// which fpgen's Firefox 146 records lack. ANGLE sets depthClampEXT
+// unconditionally on D3D11 (renderer11_utils.cpp); 146's ANGLE did not.
 const BACKEND_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
-	win: ["EXT_depth_clamp", "EXT_texture_mirror_clamp_to_edge"],
+	win: ["EXT_depth_clamp"],
 };
 
 // Firefox 158 (bug 1854003) exposes EXT_polygon_offset_clamp wherever the GL
@@ -70,21 +70,29 @@ const BACKEND_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
 // run WebGL on CGL's GL 4.1, which lacks it.
 const POLYGON_OFFSET_CLAMP = "EXT_polygon_offset_clamp";
 
-// Firefox 159 adds EXT_clip_control (GL 4.5 or ARB/EXT_clip_control), which
-// ANGLE's D3D11 backend sets from feature level 10_0 as it does polygon offset
-// clamping, and EXT_texture_mirror_clamp_to_edge (GL 4.4 or ARB/EXT_texture_
-// mirror_clamp_to_edge). Linux desktop GL drivers have both; CGL's GL 4.1 has
-// neither.
+// Firefox 159 (bug 1735401) exposes EXT_texture_norm16 on WebGL2 wherever the
+// GL has 16-bit normalized textures, core in desktop GL 3.1: every WebGL2
+// context on macOS (CGL's GL 4.1) and x86_64 Linux (desktop GL). On Windows,
+// ANGLE derives it from 16-bit normalized format support (Caps.cpp
+// DetermineTextureNorm16Support), which D3D11 feature level 10_0, the minimum
+// for WebGL2, requires: stock 159.0 on a GeForce GTX 980 (ANGLE D3D11) lists it
+// on WebGL2 and not WebGL1.
+const TEXTURE_NORM16 = "EXT_texture_norm16";
+const TEXTURE_NORM16_OSES: ReadonlySet<string> = new Set(["mac", "lin", "win"]);
+
+// Firefox 159 adds EXT_clip_control (core in GL 4.5) and
+// EXT_texture_mirror_clamp_to_edge (core in GL 4.4) to WebGL1 and WebGL2. ANGLE's
+// D3D11 backend sets clipControlEXT from feature level 10_0, which WebGL2 needs,
+// and textureMirrorClampToEdgeEXT on every device (renderer11_utils.cpp). Linux
+// desktop GL drivers, whose recordings have EXT_depth_clamp, expose both. CGL's
+// GL 4.1 on macOS has neither.
 const CLIP_CONTROL = "EXT_clip_control";
-const MIRROR_CLAMP = "EXT_texture_mirror_clamp_to_edge";
+const TEXTURE_MIRROR_CLAMP_TO_EDGE = "EXT_texture_mirror_clamp_to_edge";
 
-// Firefox 159 exposes EXT_texture_norm16 on WebGL2 wherever the GL has 16-bit
-// normalized textures: desktop GL from 3.1 (Linux desktop drivers and CGL's
-// 4.1), and ANGLE's D3D11 backend, whose formats have them from feature level
-// 10_0.
-const NORM16 = "EXT_texture_norm16";
-
-const ALIASED_LINE_WIDTH_RANGE = "33902";
+// Firefox 159 caps this at 64 KiB (WebGL2ContextState.cpp, kMaxUniformBlockSize);
+// fpgen recorded the drivers' own limit, up to 4 GiB.
+const MAX_UNIFORM_BLOCK_SIZE = "35376";
+const MAX_UNIFORM_BLOCK_SIZE_CAP = 64 * 1024;
 
 // What Firefox reports under privacy.resistFingerprinting, which a Camoufox
 // identity otherwise does not present.
@@ -157,26 +165,23 @@ export function firefoxGpus(targetOs: string): Array<[string, string]> {
 	]);
 }
 
-/**
- * The extensions the shipped Firefox adds on this device's backend: on both
- * contexts, and on WebGL2 alone.
- */
+/** The extensions the shipped Firefox adds on this device's backend. */
 function backendExtensions(
 	targetOs: string,
 	webgl: Record<string, any>,
 	hasWebgl2: boolean,
-): [readonly string[], readonly string[]] {
+): readonly string[] {
+	const extensions = [...(BACKEND_EXTENSIONS[targetOs] ?? [])];
 	const desktopGl =
 		targetOs === "lin" &&
 		(webgl.supportedExtensions as string[]).includes("EXT_depth_clamp");
-	const extensions = [...(BACKEND_EXTENSIONS[targetOs] ?? [])];
 	if ((targetOs === "win" && hasWebgl2) || desktopGl) {
-		extensions.push(CLIP_CONTROL, POLYGON_OFFSET_CLAMP);
+		extensions.push(POLYGON_OFFSET_CLAMP, CLIP_CONTROL);
 	}
-	if (desktopGl) extensions.push(MIRROR_CLAMP);
-	const webgl2Only =
-		targetOs === "win" || targetOs === "mac" || desktopGl ? [NORM16] : [];
-	return [extensions, webgl2Only];
+	if (targetOs === "win" || desktopGl) {
+		extensions.push(TEXTURE_MIRROR_CLAMP_TO_EDGE);
+	}
+	return extensions;
 }
 
 function contextConfig(
@@ -230,7 +235,7 @@ export function toConfig(
 	const hasWebgl2 = Array.isArray(webgl2)
 		? webgl2.length > 0
 		: Object.keys(webgl2 ?? {}).length > 0;
-	const [backend, webgl2Only] = backendExtensions(targetOs, webgl, hasWebgl2);
+	const backend = backendExtensions(targetOs, webgl, hasWebgl2);
 	const config: Record<string, any> = {
 		"webGl:vendor": webgl.vendor,
 		"webGl:renderer": webgl.renderer,
@@ -238,15 +243,29 @@ export function toConfig(
 		webGl2Enabled: hasWebgl2,
 	};
 	if (hasWebgl2) {
+		const webgl2Backend = TEXTURE_NORM16_OSES.has(targetOs)
+			? [...backend, TEXTURE_NORM16]
+			: backend;
 		Object.assign(
 			config,
-			contextConfig("webGl2", webgl2, targetOs, [...backend, ...webgl2Only]),
+			contextConfig("webGl2", webgl2, targetOs, webgl2Backend),
 		);
-		// Firefox 156 creates WebGL1 on the same GL profile as WebGL2, so both
-		// report one line width range. 146 forced WebGL1 onto a compatibility
-		// profile, and fpgen recorded that profile's driver range.
-		config["webGl:parameters"][ALIASED_LINE_WIDTH_RANGE] =
-			config["webGl2:parameters"][ALIASED_LINE_WIDTH_RANGE];
+		// Firefox 156 creates WebGL1 on the same GL profile as WebGL2, so every
+		// parameter both report is one driver value (the line width range, the
+		// point size range...). 146 forced WebGL1 onto a compatibility profile,
+		// and fpgen recorded that profile's values. Only the version strings
+		// differ between the two.
+		const webgl1Parameters = config["webGl:parameters"];
+		for (const [key, value] of Object.entries(config["webGl2:parameters"])) {
+			if (key in webgl1Parameters && typeof value !== "string")
+				webgl1Parameters[key] = value;
+		}
+		const parameters = config["webGl2:parameters"];
+		if (MAX_UNIFORM_BLOCK_SIZE in parameters)
+			parameters[MAX_UNIFORM_BLOCK_SIZE] = Math.min(
+				parameters[MAX_UNIFORM_BLOCK_SIZE],
+				MAX_UNIFORM_BLOCK_SIZE_CAP,
+			);
 	}
 	// The values are the trace's cached objects; the caller gets its own copy.
 	return parsePyJson(orjsonDumps(config, false));
@@ -296,6 +315,14 @@ export function webglForGpu(
 	);
 }
 
+/** The claimed CPU's [cpu:arch, cpu:manufacturer] (webgl._cpu_pair). */
+function cpuPair(
+	cpu: Record<string, any> | null | undefined,
+): [unknown, unknown] {
+	const c = cpu ?? {};
+	return [c["cpu:arch"] ?? null, c["cpu:manufacturer"] ?? null];
+}
+
 /**
  * Draw a GPU for a synthetic identity, weighted as fpgen records Firefox on
  * `targetOs`, and its WebGL config.
@@ -303,7 +330,9 @@ export function webglForGpu(
  * Only GPUs the rest of the identity can stand beside are drawn: never a
  * software rasteriser, a GPU the OS cannot report, the resistFingerprinting
  * mask, a discrete GPU behind a netbook panel, or an Intel Mac GPU beside
- * cores or a panel no Intel Mac has. The screen is left alone:
+ * cores or a panel no Intel Mac has, or a GPU the claimed CPU cannot sit
+ * beside (cpu: cpu:arch and cpu:manufacturer, coherence.gpuFitsCpu). The
+ * screen is left alone:
  * it has already been reconciled with the real display and the window (#499).
  *
  * @throws ValueError when no recorded GPU fits.
@@ -314,16 +343,34 @@ export function sampleWebglForScreen(
 	height?: number | null,
 	seed?: Seed,
 	cores?: number | null,
+	cpu?: Record<string, any> | null,
 ): WebGLData {
+	const [arch, maker] = cpuPair(cpu);
 	const candidates = trace("gpu", targetOs).filter(
 		(result) =>
 			!isSoftwareRenderer(result.value.renderer) &&
 			result.value.renderer !== RFP_RENDERER &&
 			gpuFitsOs(result.value.renderer, targetOs) &&
 			gpuFitsMachine(result.value.renderer, targetOs, cores, width, height) &&
-			gpuScreenIsPlausible(result.value.renderer, width, height),
+			gpuScreenIsPlausible(result.value.renderer, width, height) &&
+			gpuFitsCpu(result.value.renderer, targetOs, arch, maker),
 	);
 	if (!candidates.length) {
+		if (
+			cpu &&
+			Object.keys(cpu).length &&
+			!trace("gpu", targetOs).some((r) =>
+				gpuFitsCpu(r.value.renderer, targetOs, arch, maker),
+			)
+		) {
+			throw new ValueError(
+				`No GPU fpgen has recorded from Firefox on ${targetOs} sits beside a ` +
+					`${[maker, arch]
+						.filter((v) => pyTruthy(v))
+						.map(pyStr)
+						.join(" ")} CPU`,
+			);
+		}
 		throw new ValueError(
 			`No recorded ${targetOs} GPU fits a ${pyStr(width)}x${pyStr(height)} screen`,
 		);

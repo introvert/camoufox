@@ -13,11 +13,7 @@ from constants import WEBRTC_TEST_IP
 
 def convert_preset(ctx: dict) -> dict:
     """Convert generate_context_fingerprint() result to camelCase dict."""
-    preset = ctx["preset"]
     config = ctx["config"]
-    nav = preset.get("navigator", {})
-    screen = preset.get("screen", {})
-    webgl = preset.get("webgl", {})
 
     return {
         "initScript": ctx["init_script"],
@@ -30,18 +26,18 @@ def convert_preset(ctx: dict) -> dict:
         },
         "camouConfig": config,
         "profileConfig": {
-            "screenWidth": screen.get("width", 1920),
-            "screenHeight": screen.get("height", 1080),
-            "screenColorDepth": screen.get("colorDepth", 24),
-            "navigatorPlatform": nav.get("platform", ""),
-            "navigatorOscpu": config.get("navigator.oscpu", ""),
-            "navigatorUserAgent": config.get("navigator.userAgent", ""),
-            "hardwareConcurrency": nav.get("hardwareConcurrency", 0),
-            "webglVendor": webgl.get("unmaskedVendor", ""),
-            "webglRenderer": webgl.get("unmaskedRenderer", ""),
-            "timezone": config.get("timezone", preset.get("timezone", "")),
-            "fontList": config.get("fonts", preset.get("fonts", [])),
-            "speechVoices": config.get("voices", preset.get("speechVoices", [])),
+            "screenWidth": config["screen.width"],
+            "screenHeight": config["screen.height"],
+            "screenColorDepth": config["screen.colorDepth"],
+            "navigatorPlatform": config["navigator.platform"],
+            "navigatorOscpu": config["navigator.oscpu"],
+            "navigatorUserAgent": config["navigator.userAgent"],
+            "hardwareConcurrency": config["navigator.hardwareConcurrency"],
+            "webglVendor": config["webGl:vendor"],
+            "webglRenderer": config["webGl:renderer"],
+            "timezone": config.get("timezone", ""),
+            "fontList": config["fonts"],
+            "speechVoices": config.get("voices", []),
         },
     }
 
