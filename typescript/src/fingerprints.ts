@@ -1973,7 +1973,6 @@ export function isContextIdentityKey(key: string): boolean {
 function checkOverrides(
 	overrides: Config,
 	hardwareConcurrency: number | null | undefined,
-	devicePixelRatio: number | null | undefined,
 ): void {
 	const browserWide = Object.keys(overrides)
 		.filter((k) => !isContextIdentityKey(k))
@@ -1991,13 +1990,6 @@ function checkOverrides(
 		throw new ValueError(
 			`navigator.hardwareConcurrency ${pyStr(cores)}: this browser runs on ${hardwareConcurrency} cores, ` +
 				"which a page can measure whatever a context claims. Launch another browser for another count.",
-		);
-	}
-	const ratio = overrides["window.devicePixelRatio"];
-	if (devicePixelRatio && !isNone(ratio) && ratio !== devicePixelRatio) {
-		throw new ValueError(
-			`window.devicePixelRatio ${pyStr(ratio)}: this phone launch renders at ${pyStr(devicePixelRatio)} ` +
-				"(layout.css.devPixelsPerPx is the whole browser's). Launch another browser for another ratio.",
 		);
 	}
 	for (const key of ["webrtc:ipv4", "webrtc:ipv6"])
@@ -2202,7 +2194,7 @@ export function drawContextIdentity(
 ): ContextIdentity {
 	const ov: Config = { ...(overrides ?? {}) };
 	dropAudioSeed(ov);
-	checkOverrides(ov, hardware_concurrency, device_pixel_ratio);
+	checkOverrides(ov, hardware_concurrency);
 	if (Object.keys(ov).length)
 		LeakWarning.warn("context_overrides", i_know_what_im_doing);
 
@@ -2215,16 +2207,9 @@ export function drawContextIdentity(
 		config = { ...before };
 		// The device it was drawn as, which this browser must be able to be.
 		const stored: Config = {};
-		for (const k of [
-			"navigator.hardwareConcurrency",
-			"window.devicePixelRatio",
-		])
-			if (k in before && !(k in ov)) stored[k] = before[k];
-		checkOverrides(
-			stored,
-			hardware_concurrency,
-			isMobileConfig(before) ? device_pixel_ratio : null,
-		);
+		const cores = "navigator.hardwareConcurrency";
+		if (cores in before && !(cores in ov)) stored[cores] = before[cores];
+		checkOverrides(stored, hardware_concurrency);
 	} else if (!isNone(preset)) {
 		// As a launch from a preset dict: the same preset is the same identity.
 		salt = identitySalt(preset);
@@ -2247,6 +2232,17 @@ export function drawContextIdentity(
 			fixNavigatorArch(config, "lin");
 		if (isMobileConfig(config))
 			config["window.devicePixelRatio"] = fp.window?.devicePixelRatio;
+		else if (device_pixel_ratio) {
+			// The page renders at the launch's layout.css.devPixelsPerPx, so
+			// the ratio moves to it, as a launch's does to a caller's scale.
+			config["window.devicePixelRatio"] =
+				fp.window?.devicePixelRatio || device_pixel_ratio;
+			coherence.repairDevicePixelRatio(
+				config,
+				poolKeyFromPlatform(pyStr(get(config, "navigator.platform", ""))),
+				device_pixel_ratio,
+			);
+		}
 		// This path has no real display to reconcile against.
 		raiseScreenToModernFloor(config);
 	}
@@ -2268,6 +2264,18 @@ export function drawContextIdentity(
 	}
 	checkOverrideTypes(config, ov);
 	Object.assign(config, ov);
+	const ratio = config["window.devicePixelRatio"];
+	if (
+		device_pixel_ratio &&
+		isMobileConfig(config) &&
+		!isNone(ratio) &&
+		ratio !== device_pixel_ratio
+	) {
+		throw new ValueError(
+			`window.devicePixelRatio ${pyStr(ratio)}: this phone launch renders at ${pyStr(device_pixel_ratio)} ` +
+				"(layout.css.devPixelsPerPx is the whole browser's). Launch another browser for another ratio.",
+		);
+	}
 	if (before)
 		forgetDerived(
 			config,
@@ -2287,6 +2295,7 @@ export function drawContextIdentity(
 		webgl_config,
 		new Set(Object.keys(ov)),
 		hardware_concurrency,
+		device_pixel_ratio,
 	);
 	return { salt: salt.toString(), config: asJson(config) as Config };
 }
@@ -2319,6 +2328,7 @@ function completeContextIdentity(
 	webglConfig: [string, string] | null | undefined,
 	overridden: Set<string>,
 	hardwareConcurrency: number | null | undefined,
+	devicePixelRatio: number | null | undefined,
 ): void {
 	if (!("navigator.appVersion" in config)) setAppVersion(config);
 	if (!("navigator.oscpu" in config)) {
@@ -2395,10 +2405,11 @@ function completeContextIdentity(
 	// reports what a relaunch with its identity does. What the caller set wins.
 	const pinned: Config = {};
 	for (const k of overridden) if (k in config) pinned[k] = config[k];
-	if (mobile && pyTruthy(config["window.devicePixelRatio"])) {
-		// A phone's ratio is its device's, which the launch renders at; the
-		// desktop display modes coherence knows do not apply.
-		pinned["window.devicePixelRatio"] = config["window.devicePixelRatio"];
+	const ratio = config["window.devicePixelRatio"];
+	if (pyTruthy(ratio) && (mobile || ratio === devicePixelRatio)) {
+		// A phone's ratio is its device's, and either is the one the launch
+		// renders at; the desktop display modes coherence knows do not apply.
+		pinned["window.devicePixelRatio"] = ratio;
 	}
 	coherence.apply(config, targetOs);
 	Object.assign(config, pinned);

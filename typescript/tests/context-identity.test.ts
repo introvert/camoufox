@@ -155,11 +155,11 @@ describe.skipIf(!MODEL.ok)("context identities", () => {
 		expect(() =>
 			drawContextIdentity(null, {
 				os: "android",
-				device_pixel_ratio: 2.625,
+				device_pixel_ratio: 60 / 21,
 				overrides: { "window.devicePixelRatio": 3 },
 				i_know_what_im_doing: true,
 			}),
-		).toThrow(/renders at 2.625/);
+		).toThrow(/renders at 2.857/);
 	});
 
 	it("a stored identity needs its own cores", () => {

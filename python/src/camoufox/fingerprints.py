@@ -1717,8 +1717,7 @@ def is_context_identity_key(key: str) -> bool:
     return key in CONTEXT_IDENTITY_KEYS or key.startswith(CONTEXT_IDENTITY_PREFIXES)
 
 
-def _check_overrides(overrides: Dict[str, Any], hardware_concurrency: Optional[int],
-                     device_pixel_ratio: Optional[float]) -> None:
+def _check_overrides(overrides: Dict[str, Any], hardware_concurrency: Optional[int]) -> None:
     """Refuse an override no context can carry, rather than drop it silently."""
     browser_wide = sorted(k for k in overrides if not is_context_identity_key(k))
     if browser_wide:
@@ -1733,12 +1732,6 @@ def _check_overrides(overrides: Dict[str, Any], hardware_concurrency: Optional[i
         raise ValueError(
             f'navigator.hardwareConcurrency {cores}: this browser runs on {hardware_concurrency} cores, '
             'which a page can measure whatever a context claims. Launch another browser for another count.'
-        )
-    ratio = overrides.get('window.devicePixelRatio')
-    if device_pixel_ratio and ratio is not None and ratio != device_pixel_ratio:
-        raise ValueError(
-            f'window.devicePixelRatio {ratio}: this phone launch renders at {device_pixel_ratio} '
-            '(layout.css.devPixelsPerPx is the whole browser\'s). Launch another browser for another ratio.'
         )
     for key in ('webrtc:ipv4', 'webrtc:ipv6'):
         if key in overrides:
@@ -1880,7 +1873,8 @@ def draw_context_identity(
         geolocation: {"latitude", "longitude"[, "accuracy"]}.
         webgl_config: The (vendor, renderer) a drawn identity claims.
         device_pixel_ratio: The pixel ratio the browser renders at, which an
-            Android identity's device must have (a phone launch's).
+            Android identity's device must have (a phone launch's), and a
+            drawn desktop identity takes.
         hardware_concurrency: The cores the browser reports, which a page can
             measure whatever the context claims (fix_hardware_concurrency).
         i_know_what_im_doing: Silences the warning that a phone takes its
@@ -1888,7 +1882,7 @@ def draw_context_identity(
     """
     overrides = dict(overrides or {})
     drop_audio_seed(overrides)
-    _check_overrides(overrides, hardware_concurrency, device_pixel_ratio)
+    _check_overrides(overrides, hardware_concurrency)
     if overrides:
         LeakWarning.warn('context_overrides', i_know_what_im_doing)
 
@@ -1897,9 +1891,8 @@ def draw_context_identity(
         before = dict(identity['config'])
         config = dict(before)
         # The device it was drawn as, which this browser must be able to be.
-        _check_overrides({k: before[k] for k in ('navigator.hardwareConcurrency', 'window.devicePixelRatio')
-                          if k in before and k not in overrides},
-                         hardware_concurrency, device_pixel_ratio if is_mobile_config(before) else None)
+        _check_overrides({k: before[k] for k in ('navigator.hardwareConcurrency',)
+                          if k in before and k not in overrides}, hardware_concurrency)
     else:
         before = None
         if preset is not None:
@@ -1922,6 +1915,12 @@ def draw_context_identity(
                 fix_navigator_arch(config, 'lin')
             if is_mobile_config(config):
                 config['window.devicePixelRatio'] = fp['window'].get('devicePixelRatio')
+            elif device_pixel_ratio:
+                # The page renders at the launch's layout.css.devPixelsPerPx, so
+                # the ratio moves to it, as a launch's does to a caller's scale.
+                config['window.devicePixelRatio'] = fp['window'].get('devicePixelRatio') or device_pixel_ratio
+                coherence.repair_device_pixel_ratio(
+                    config, OS_KEYS[platform_to_os(config.get('navigator.platform', ''))], device_pixel_ratio)
             # This path has no real display to reconcile against.
             raise_screen_to_modern_floor(config)
 
@@ -1942,6 +1941,12 @@ def draw_context_identity(
                 config[f'geolocation:{key}'] = geolocation[key]
     _check_override_types(config, overrides)
     config.update(overrides)
+    ratio = config.get('window.devicePixelRatio')
+    if device_pixel_ratio and is_mobile_config(config) and ratio is not None and ratio != device_pixel_ratio:
+        raise ValueError(
+            f'window.devicePixelRatio {ratio}: this phone launch renders at {device_pixel_ratio} '
+            '(layout.css.devPixelsPerPx is the whole browser\'s). Launch another browser for another ratio.'
+        )
     if before is not None:
         _forget_derived(config, before, overrides, _context_locale(config) != old_locale)
     if {'navigator.userAgent', 'navigator.platform'} & overrides.keys():
@@ -1949,7 +1954,8 @@ def draw_context_identity(
     if hardware_concurrency:
         config['navigator.hardwareConcurrency'] = hardware_concurrency
 
-    _complete_context_identity(config, salt, os, webgl_config, set(overrides), hardware_concurrency)
+    _complete_context_identity(config, salt, os, webgl_config, set(overrides), hardware_concurrency,
+                               device_pixel_ratio)
     return {'salt': str(salt), 'config': config}
 
 
@@ -1960,6 +1966,7 @@ def _complete_context_identity(
     webgl_config: Optional[Tuple[str, str]],
     overridden: Set[str],
     hardware_concurrency: Optional[int],
+    device_pixel_ratio: Optional[float],
 ) -> None:
     """Draw what the identity lacks, from its salt, and repair it as a launch does."""
     from .webgl import sample_webgl_for_screen, webgl_for_gpu
@@ -2006,10 +2013,11 @@ def _complete_context_identity(
     # The whole-identity repairs launch_options() applies, so the context
     # reports what a relaunch with its identity does. What the caller set wins.
     pinned = {k: config[k] for k in overridden if k in config}
-    if mobile and config.get('window.devicePixelRatio'):
-        # A phone's ratio is its device's, which the launch renders at; the
-        # desktop display modes coherence knows do not apply.
-        pinned['window.devicePixelRatio'] = config['window.devicePixelRatio']
+    ratio = config.get('window.devicePixelRatio')
+    if ratio and (mobile or ratio == device_pixel_ratio):
+        # A phone's ratio is its device's, and either is the one the launch
+        # renders at; the desktop display modes coherence knows do not apply.
+        pinned['window.devicePixelRatio'] = ratio
     coherence.apply(config, target_os)
     config.update(pinned)
     # The browser's own cores win: a page measures them whatever the context claims.

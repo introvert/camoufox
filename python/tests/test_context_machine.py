@@ -15,6 +15,7 @@ import pytest
 from camoufox import async_api, sync_api
 from conftest import fake_browser
 from camoufox.fingerprints import generate_context_fingerprint
+from camoufox.utils import launch_machine
 
 
 def _new_context(api, machine, **kwargs):
@@ -42,6 +43,23 @@ def test_a_phone_context_is_the_launch_device(api):
                               i_know_what_im_doing=True)
     assert options["device_scale_factor"] == 60 / 21
     assert options["screen"] == {"width": 378, "height": 811}
+
+
+@pytest.mark.parametrize("os", ["windows", "macos", "linux"])
+def test_a_desktop_context_claims_the_ratio_its_browser_renders_at(os):
+    # A launch drawn at a display scale renders every page at it
+    # (layout.css.devPixelsPerPx), so a context that claimed none measured its
+    # text at 1.25 where a relaunch with its identity renders at 1.
+    for _ in range(5):
+        options, _ = _new_context("sync", {"device_pixel_ratio": 1.25}, os=os)
+        assert options["device_scale_factor"] == 1.25
+
+
+def test_a_desktop_launch_at_a_display_scale_shares_it():
+    options = {"env": {}, "firefox_user_prefs": {"layout.css.devPixelsPerPx": "1.25"}}
+    assert launch_machine(options)["device_pixel_ratio"] == 1.25
+    options["firefox_user_prefs"] = {}
+    assert launch_machine(options)["device_pixel_ratio"] is None
 
 
 def test_no_phone_renders_at_a_desktop_ratio():

@@ -1294,8 +1294,8 @@ export function launchesMobile(fromOptions: Record<string, any>): boolean {
 /**
  * What a launch's contexts share because the browser has one of each, as
  * generateContextFingerprint() arguments: the cores a page can measure
- * (fixHardwareConcurrency), and a phone launch's pixel ratio (applyMobileMode),
- * which the whole browser renders at.
+ * (fixHardwareConcurrency), and the pixel ratio the whole browser renders at
+ * when the launch sets one (a phone's, or a desktop's display scale).
  */
 export function launchMachine(fromOptions: Record<string, any>): {
 	hardware_concurrency: number | null;
@@ -1303,11 +1303,12 @@ export function launchMachine(fromOptions: Record<string, any>): {
 } {
 	const blob = camouConfigBlob(fromOptions);
 	const config = blob ? JSON.parse(blob) : {};
-	const dpr = fromOptions.firefoxUserPrefs?.["layout.css.devPixelsPerPx"];
+	const dpr = Number(
+		fromOptions.firefoxUserPrefs?.["layout.css.devPixelsPerPx"] || -1,
+	);
 	return {
 		hardware_concurrency: config["navigator.hardwareConcurrency"] ?? null,
-		device_pixel_ratio:
-			dpr && coherence.isMobileConfig(config) ? Number(dpr) : null,
+		device_pixel_ratio: dpr > 0 ? dpr : null,
 	};
 }
 

@@ -43,6 +43,7 @@ import {
 } from "../src/fingerprints.js";
 import { LOCAL_DATA } from "../src/paths.js";
 import { NewContext } from "../src/sync_api.js";
+import { launchMachine } from "../src/utils.js";
 import { MODEL } from "./fpgen-setup.js";
 
 function data(name: string): any {
@@ -1036,6 +1037,39 @@ describe.skipIf(!MODEL.ok)("fpgen generation (needs the model)", () => {
 		});
 		expect(options.locale).toBe("de, en-US, en");
 		expect(script).toContain("German (Germany)");
+	});
+
+	it.each([
+		"windows",
+		"macos",
+		"linux",
+	])("a %s context claims the ratio its browser renders at", async (os) => {
+		// A launch drawn at a display scale renders every page at it
+		// (layout.css.devPixelsPerPx), so a context that claimed none measured
+		// its text at 1.25 where a relaunch with its identity renders at 1.
+		for (let i = 0; i < 5; i++) {
+			let options: Record<string, any> = {};
+			const browser = {
+				version: () => "159.0",
+				_camoufoxMachine: { device_pixel_ratio: 1.25 },
+				newContext: async (o: Record<string, any>) => {
+					options = o;
+					return { addInitScript: async () => undefined };
+				},
+			};
+			await NewContext(browser as any, { os });
+			expect(options.deviceScaleFactor).toBe(1.25);
+		}
+	});
+
+	it("a desktop launch at a display scale shares it", () => {
+		const options: Record<string, any> = {
+			env: {},
+			firefoxUserPrefs: { "layout.css.devPixelsPerPx": "1.25" },
+		};
+		expect(launchMachine(options).device_pixel_ratio).toBe(1.25);
+		options.firefoxUserPrefs = {};
+		expect(launchMachine(options).device_pixel_ratio).toBeNull();
 	});
 
 	it("a phone context is its phone launch's device", async () => {
