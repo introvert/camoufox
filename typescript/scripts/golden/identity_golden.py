@@ -251,7 +251,11 @@ def manifest_voice_entries(node):
 def record_voices():
     cases = []
     for os_name in OS_NAMES + ('plan9',):
-        for locale in VOICE_LOCALES:
+        # Linux draws the whole speech-dispatcher grid (~14000 voices), whatever
+        # the locale: two locales show that, and every locale would push the
+        # TypeScript test past its timeout.
+        locales = (None, 'de-DE') if os_name == 'linux' else VOICE_LOCALES
+        for locale in locales:
             for seed in range(20):
                 voices = fp._generate_random_voice_subset(os_name, locale, seed=seed)
                 case = {'os': os_name, 'locale': locale, 'seed': seed, 'hash': h(voices), 'len': len(voices)}
