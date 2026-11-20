@@ -95,6 +95,13 @@ PAGE = "https://cpu-vendor-estimates.test/"
 CPU_PROBE = Path(__file__).resolve().parents[2] / "cpu-probe"
 STOCK_X86, STOCK_ARM64 = "linux-x86_64-docker-ryzen-9850x3d", "linux-arm64-docker-apple-m4"
 STOCK = {"intel": "linux-x86_64-i7-12700h", "amd": STOCK_X86, "arm": STOCK_ARM64}
+# The same probe on stock x86-64 Linux of the Firefox this build pins. The
+# references above are Firefox 159.0's; a key whose x86-64 value changed since
+# then (Firefox 160 rounds premultiplied alpha differently in every Swizzle
+# path, so readback of every translucent pixel moved) cannot be checked
+# against them on either architecture until they are recorded again on the new
+# version, so it is reported as unverified instead of failing.
+STOCK_X86_CURRENT = "linux-x86_64-docker-epyc-7452-160.0.1"
 
 OPUS_PROBE = """async () => {
   const fnv = (d) => { let h = 0x811c9dc5; for (let i = 0; i < d.length; i++) { h ^= d[i]; h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, "0"); };
@@ -145,6 +152,15 @@ def arch_keys(cpu: str) -> dict:
     host_only = {"ua", "hc", "webgl", "canvas.text"}
     # A key only one architecture records (an encoder's error) is expected absent on the other.
     return {k: own.get(k) for k in x86.keys() | arm.keys() if x86.get(k) != arm.get(k) and k not in host_only}
+
+
+def stale_reference(key: str) -> bool:
+    """Whether stock x86-64 of the pinned Firefox gives another value for this
+    key than the recorded references' Firefox did."""
+    current = CPU_PROBE / "results" / f"{STOCK_X86_CURRENT}.json"
+    if not current.is_file():
+        return False
+    return json.loads(current.read_text()).get(key) != stock(STOCK_X86).get(key)
 
 
 def probe(**kwargs) -> dict:
@@ -202,8 +218,13 @@ def main() -> int:
         if errors:
             print(f"FAIL: cpu={cpu}: the probe page failed: {errors}")
             return 1
-        wrong = sorted(k for k, v in expected.items() if got.get(k) != v)
-        print(f"  cpu={cpu}: {len(expected) - len(wrong)}/{len(expected)} values match stock {cpu}")
+        stale = sorted(k for k in expected if stale_reference(k))
+        wrong = sorted(k for k, v in expected.items() if got.get(k) != v and k not in stale)
+        checked = len(expected) - len(stale)
+        print(f"  cpu={cpu}: {checked - len(wrong)}/{checked} values match stock {cpu}")
+        if stale:
+            print(f"  cpu={cpu}: unverified, stock x86-64 changed since the reference was recorded: "
+                  + ", ".join(f"{k} {got.get(k)}" for k in stale))
         if wrong:
             failures.append(f"cpu={cpu}: {', '.join(f'{k} {got.get(k)} (stock {expected[k]})' for k in wrong)}")
 

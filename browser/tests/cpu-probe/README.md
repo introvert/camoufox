@@ -24,6 +24,16 @@ same Firefox 159.0 on Linux for another architecture, with the same fonts, so
 an ARM64 host's Linux values can be compared with x86-64's. WebGL is
 unavailable in it.
 
+## Firefox 160
+
+`results/linux-x86_64-docker-epyc-7452-160.0.1.json` is stock Firefox 160.0.1
+on an EPYC 7452 (Ubuntu 24.04 container). Against 159.0 on x86-64, canvas
+`blend.xor`, `drawImage.*`, `filter`, `paths`, `radial` and `text` changed:
+160 rounds premultiplied alpha in `gfx/2d/Swizzle*` (`c*a + 128`, and
+`+ 0x8000` / `VRHADD` when unpremultiplying), on every architecture. The ARM64
+references below are still 159.0's, so `cpu-vendor-estimates` reports those
+keys as unverified until stock 160 is recorded on ARM64.
+
 ## Results, stock Firefox 159.0 (`results/`)
 
 | File | CPU | OS |
