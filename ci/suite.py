@@ -87,10 +87,10 @@ def make_venv(checkout: Path, tag: str, *, reuse: bool = True) -> Path:
         return python
 
     run([sys.executable, "-m", "venv", str(venv)], check=True)
-    # pip 26.3 refuses a PyPI distribution that declares a direct URL
-    # dependency, even in an extra nobody installs. The suite pins autobahn
-    # 23.1.2, whose `xbr` extra names web3 by a git URL, so a newer pip fails
-    # the whole install.
+    # pip 26.3 rejects a PyPI package whose metadata names a direct-URL
+    # dependency even under an extra nobody installs, and the suite's pinned
+    # autobahn 23.1.2 has one (web3 from git, extra "all"), so every shard failed
+    # at setup. 26.2 installs it.
     run([str(python), "-m", "pip", "install", "--quiet", "--upgrade", "pip<26.3"], check=True)
 
     # Install the suite's own pins. Hand-picked ones once paired pytest-asyncio

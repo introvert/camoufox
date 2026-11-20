@@ -124,8 +124,8 @@ def test_a_context_renders_at_its_own_pixel_ratio():
 
 
 def test_a_phone_launch_keeps_its_pixel_ratio():
-    with pytest.raises(ValueError, match='renders at 2.625'):
-        draw_context_identity(os='android', device_pixel_ratio=2.625,
+    with pytest.raises(ValueError, match='renders at 2.857'):
+        draw_context_identity(os='android', device_pixel_ratio=60 / 21,
                               overrides={'window.devicePixelRatio': 3}, i_know_what_im_doing=True)
 
 

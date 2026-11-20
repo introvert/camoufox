@@ -1,5 +1,5 @@
 diff --git a/dom/geolocation/Geolocation.cpp b/dom/geolocation/Geolocation.cpp
-index 328b7f4406..eed4f20749 100644
+index fd89f893cc..50d16df514 100644
 --- a/dom/geolocation/Geolocation.cpp
 +++ b/dom/geolocation/Geolocation.cpp
 @@ -37,6 +37,7 @@
@@ -10,7 +10,7 @@ index 328b7f4406..eed4f20749 100644
  
  class nsIPrincipal;
  
-@@ -1147,6 +1148,12 @@ void Geolocation::NotifyAllowedRequest(nsGeolocationRequest* aRequest) {
+@@ -1178,6 +1179,12 @@ void Geolocation::NotifyAllowedRequest(nsGeolocationRequest* aRequest) {
  /* static */ bool Geolocation::RegisterRequestWithPrompt(
      nsGeolocationRequest* request) {
    nsIEventTarget* target = GetMainThreadSerialEventTarget();
@@ -23,6 +23,58 @@ index 328b7f4406..eed4f20749 100644
    ContentPermissionRequestBase::PromptResult pr = request->CheckPromptPrefs();
    if (pr == ContentPermissionRequestBase::PromptResult::Granted) {
      request->RequestDelayedTask(target,
+diff --git a/dom/geolocation/GeolocationCoordinates.cpp b/dom/geolocation/GeolocationCoordinates.cpp
+index dd07718c40..eae88c3c3e 100644
+--- a/dom/geolocation/GeolocationCoordinates.cpp
++++ b/dom/geolocation/GeolocationCoordinates.cpp
+@@ -6,6 +6,10 @@
+ 
+ #include "mozilla/dom/GeolocationCoordinatesBinding.h"
+ #include "mozilla/dom/GeolocationPosition.h"
++#include "nsString.h"
++
++#include <algorithm>
++#include <cmath>
+ 
+ namespace mozilla::dom {
+ 
+@@ -53,7 +57,6 @@ JSObject* GeolocationCoordinates::WrapObject(
+ GENERATE_COORDS_WRAPPED_GETTER(Latitude)
+ GENERATE_COORDS_WRAPPED_GETTER(Longitude)
+ GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(Altitude)
+-GENERATE_COORDS_WRAPPED_GETTER(Accuracy)
+ GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(AltitudeAccuracy)
+ GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(Heading)
+ GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(Speed)
+@@ -61,4 +64,28 @@ GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(Speed)
+ #undef GENERATE_COORDS_WRAPPED_GETTER
+ #undef GENERATE_COORDS_WRAPPED_GETTER_NULLABLE
+ 
++// Camoufox: no device reports an accuracy of 0, which is what a position given
++// without one carries (Playwright's geolocation option, or geolocation:* without
++// geolocation:accuracy). Estimate it from the coordinates' precision: the width
++// of their last decimal place, a degree of longitude being 111,320 m at the
++// equator.
++double GeolocationCoordinates::Accuracy() const {
++  double rv;
++  mCoords->GetAccuracy(&rv);
++  if (rv > 0) {
++    return rv;
++  }
++  auto decimals = [](double aValue) {
++    nsAutoCString digits;
++    digits.AppendFloat(aValue);
++    int32_t dot = digits.FindChar('.');
++    return dot == kNotFound ? 0 : int32_t(digits.Length()) - dot - 1;
++  };
++  const double latitude = Latitude();
++  const int32_t precision =
++      std::min(decimals(latitude), decimals(Longitude()));
++  return 111320 * std::cos(latitude * 3.141592653589793 / 180) /
++         std::pow(10, precision);
++}
++
+ }  // namespace mozilla::dom
 diff --git a/dom/geolocation/GeolocationPosition.cpp b/dom/geolocation/GeolocationPosition.cpp
 index 5e24bfceed..b07c76fd6e 100644
 --- a/dom/geolocation/GeolocationPosition.cpp
@@ -70,23 +122,21 @@ index 5e24bfceed..b07c76fd6e 100644
  }
  
 diff --git a/dom/geolocation/moz.build b/dom/geolocation/moz.build
-index 170552ab61..b5f1efa0a8 100644
+index ddb70f988e..61f518df3e 100644
 --- a/dom/geolocation/moz.build
 +++ b/dom/geolocation/moz.build
-@@ -73,3 +73,6 @@ BROWSER_CHROME_MANIFESTS += ["test/browser/browser.toml"]
- MOCHITEST_CHROME_MANIFESTS += ["test/chrome/chrome.toml"]
- MOCHITEST_MANIFESTS += ["test/mochitest/mochitest.toml"]
- XPCSHELL_TESTS_MANIFESTS += ["test/unit/xpcshell.toml"]
+@@ -77,3 +77,6 @@ XPCSHELL_TESTS_MANIFESTS += ["test/unit/xpcshell.toml"]
+ SOURCE_HEADERS += [
+     "MLSFallback.h",
+ ]
 +
 +# Camoufox: include path for MaskConfig.hpp
 +LOCAL_INCLUDES += ["/camoucfg"]
 diff --git a/dom/system/NetworkGeolocationProvider.sys.mjs b/dom/system/NetworkGeolocationProvider.sys.mjs
+index 619f58b151..43f1d078a1 100644
 --- a/dom/system/NetworkGeolocationProvider.sys.mjs
 +++ b/dom/system/NetworkGeolocationProvider.sys.mjs
-@@ -480,34 +480,57 @@ NetworkGeolocationProvider.prototype = {
-       return;
-     }
- 
+@@ -483,28 +483,51 @@ NetworkGeolocationProvider.prototype = {
      // From here on, do a network geolocation request //
      let url = Services.urlFormatter.formatURLPref("geo.provider.network.url");
  
@@ -156,66 +206,3 @@ diff --git a/dom/system/NetworkGeolocationProvider.sys.mjs b/dom/system/NetworkG
        if (this.listener) {
          this.listener.update(newLocation);
        }
- 
-       ensureCachedResponse();
-       gCachedResponse.store(newLocation, data.wifiAccessPoints);
-diff --git a/dom/geolocation/GeolocationCoordinates.cpp b/dom/geolocation/GeolocationCoordinates.cpp
---- a/dom/geolocation/GeolocationCoordinates.cpp
-+++ b/dom/geolocation/GeolocationCoordinates.cpp
-@@ -3,12 +3,16 @@
-  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
- 
- #include "mozilla/dom/GeolocationCoordinates.h"
- 
- #include "mozilla/dom/GeolocationCoordinatesBinding.h"
- #include "mozilla/dom/GeolocationPosition.h"
-+#include "nsString.h"
-+
-+#include <algorithm>
-+#include <cmath>
- 
- namespace mozilla::dom {
- 
- NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(GeolocationCoordinates, mPosition)
- NS_IMPL_CYCLE_COLLECTING_ADDREF(GeolocationCoordinates)
- NS_IMPL_CYCLE_COLLECTING_RELEASE(GeolocationCoordinates)
-@@ -50,15 +54,38 @@ JSObject* GeolocationCoordinates::WrapObject(
-     return rv;                                                 \
-   }
- 
- GENERATE_COORDS_WRAPPED_GETTER(Latitude)
- GENERATE_COORDS_WRAPPED_GETTER(Longitude)
- GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(Altitude)
--GENERATE_COORDS_WRAPPED_GETTER(Accuracy)
- GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(AltitudeAccuracy)
- GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(Heading)
- GENERATE_COORDS_WRAPPED_GETTER_NULLABLE(Speed)
- 
- #undef GENERATE_COORDS_WRAPPED_GETTER
- #undef GENERATE_COORDS_WRAPPED_GETTER_NULLABLE
- 
-+// Camoufox: no device reports an accuracy of 0, which is what a position given
-+// without one carries (Playwright's geolocation option, or geolocation:* without
-+// geolocation:accuracy). Estimate it from the coordinates' precision: the width
-+// of their last decimal place, a degree of longitude being 111,320 m at the
-+// equator.
-+double GeolocationCoordinates::Accuracy() const {
-+  double rv;
-+  mCoords->GetAccuracy(&rv);
-+  if (rv > 0) {
-+    return rv;
-+  }
-+  auto decimals = [](double aValue) {
-+    nsAutoCString digits;
-+    digits.AppendFloat(aValue);
-+    int32_t dot = digits.FindChar('.');
-+    return dot == kNotFound ? 0 : int32_t(digits.Length()) - dot - 1;
-+  };
-+  const double latitude = Latitude();
-+  const int32_t precision =
-+      std::min(decimals(latitude), decimals(Longitude()));
-+  return 111320 * std::cos(latitude * 3.141592653589793 / 180) /
-+         std::pow(10, precision);
-+}
-+
- }  // namespace mozilla::dom

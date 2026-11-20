@@ -6,7 +6,7 @@ ff_source_tarball := firefox-$(version).source.tar.xz
 
 .PHONY: help fetch setup-minimal setup ff-dbg revert fetch-fonts fonts-extract fonts-check \
         fonts-clean dir set-target mozbootstrap setup-macos-sdk bootstrap diff first-checkpoint \
-        checkpoint clean distclean build package-linux package-macos package-windows run edit-cfg \
+        checkpoint clean distclean build preflight package-linux package-macos package-windows run edit-cfg \
         check-arg grep patch unpatch workspace tests stage-fonts stage-ubo unbusy path \
         generate-assets-car sync build-js build-cpp verify-patches
 
@@ -26,6 +26,7 @@ help:
 	@echo "  build-js            - sync, then rebuild only JS/prefs/Juggler (./mach build faster)"
 	@echo "  build-cpp           - Rebuild only compiled code (./mach build binaries)"
 	@echo "  verify-patches      - Check the patch stack applies to clean Firefox source (no make dir)"
+	@echo "  preflight           - Check that BUILD_TARGET builds, without building it"
 	@echo "  set-target          - Change the build target with BUILD_TARGET"
 	@echo "  setup-macos-sdk     - Download the macOS SDK for cross-compilation"
 	@echo "  fetch-fonts         - Download and verify the font bundle"
@@ -152,7 +153,7 @@ checkpoint:
 
 clean:
 	@if [ -e "$(cf_source_dir)/.git" ]; then \
-		cd "$(cf_source_dir)" && ./mach clobber && git clean -fdx; \
+		(cd "$(cf_source_dir)" && ./mach clobber && git clean -fdx); \
 		$(MAKE) revert; \
 	else \
 		echo "No git repo found in $(cf_source_dir); re-extracting Firefox source..."; \
@@ -183,6 +184,12 @@ build-cpp:
 
 verify-patches:
 	python3 scripts/patchstack.py verify $(if $(filter true,$(compare)),--compare,)
+
+preflight:
+	@if [ ! -f $(cf_source_dir)/_READY ]; then \
+		make dir; \
+	fi
+	python3 scripts/preflight.py $(cf_source_dir)
 
 package-linux: fonts-extract
 	python3 scripts/package.py linux \
@@ -216,8 +223,9 @@ package-windows: fonts-extract
 run:
 	cd $(cf_source_dir) \
 	&& rm -rf ~/.camoufox obj-x86_64-pc-linux-gnu/tmp/profile-default \
-	&& CAMOU_CONFIG=$${CAMOU_CONFIG:-'{}'} \
-	&& CAMOU_CONFIG="$${CAMOU_CONFIG%?}, \"debug\": true}" ./mach run $(args)
+	&& CAMOU_CONFIG=$$(python3 -c 'import json, os; print(json.dumps({**json.loads(os.environ.get("CAMOU_CONFIG") or "{}"), "debug": True}))') \
+	&& export CAMOU_CONFIG \
+	&& ./mach run $(args)
 
 edit-cfg:
 	@if [ ! -f $(cf_source_dir)/obj-x86_64-pc-linux-gnu/dist/bin/camoufox.cfg ]; then \

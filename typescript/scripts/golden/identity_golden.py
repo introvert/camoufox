@@ -251,7 +251,11 @@ def manifest_voice_entries(node):
 def record_voices():
     cases = []
     for os_name in OS_NAMES + ('plan9',):
-        for locale in VOICE_LOCALES:
+        # Linux draws the whole speech-dispatcher grid (~14000 voices), whatever
+        # the locale: two locales show that, and every locale would push the
+        # TypeScript test past its timeout.
+        locales = (None, 'de-DE') if os_name == 'linux' else VOICE_LOCALES
+        for locale in locales:
             for seed in range(20):
                 voices = fp._generate_random_voice_subset(os_name, locale, seed=seed)
                 case = {'os': os_name, 'locale': locale, 'seed': seed, 'hash': h(voices), 'len': len(voices)}
@@ -550,14 +554,23 @@ def record_coherence():
         if rng.random() < 0.2:
             c['screen.width'], c['screen.height'] = rng.choice(sorted(coherence.APPLE_SILICON_PANELS))
         target = rng.choice(OS_KEYS + ('bsd',))
-        v = [list(x) for x in coherence.validate(c, target)]
+        v = [[x.rule, x.detail] for x in coherence.validate(c, target)]
         applied = copy.deepcopy(c)
-        left = [list(x) for x in coherence.apply(applied, target)]
+        left = [[x.rule, x.detail] for x in coherence.apply(applied, target)]
         dropped_cfg = copy.deepcopy(c)
-        dropped = [list(x) for x in coherence.drop_incoherent_source_values(dropped_cfg, target)]
+        dropped = [[x.rule, x.detail] for x in coherence.drop_incoherent_source_values(dropped_cfg, target)]
+        # The same identity with some of its keys the caller's: those are not repaired.
+        keep = sorted(key for key in c if rng.random() < 0.3)
+        kept_cfg = copy.deepcopy(c)
+        kept_left = [[x.rule, x.detail, list(x.kept)] for x in coherence.apply(kept_cfg, target, set(keep))]
+        kept_dropped_cfg = copy.deepcopy(c)
+        kept_dropped = [[x.rule, x.detail, list(x.kept)]
+                        for x in coherence.drop_incoherent_source_values(kept_dropped_cfg, target, set(keep))]
         case = {'input': c, 'os': target, 'rules': [x[0] for x in v], 'validate': h(v),
                 'apply': [x[0] for x in left], 'applyHash': h(left), 'applied': h(applied),
                 'dropped': dropped, 'droppedConfig': h(dropped_cfg),
+                'keep': keep, 'keptApply': h(kept_left), 'keptApplied': h(kept_cfg),
+                'keptDropped': kept_dropped, 'keptDroppedConfig': h(kept_dropped_cfg),
                 'implausible': coherence.screen_is_implausible(c)}
         if i < 40:
             case.update(validateFull=v, appliedFull=applied)

@@ -18,6 +18,7 @@ Run with:
 
 import json
 import re
+import types
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
@@ -259,7 +260,10 @@ class TestLaunchOptions:
         config, prefs = launch(os=os_name)
         assert 'mobile' not in config
         assert not set(MOBILE_FIREFOX_PREFS) & set(prefs)
-        assert 'layout.css.devPixelsPerPx' not in prefs
+        # A desktop renders at its own display scale (#933), set only for a
+        # zoomed draw, never at a phone's ratio.
+        if 'layout.css.devPixelsPerPx' in prefs:
+            assert prefs['layout.css.devPixelsPerPx'] == f"{float(config['window.devicePixelRatio']):g}"
 
     @pytest.mark.parametrize('os_name', ['windows', 'macos', 'linux', 'android'])
     def test_browser_owned_navigator_values_are_firefoxs(self, os_name):
@@ -279,9 +283,21 @@ class TestLaunchOptions:
         assert prefs['media.setsinkid.enabled'] is False
         assert prefs['webgl.default-antialias'] is False
         assert prefs['dom.webmidi.enabled'] is False
+        assert prefs['media.webspeech.recognition.enable'] is False
         assert prefs['dom.disable_window_move_resize'] is True
         assert prefs['browser.tabs.remote.coep.credentialless'] is False
         assert prefs['browser.link.open_newwindow.restriction'] == 0
+        assert prefs['dom.webserial.enabled'] is False
+        assert prefs['media.getdisplaymedia.enabled'] is False
+
+    def test_android_launch_gets_firefox_for_androids_system_colors(self):
+        _, prefs = launch(os='android')
+        # Fenix's colorAccent, and Highlight as that accent at alpha 78.
+        assert prefs['ui.accentcolor'] == '#180e30'
+        assert prefs['ui.highlight'] == 'rgba(24, 14, 48, 0.306)'
+        # NS_SAME_AS_FOREGROUND_COLOR, which style resolves to currentcolor.
+        assert prefs['ui.highlighttext'] == 'rgba(2, 0, 0, 0)'
+        assert prefs['ui.-moz-dialog'] == '#efebe7'
 
     def test_android_launch_has_a_phones_media_devices(self):
         config, _ = launch(os='android')
@@ -300,6 +316,8 @@ class TestLaunchOptions:
 class _FakeBrowser:
     def __init__(self):
         self.kwargs = None
+        # Playwright's implementation object, which attach_socks5_auth wraps.
+        self._impl_obj = types.SimpleNamespace()
 
     def new_page(self, **kwargs):
         self.kwargs = kwargs

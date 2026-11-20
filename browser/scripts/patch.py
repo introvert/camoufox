@@ -10,6 +10,7 @@ Run:
 """
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -62,36 +63,20 @@ class Patcher:
 
     def camoufox_patches(self):
         """
-        Apply all patches
+        Apply all patches, or with --mozconfig-only retarget the patched tree
         """
         version, release = extract_args()
         with temp_cd(find_src_dir('.', version, release)):
-            if options.mozconfig_only:
-                # Only the build target changes: leave the applied patches, the
-                # additions and the object directory exactly as they are.
-                # _update_mozconfig builds from mozconfig.backup, which a full
-                # run's `git clean` removes; drop it here too, or edits to
-                # base.mozconfig never reach the new mozconfig.
-                if os.path.exists('mozconfig.backup'):
-                    os.remove('mozconfig.backup')
-                run('cp -v ../assets/base.mozconfig mozconfig')
-                print(f'Using target: {self.moz_target}')
-                self._update_mozconfig()
-                print('Complete!')
-                return
+            if not options.mozconfig_only:
+                # Reset only when the source tree has its own local repository.
+                reset_to_unpatched()
 
-            # Reset only when the source tree has its own local repository.
-            reset_to_unpatched()
+                # Re-copy additions and settings after reset
+                print("Re-copying additions and settings...")
+                run(f'bash ../scripts/copy-additions.sh {version} {release}')
 
-            # Re-copy additions and settings after reset
-            print("Re-copying additions and settings...")
-            run(f'bash ../scripts/copy-additions.sh {version} {release}')
-
-            # Create the base mozconfig file
-            run('cp -v ../assets/base.mozconfig mozconfig')
-            # Set cross building target
             print(f'Using target: {self.moz_target}')
-            self._update_mozconfig()
+            self._write_mozconfig()
 
             if not options.mozconfig_only:
                 failed_patches = []
@@ -160,32 +145,19 @@ class Patcher:
             rejects.append(f'patch exited with status {result.returncode}')
         return rejects
 
-    def _update_mozconfig(self):
+    def _write_mozconfig(self):
         """
-        Helper for adding additional mozconfig code from assets/<target>.mozconfig
+        Write the mozconfig: the target, assets/base.mozconfig, then assets/<target>.mozconfig
         """
-        mozconfig_backup = "mozconfig.backup"
-        mozconfig = "mozconfig"
-
-        # Create backup if it doesn't exist
-        if not os.path.exists(mozconfig_backup):
-            if os.path.exists(mozconfig):
-                shutil.copy2(mozconfig, mozconfig_backup)
-            else:
-                with open(mozconfig_backup, 'w', encoding='utf-8') as f:
-                    pass
-
-        # Read backup content
-        with open(mozconfig_backup, 'r', encoding='utf-8') as f:
-            content = f.read()
-
         # Set first: base.mozconfig picks stock's LTO mode for the target and
         # reads the profile. configure resolves rustc and cargo through rustup,
         # which honours RUSTUP_TOOLCHAIN.
         content = (f"CAMOUFOX_TARGET={self.moz_target}\n"
                    f"CAMOUFOX_PGO_PROFILE={self.pgo_profile}\n"
                    "ac_add_options --target=$CAMOUFOX_TARGET\n"
-                   f"export RUSTUP_TOOLCHAIN={self.rust}\n\n") + content
+                   f"export RUSTUP_TOOLCHAIN={self.rust}\n\n")
+        with open(os.path.join("..", "assets", "base.mozconfig"), encoding='utf-8') as f:
+            content += f.read()
 
         # A local build for patch work: no release configuration, whose extra
         # optimisation and Rust settings cost build time and change nothing a
@@ -196,15 +168,14 @@ class Patcher:
                 '# ac_add_options --enable-release  # CAMOUFOX_DEV_BUILD=1',
             )
 
-        # Add target-specific mozconfig if it exists
+        # Linux has no mozconfig of its own
         target_mozconfig = os.path.join("..", "assets", f"{self.target}.mozconfig")
         if os.path.exists(target_mozconfig):
-            with open(target_mozconfig, 'r', encoding='utf-8') as f:
+            with open(target_mozconfig, encoding='utf-8') as f:
                 content += f.read()
 
-        # Update mozconfig
-        print(f"-> Updating mozconfig, target is {self.moz_target}")
-        with open(mozconfig, 'w', encoding='utf-8') as f:
+        print(f"-> Writing mozconfig, target is {self.moz_target}")
+        with open("mozconfig", 'w', encoding='utf-8') as f:
             f.write(content)
 
 
@@ -215,10 +186,26 @@ RUST_TARGETS = {
 }
 
 
+def find_rustup():
+    """The rustup binary the build drives.
+
+    rustup.sh installs to ~/.cargo/bin, but a distro or Homebrew package puts
+    it somewhere on PATH (/usr/bin, /opt/homebrew/bin). Look on PATH first,
+    then the rustup.sh default, and fail loudly when neither exists.
+    """
+    rustup = shutil.which("rustup") or os.path.expanduser("~/.cargo/bin/rustup")
+    if not os.access(rustup, os.X_OK):
+        raise SystemExit(
+            "rustup not found on PATH or at ~/.cargo/bin/rustup; "
+            "install it with browser/scripts/install-deps.sh and open a new shell"
+        )
+    return rustup
+
+
 def install_rust(rust, target):
     """Install the Rust release Mozilla builds this tree with, and its std for the target"""
     targets = ' '.join(f'--target {t}' for t in RUST_TARGETS[target])
-    run(f'~/.cargo/bin/rustup toolchain install {rust} --profile minimal {targets}')
+    run(f'{shlex.quote(find_rustup())} toolchain install {rust} --profile minimal {targets}')
 
 
 """
@@ -262,6 +249,7 @@ def host_build_target():
     target = {'Linux': 'linux', 'Darwin': 'macos', 'Windows': 'windows'}.get(system, 'linux')
     machine = platform.machine().lower()
     arch = 'arm64' if machine in ('arm64', 'aarch64') else 'x86_64'
+    return target, arch
 
 
 """

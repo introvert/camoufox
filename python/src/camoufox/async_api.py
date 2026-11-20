@@ -12,6 +12,7 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
+from . import _humanize_playwright, driver_defaults
 from .fingerprints import render_context_identity
 from .ip import ExitGeo, Proxy, proxy_exit_geo
 from .utils import (
@@ -19,10 +20,12 @@ from .utils import (
     HostIdentity,
     async_attach_vd,
     attach_context_defaults,
+    attach_socks5_auth,
     context_identity,
     host_identity,
     launch_options,
     launch_machine,
+    launch_os,
     launches_mobile,
     machine_from_probe,
     needs_exit_geo,
@@ -113,6 +116,9 @@ async def AsyncNewBrowser(
         **kwargs:
             All other keyword arguments passed to `launch_options()`.
     """
+    # humanize runs in this process: checked before the launch,
+    # attached to the browser after it (also with from_options).
+    _humanize_playwright.check(kwargs.get('humanize'), is_async=True)
     virtual_display, headless = await asyncio.get_running_loop().run_in_executor(
         None, start_virtual_display, headless, debug, kwargs
     )
@@ -121,8 +127,11 @@ async def AsyncNewBrowser(
     # close, which used to strand one Xvfb and its /tmp/.X<n> lock per failed
     # launch.
     try:
-        return await _new_browser(
+        browser, os = await _new_browser(
             playwright, virtual_display, headless, from_options, persistent_context, debug, kwargs
+        )
+        return _humanize_playwright.attach(
+            browser, kwargs.get('humanize'), os, i_know_what_im_doing=kwargs.get('i_know_what_im_doing')
         )
     except BaseException:
         if virtual_display:
@@ -138,7 +147,8 @@ async def _new_browser(
     persistent_context: bool,
     debug: Optional[bool],
     kwargs: Dict[str, Any],
-) -> Union[Browser, BrowserContext]:
+) -> Tuple[Union[Browser, BrowserContext], str]:
+    """The browser (or persistent context), and its identity's OS."""
     # Options the caller built leave its contexts to the caller (host_identity).
     canvas_noise: Optional[bool] = False
     if not from_options:
@@ -166,7 +176,7 @@ async def _new_browser(
     if not pid:
         return await _launch(
             playwright, from_options, persistent_context, no_viewport_default, virtual_display, canvas_noise
-        )
+        ), launch_os(from_options)
     # The browser inherits the driver's mask at spawn, so two concurrent launches
     # on one driver must not interleave pin/restore: the second pin would land on
     # the first browser, and the first restore would leave the driver pinned.
@@ -175,7 +185,7 @@ async def _new_browser(
         try:
             return await _launch(
                 playwright, from_options, persistent_context, no_viewport_default, virtual_display, canvas_noise
-            )
+            ), launch_os(from_options)
         finally:
             cpu_affinity.restore(pid, previous)
 
@@ -203,6 +213,7 @@ async def _launch(
         context = await playwright.firefox.launch_persistent_context(
             **persistent_context_options(from_options, no_viewport_default)
         )
+        driver_defaults.mark(context)
         return await async_attach_vd(context, virtual_display)
 
     identity = await asyncio.get_running_loop().run_in_executor(None, host_identity, from_options, canvas_noise)
@@ -295,6 +306,8 @@ async def AsyncNewContext(
         i_know_what_im_doing=i_know_what_im_doing,
     )
     rendered = render_context_identity(drawn, ff_version, i_know_what_im_doing)
+    # A browser launched elsewhere takes SOCKS5 credentials too.
+    attach_socks5_auth(browser)
     context = await browser.new_context(**new_context_options(rendered, context_kwargs, proxy))
     await context.add_init_script(rendered['init_script'])
     context.camoufox_identity = drawn

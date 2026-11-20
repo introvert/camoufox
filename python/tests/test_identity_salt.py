@@ -16,13 +16,26 @@ from camoufox import cpu_affinity, utils
 from camoufox import fingerprints as fp
 
 
+_ORIGINAL_HOST_CPU_COUNT = fp.host_cpu_count
+
+
+def _host_cpu_count():
+    """The core count a launch here sees: the test's own when it set one, else 8."""
+    current = fp.host_cpu_count
+    return current if current is not _ORIGINAL_HOST_CPU_COUNT else (lambda: 8)
+
+
 @contextmanager
 def host(browser_version="150.0.2"):
     with mock.patch.object(utils, "get_screen_cons", lambda headless: None), (
         mock.patch.object(utils, "has_display", lambda env: False)
     ), mock.patch.object(utils, "installed_verstr", lambda: browser_version), (
         mock.patch.object(utils, "launch_path", lambda **kwargs: "/nonexistent/camoufox")
-    ):
+    ), mock.patch.object(fp, "host_cpu_count", _host_cpu_count()):
+        # The host's core count replaces a preset's (fix_hardware_concurrency),
+        # and on a 64-thread host the 32 it reports redraws a recorded Mac's
+        # Intel HD Graphics, which no 32-thread Mac carries: pin an ordinary one,
+        # unless the test already set its own.
         yield
 
 

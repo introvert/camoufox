@@ -1,11 +1,20 @@
 diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
-index 22a92569a7..a316ac6e5b 100644
 --- a/dom/base/Navigator.cpp
 +++ b/dom/base/Navigator.cpp
-@@ -799,6 +799,21 @@ bool Navigator::GlobalPrivacyControl() {
+@@ -796,36 +796,44 @@ bool Navigator::GlobalPrivacyControl() {
+                 StaticPrefs::privacy_globalprivacycontrol_pbmode_enabled();
+   }
+   return gpcStatus;
  }
  
  uint64_t Navigator::HardwareConcurrency() {
+-  // Camoufox: per-context hardware concurrency
+-  if (mWindow) {
+-    const uint32_t userContextId =
+-        RoverfoxStorageManager::UserContextId(mWindow);
+-    uint32_t stored = NavigatorManager::GetHardwareConcurrency(userContextId);
+-    if (stored > 0) {
+-      return static_cast<uint64_t>(stored);
 +  // Camoufox: stock's work first, then the spoof (timing parity; see
 +  // nsScreen::PixelDepth).
 +  const uint64_t stock = [&]() -> uint64_t {
@@ -13,42 +22,62 @@ index 22a92569a7..a316ac6e5b 100644
 +        workerinternals::RuntimeService::GetOrCreateService();
 +    if (!rts) {
 +      return 1;
-+    }
-+
+     }
+-  }
+-  // Camoufox: global config fallback
+-  if (auto value = MaskConfig::GetUint64("navigator.hardwareConcurrency")) {
+-    return value.value();
+-  }
+-  workerinternals::RuntimeService* rts =
+-      workerinternals::RuntimeService::GetOrCreateService();
+-  if (!rts) {
+-    return 1;
+-  }
+ 
+-  return rts->ClampedHardwareConcurrency(
+-      nsGlobalWindowInner::Cast(mWindow)->ShouldResistFingerprinting(
+-          RFPTarget::NavigatorHWConcurrency),
+-      nsGlobalWindowInner::Cast(mWindow)->ShouldResistFingerprinting(
+-          RFPTarget::NavigatorHWConcurrencyTiered));
 +    return rts->ClampedHardwareConcurrency(
 +        nsGlobalWindowInner::Cast(mWindow)->ShouldResistFingerprinting(
 +            RFPTarget::NavigatorHWConcurrency),
 +        nsGlobalWindowInner::Cast(mWindow)->ShouldResistFingerprinting(
 +            RFPTarget::NavigatorHWConcurrencyTiered));
 +  }();
-   // Camoufox: per-context hardware concurrency
-   if (mWindow) {
-     const uint32_t userContextId =
-@@ -812,17 +827,7 @@ uint64_t Navigator::HardwareConcurrency() {
-   if (auto value = MaskConfig::GetUint64("navigator.hardwareConcurrency")) {
-     return value.value();
-   }
--  workerinternals::RuntimeService* rts =
--      workerinternals::RuntimeService::GetOrCreateService();
--  if (!rts) {
--    return 1;
--  }
--
--  return rts->ClampedHardwareConcurrency(
--      nsGlobalWindowInner::Cast(mWindow)->ShouldResistFingerprinting(
--          RFPTarget::NavigatorHWConcurrency),
--      nsGlobalWindowInner::Cast(mWindow)->ShouldResistFingerprinting(
--          RFPTarget::NavigatorHWConcurrencyTiered));
-+  return stock;
++  // Camoufox: per-context hardware concurrency, else the global config.
++  const uint64_t generation = RoverfoxStorageManager::Generation();
++  const uint32_t userContextId =
++      mWindow ? RoverfoxStorageManager::UserContextId(mWindow) : 0;
++  auto& cache = mCamouHardwareConcurrency;
++  if (cache.mGeneration != generation ||
++      cache.mUserContextId != userContextId) {
++    const uint32_t stored =
++        mWindow ? NavigatorManager::GetHardwareConcurrency(userContextId) : 0;
++    cache.mValue = stored > 0 ? stored
++                              : MaskConfig::GetUint64(
++                                    "navigator.hardwareConcurrency")
++                                    .value_or(0);
++    cache.mUserContextId = userContextId;
++    cache.mGeneration = generation;
++  }
++  return cache.mValue ? cache.mValue : stock;
  }
  
  namespace {
-@@ -1015,6 +1020,37 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
+ 
+ class VibrateWindowListener : public nsIDOMEventListener {
+  public:
+@@ -1012,12 +1020,52 @@ bool Navigator::Vibrate(const nsTArray<uint32_t>& aPattern) {
+ //*****************************************************************************
+ 
+ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
    nsIDocShell* docshell = GetDocShell();
    BrowsingContext* bc = docshell ? docshell->GetBrowsingContext() : nullptr;
  
 +  // Camoufox: stock's work first, then the spoof (timing parity; see
 +  // nsScreen::PixelDepth).
++  bool detached = false;
 +  const uint32_t stock = [&]() -> uint32_t {
 +    // Responsive Design Mode overrides the maxTouchPoints property when
 +    // touch simulation is enabled.
@@ -67,7 +96,10 @@ index 22a92569a7..a316ac6e5b 100644
 +    nsCOMPtr<nsIWidget> widget =
 +        widget::WidgetUtils::DOMWindowToWidget(mWindow->GetOuterWindow());
 +
-+    NS_ENSURE_TRUE(widget, 0);
++    if (!widget) {
++      detached = true;
++      return 0;
++    }
 +    uint32_t maxTouchPoints = widget->GetMaxTouchPoints();
 +
 +    if (aCallerType != CallerType::System &&
@@ -77,11 +109,22 @@ index 22a92569a7..a316ac6e5b 100644
 +    }
 +    return maxTouchPoints;
 +  }();
++  // A window with no widget (a removed iframe's) answers stock's 0, not the
++  // identity's count.
++  if (detached) {
++    return stock;
++  }
 +
    // A context that asked for touch (Playwright's hasTouch) has to report a
    // digitizer: touch events next to maxTouchPoints == 0 contradict each other.
    const bool touchContext =
-@@ -1047,33 +1083,7 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
+       bc && bc->TouchEventsOverride() ==
+                 mozilla::dom::TouchEventsOverride::Enabled;
+ 
+@@ -1044,39 +1092,13 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
+         nsContentUtils::ShouldResistFingerprinting(
+             GetDocShell(), RFPTarget::MaxTouchPointsCollapse)) {
+       return nsRFPService::CollapseMaxTouchPoints(value.value());
      }
      return value.value();
    }
@@ -116,11 +159,36 @@ index 22a92569a7..a316ac6e5b 100644
  }
  
  //*****************************************************************************
+ //    Navigator::nsIDOMClientInformation
+ //*****************************************************************************
+ 
+diff --git a/dom/base/Navigator.h b/dom/base/Navigator.h
+index 3ff67f4b54..0444fb191e 100644
+--- a/dom/base/Navigator.h
++++ b/dom/base/Navigator.h
+@@ -178,6 +178,15 @@ class Navigator final : public nsISupports, public nsWrapperCache {
+                   ErrorResult& aRv) const;
+   bool JavaEnabled() { return false; }
+   uint64_t HardwareConcurrency();
++  // Camoufox: the spoofed hardwareConcurrency of this context, read once per
++  // RoverfoxStorageManager generation instead of on every call (timing
++  // parity; see nsScreen::CamouSpoofed). 0: none, stock's value applies.
++  struct CamouHardwareConcurrency {
++    uint64_t mGeneration = 0;
++    uint32_t mUserContextId = 0;
++    uint64_t mValue = 0;
++  };
++  CamouHardwareConcurrency mCamouHardwareConcurrency;
+   bool TaintEnabled() { return false; }
+ 
+   already_AddRefed<LegacyMozTCPSocket> MozTCPSocket();
 diff --git a/dom/base/NavigatorManager.cpp b/dom/base/NavigatorManager.cpp
-index ba94efcc51..83fd4d5b4e 100644
 --- a/dom/base/NavigatorManager.cpp
 +++ b/dom/base/NavigatorManager.cpp
-@@ -9,7 +9,8 @@ namespace dom {
+@@ -6,13 +6,14 @@ namespace mozilla {
+ namespace dom {
+ 
+ /* static */
  MaskConfig::SpoofedOS NavigatorManager::GetSpoofedOS(uint32_t aId) {
    nsAutoString platform;
    if (GetPlatform(aId, platform)) {
@@ -130,6 +198,9 @@ index ba94efcc51..83fd4d5b4e 100644
    }
    return MaskConfig::GetSpoofedOS();
  }
+ 
+ /* static */
+ bool NavigatorManager::IsPlatformFunctionEnabledForWebIDL(JSContext* aCx,
 diff --git a/dom/base/RoverfoxStorageManager.cpp b/dom/base/RoverfoxStorageManager.cpp
 index eee0c0a0e8..1d34211115 100644
 --- a/dom/base/RoverfoxStorageManager.cpp
@@ -146,10 +217,12 @@ index eee0c0a0e8..1d34211115 100644
  // key with AppendPrintf, converted it to UTF-8 and took the cache lock (plus
  // a pref lookup on a main-thread miss). Measured from script against stock
 diff --git a/dom/base/RoverfoxStorageManager.h b/dom/base/RoverfoxStorageManager.h
-index 715019b0dc..468760afad 100644
 --- a/dom/base/RoverfoxStorageManager.h
 +++ b/dom/base/RoverfoxStorageManager.h
-@@ -56,6 +56,10 @@ class RoverfoxStorageManager {
+@@ -53,12 +53,16 @@ class RoverfoxStorageManager {
+   static bool IsSetterOffered(JSObject* aObj, const char* aName);
+   // Removes a setter the running script has just called from its global.
+   // Assigning undefined first busts the IC/shape caches that otherwise keep a
    // deleted name reachable on ARM64.
    static void RemoveSetter(const char* aName);
  
@@ -160,16 +233,21 @@ index 715019b0dc..468760afad 100644
   private:
    static nsCString MakePrefName(const nsAString& key);
    static void SetPrefValue(const nsCString& prefName, const nsCString& value);
+   static void ReadValue(const nsCString& prefName, nsACString& outValue);
+   static void EnsureMirror();
+   struct MemoSlot;
 diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
-index 3aaf8c5106..a2b22f298a 100644
 --- a/dom/base/nsGlobalWindowInner.cpp
 +++ b/dom/base/nsGlobalWindowInner.cpp
-@@ -3788,24 +3788,46 @@ double nsGlobalWindowInner::ScreenEdgeSlopY() const {
+@@ -3782,34 +3782,54 @@ double nsGlobalWindowInner::ScreenEdgeSlopX() const {
+ double nsGlobalWindowInner::ScreenEdgeSlopY() const {
+   FORWARD_TO_OUTER(ScreenEdgeSlopY, (), 0);
+ }
  
  int32_t nsGlobalWindowInner::GetScreenX(CallerType aCallerType,
                                          ErrorResult& aError) {
-+  // Camoufox: stock's work first, then the spoof (timing parity; see
-+  // nsScreen::PixelDepth).
++  // Camoufox: stock's work first, then a context's position (timing parity;
++  // see nsScreen::PixelDepth).
 +  // Stock throws on an inactive window; so does this.
 +  const int32_t stock = [&]() -> int32_t {
 +    FORWARD_TO_OUTER_OR_THROW(GetScreenXOuter, (aCallerType, aError), aError, 0);
@@ -182,18 +260,21 @@ index 3aaf8c5106..a2b22f298a 100644
            RoverfoxStorageManager::UserContextId(this), x, y)) {
      return x;
    }
--  if (auto value = MaskConfig::GetInt32("window.screenX")) return value.value();
+-  // Camoufox: not read from MaskConfig. CamoufoxWindow.sys.mjs moves the
+-  // first window to the identity's position, so every other window (a
+-  // popup, a moved window) reports where it is, as in stock.
 -  FORWARD_TO_OUTER_OR_THROW(GetScreenXOuter, (aCallerType, aError), aError, 0);
-+  if (auto value = MaskConfig::GetInt32("window.screenX")) {
-+    return value.value();
-+  }
++  // Camoufox: the launch's position is not read from MaskConfig.
++  // CamoufoxWindow.sys.mjs moves the first window to the identity's position,
++  // so every other window (a popup, a moved window) reports where it is, as in
++  // stock.
 +  return stock;
  }
  
  int32_t nsGlobalWindowInner::GetScreenY(CallerType aCallerType,
                                          ErrorResult& aError) {
-+  // Camoufox: stock's work first, then the spoof (timing parity; see
-+  // nsScreen::PixelDepth).
++  // Camoufox: stock's work first, then a context's position (timing parity;
++  // see nsScreen::PixelDepth).
 +  // Stock throws on an inactive window; so does this.
 +  const int32_t stock = [&]() -> int32_t {
 +    FORWARD_TO_OUTER_OR_THROW(GetScreenYOuter, (aCallerType, aError), aError, 0);
@@ -206,28 +287,37 @@ index 3aaf8c5106..a2b22f298a 100644
            RoverfoxStorageManager::UserContextId(this), x, y)) {
      return y;
    }
--  if (auto value = MaskConfig::GetInt32("window.screenY")) return value.value();
+-  // Camoufox: not read from MaskConfig. CamoufoxWindow.sys.mjs moves the
+-  // first window to the identity's position, so every other window (a
+-  // popup, a moved window) reports where it is, as in stock.
 -  FORWARD_TO_OUTER_OR_THROW(GetScreenYOuter, (aCallerType, aError), aError, 0);
-+  if (auto value = MaskConfig::GetInt32("window.screenY")) {
-+    return value.value();
-+  }
++  // Camoufox: the launch's position is not read from MaskConfig.
++  // CamoufoxWindow.sys.mjs moves the first window to the identity's position,
++  // so every other window (a popup, a moved window) reports where it is, as in
++  // stock.
 +  return stock;
  }
  
  float nsGlobalWindowInner::GetMozInnerScreenX(CallerType aCallerType,
+                                               ErrorResult& aError) {
+   FORWARD_TO_OUTER_OR_THROW(GetMozInnerScreenXOuter, (aCallerType), aError, 0);
+ }
 diff --git a/dom/base/nsScreen.cpp b/dom/base/nsScreen.cpp
-index db1b834258..38b14ffbac 100644
 --- a/dom/base/nsScreen.cpp
 +++ b/dom/base/nsScreen.cpp
-@@ -5,6 +5,7 @@
+@@ -2,21 +2,21 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
  #include "nsScreen.h"
  
  #include "MaskConfig.hpp"
 +#include "NavigatorManager.h"
  #include "ScreenDimensionManager.h"
  
+ #include "mozilla/ErrorResult.h"
  #include "mozilla/GeckoBindings.h"
-@@ -12,7 +13,6 @@
+ #include "mozilla/dom/BrowsingContext.h"
  #include "mozilla/dom/BrowsingContextBinding.h"
  #include "mozilla/dom/Document.h"
  #include "mozilla/dom/DocumentInlines.h"
@@ -235,7 +325,13 @@ index db1b834258..38b14ffbac 100644
  #include "mozilla/widget/ScreenManager.h"
  #include "nsCOMPtr.h"
  #include "nsDeviceContext.h"
-@@ -50,6 +50,22 @@ NS_IMPL_CYCLE_COLLECTION_INHERITED(nsScreen, DOMEventTargetHelper,
+ #include "nsGlobalWindowInner.h"
+ #include "nsGlobalWindowOuter.h"
+ #include "nsIDocShell.h"
+@@ -47,31 +47,39 @@ NS_IMPL_ADDREF_INHERITED(nsScreen, DOMEventTargetHelper)
+ NS_IMPL_RELEASE_INHERITED(nsScreen, DOMEventTargetHelper)
+ 
+ NS_IMPL_CYCLE_COLLECTION_INHERITED(nsScreen, DOMEventTargetHelper,
                                     mScreenOrientation)
  
  int32_t nsScreen::PixelDepth() {
@@ -258,7 +354,10 @@ index db1b834258..38b14ffbac 100644
    // Camoufox: per-context colour depth wins over the global config, so
    // contexts in one process can differ.
    if (uint32_t depth = 0; ScreenDimensionManager::GetColorDepth(
-@@ -60,15 +76,7 @@ int32_t nsScreen::PixelDepth() {
+           RoverfoxStorageManager::UserContextId(GetOwnerWindow()), depth)) {
+     return static_cast<int32_t>(depth);
+   }
+   if (auto value = MaskConfig::GetUint32("screen.colorDepth"))
      return value.value();
    if (auto value = MaskConfig::GetUint32("screen.pixelDepth"))
      return value.value();
@@ -275,7 +374,13 @@ index db1b834258..38b14ffbac 100644
  }
  
  nsPIDOMWindowOuter* nsScreen::GetOuter() const {
-@@ -82,47 +90,78 @@ nsDeviceContext* nsScreen::GetDeviceContext() const {
+   if (nsPIDOMWindowInner* inner = GetOwnerWindow()) {
+     return inner->GetOuterWindow();
+   }
+@@ -79,136 +87,188 @@ nsPIDOMWindowOuter* nsScreen::GetOuter() const {
+ }
+ 
+ nsDeviceContext* nsScreen::GetDeviceContext() const {
    return nsLayoutUtils::GetDeviceContextForScreenInfo(GetOuter());
  }
  
@@ -335,6 +440,7 @@ index db1b834258..38b14ffbac 100644
 +CSSIntRect nsScreen::GetRect() {
 +  // Camoufox: stock's work first, then the spoof (timing parity; see
 +  // nsScreen::PixelDepth).
++  bool detached = false;
 +  const CSSIntRect stock = [&]() -> CSSIntRect {
 +    // Return window inner rect to prevent fingerprinting.
 +    if (ShouldResistFingerprinting(RFPTarget::ScreenRect)) {
@@ -369,10 +475,17 @@ index db1b834258..38b14ffbac 100644
 -    return {};
 +    nsDeviceContext* context = GetDeviceContext();
 +    if (NS_WARN_IF(!context)) {
++      detached = true;
 +      return {};
 +    }
 +    return CSSIntRect::FromAppUnitsRounded(context->GetRect());
 +  }();
++  // Camoufox: a screen whose window has no device context any more (its frame
++  // was removed or navigated away) is all zeros in stock; it has no screen to
++  // claim a size for.
++  if (detached) {
++    return stock;
++  }
 +  // Camoufox: per-context size wins over the global config.
 +  if (const auto& spoofed = CamouSpoofed().mRect) {
 +    return *spoofed;
@@ -382,31 +495,12 @@ index db1b834258..38b14ffbac 100644
  }
  
  CSSIntRect nsScreen::GetAvailRect() {
-@@ -131,81 +170,92 @@ CSSIntRect nsScreen::GetAvailRect() {
+   // Camoufox: stock Firefox's baseline fingerprinting protection derives the
+   // available rect from the screen size below. The spoofed available rect
    // must not bypass it.
    const bool availFromResolution =
        ShouldResistFingerprinting(RFPTarget::ScreenAvailToResolution);
--  // Camoufox: the per-context API sets one size, so the available rect is the
--  // whole screen. That matches the generated fingerprints, whose availWidth /
--  // availHeight equal width / height, and keeps availWidth <= width true.
--  if (uint32_t w = 0, h = 0;
--      !availFromResolution &&
--      ScreenDimensionManager::GetDimensions(
--          RoverfoxStorageManager::UserContextId(GetOwnerWindow()), w, h)) {
--    return {0, 0, static_cast<int32_t>(w), static_cast<int32_t>(h)};
--  }
--  // Camoufox: report the spoofed available screen rect from the injected
--  // config.
--  auto rect = MaskConfig::GetRect("screen.availLeft", "screen.availTop",
--                                  "screen.availWidth", "screen.availHeight");
--  if (rect.has_value() && !availFromResolution) {
--    auto values = rect.value();
--    return {values[0], values[1], values[2], values[3]};
--  }
--  // Return window inner rect to prevent fingerprinting.
--  if (ShouldResistFingerprinting(RFPTarget::ScreenAvailRect)) {
--    return GetTopWindowInnerRectForRFP();
--  }
++  bool detached = false;
 +  // Camoufox: stock's work first, then the spoof (timing parity; see
 +  // nsScreen::PixelDepth).
 +  const CSSIntRect stock = [&]() -> CSSIntRect {
@@ -414,17 +508,7 @@ index db1b834258..38b14ffbac 100644
 +    if (ShouldResistFingerprinting(RFPTarget::ScreenAvailRect)) {
 +      return GetTopWindowInnerRectForRFP();
 +    }
- 
--  // Check for overrides set by WebDriver BiDi or RDM before applying
--  // fingerprinting protection. This allows developer tools to simulate
--  // specific device dimensions for testing purposes.
--  if (nsPIDOMWindowInner* owner = GetOwnerWindow()) {
--    if (Document* doc = owner->GetExtantDoc()) {
--      Maybe<CSSIntSize> deviceSize =
--          nsGlobalWindowOuter::GetRDMDeviceSize(*doc);
--      if (deviceSize.isSome()) {
--        const CSSIntSize& size = deviceSize.value();
--        return {0, 0, size.width, size.height};
++
 +    // Check for overrides set by WebDriver BiDi or RDM before applying
 +    // fingerprinting protection. This allows developer tools to simulate
 +    // specific device dimensions for testing purposes.
@@ -436,38 +520,21 @@ index db1b834258..38b14ffbac 100644
 +          const CSSIntSize& size = deviceSize.value();
 +          return {0, 0, size.width, size.height};
 +        }
-       }
--    }
- 
--    if (BrowsingContext* bc = owner->GetBrowsingContext()) {
--      if (auto size = bc->GetScreenAreaOverride()) {
--        return {{}, *size};
++      }
++
 +      if (BrowsingContext* bc = owner->GetBrowsingContext()) {
 +        if (auto size = bc->GetScreenAreaOverride()) {
 +          return {{}, *size};
 +        }
-       }
-     }
--  }
- 
--  if (availFromResolution) {
--    nsDeviceContext* context = GetDeviceContext();
--    if (NS_WARN_IF(!context)) {
--      return {};
--    }
++      }
++    }
++
 +    if (availFromResolution) {
 +      nsDeviceContext* context = GetDeviceContext();
 +      if (NS_WARN_IF(!context)) {
 +        return {};
 +      }
- 
--    if (nsPIDOMWindowInner* owner = GetOwnerWindow()) {
--      if (Document* doc = owner->GetExtantDoc()) {
--        AutoTArray<nsString, 1> params;
--        params.AppendElement(
--            u"https://support.mozilla.org/kb/firefox-protection-against-fingerprinting"_ns);
--        doc->WarnOnceAbout(Document::eScreenFingerprintingProtection, false,
--                           params);
++
 +      if (nsPIDOMWindowInner* owner = GetOwnerWindow()) {
 +        if (Document* doc = owner->GetExtantDoc()) {
 +          AutoTArray<nsString, 1> params;
@@ -476,7 +543,7 @@ index db1b834258..38b14ffbac 100644
 +          doc->WarnOnceAbout(Document::eScreenFingerprintingProtection, false,
 +                             params);
 +        }
-       }
++      }
 +
 +      // Camoufox: from the screen the page sees, for the OS it is told.
 +      // Stock's own work here is context->GetRect(); a spoofed size replaces
@@ -493,50 +560,102 @@ index db1b834258..38b14ffbac 100644
 +      }
 +      return nsRFPService::GetSpoofedScreenAvailSize(
 +          screenRect, context->GetFullZoom(), IsFullscreen(), spoof.mOS);
-     }
- 
++    }
++
++    nsDeviceContext* context = GetDeviceContext();
++    if (NS_WARN_IF(!context)) {
++      detached = true;
++      return {};
++    }
++    return CSSIntRect::FromAppUnitsRounded(context->GetClientRect());
++  }();
++  if (availFromResolution || detached) {
++    return stock;
++  }
+   // Camoufox: the per-context API sets one size, so the available rect is the
+   // whole screen. That matches the generated fingerprints, whose availWidth /
+   // availHeight equal width / height, and keeps availWidth <= width true.
+-  if (uint32_t w = 0, h = 0;
+-      !availFromResolution &&
+-      ScreenDimensionManager::GetDimensions(
++  if (uint32_t w = 0, h = 0; ScreenDimensionManager::GetDimensions(
+           RoverfoxStorageManager::UserContextId(GetOwnerWindow()), w, h)) {
+     return {0, 0, static_cast<int32_t>(w), static_cast<int32_t>(h)};
+   }
+   // Camoufox: report the spoofed available screen rect from the injected
+   // config.
+   auto rect = MaskConfig::GetRect("screen.availLeft", "screen.availTop",
+                                   "screen.availWidth", "screen.availHeight");
+-  if (rect.has_value() && !availFromResolution) {
++  if (rect.has_value()) {
+     auto values = rect.value();
+     return {values[0], values[1], values[2], values[3]};
+   }
+-  // Return window inner rect to prevent fingerprinting.
+-  if (ShouldResistFingerprinting(RFPTarget::ScreenAvailRect)) {
+-    return GetTopWindowInnerRectForRFP();
+-  }
+-
+-  // Check for overrides set by WebDriver BiDi or RDM before applying
+-  // fingerprinting protection. This allows developer tools to simulate
+-  // specific device dimensions for testing purposes.
+-  if (nsPIDOMWindowInner* owner = GetOwnerWindow()) {
+-    if (Document* doc = owner->GetExtantDoc()) {
+-      Maybe<CSSIntSize> deviceSize =
+-          nsGlobalWindowOuter::GetRDMDeviceSize(*doc);
+-      if (deviceSize.isSome()) {
+-        const CSSIntSize& size = deviceSize.value();
+-        return {0, 0, size.width, size.height};
+-      }
+-    }
+-
+-    if (BrowsingContext* bc = owner->GetBrowsingContext()) {
+-      if (auto size = bc->GetScreenAreaOverride()) {
+-        return {{}, *size};
+-      }
+-    }
+-  }
+-
+-  if (availFromResolution) {
+-    nsDeviceContext* context = GetDeviceContext();
+-    if (NS_WARN_IF(!context)) {
+-      return {};
+-    }
+-
+-    if (nsPIDOMWindowInner* owner = GetOwnerWindow()) {
+-      if (Document* doc = owner->GetExtantDoc()) {
+-        AutoTArray<nsString, 1> params;
+-        params.AppendElement(
+-            u"https://support.mozilla.org/kb/firefox-protection-against-fingerprinting"_ns);
+-        doc->WarnOnceAbout(Document::eScreenFingerprintingProtection, false,
+-                           params);
+-      }
+-    }
+-
 -    // Camoufox: from the screen the page sees, for the platform it is told.
 -    nsAutoString platform;
 -    if (nsGlobalWindowInner* owner =
 -            nsGlobalWindowInner::Cast(GetOwnerWindow())) {
 -      owner->Navigator()->GetPlatform(platform, CallerType::NonSystem,
 -                                      IgnoreErrors());
-+    nsDeviceContext* context = GetDeviceContext();
-+    if (NS_WARN_IF(!context)) {
-+      return {};
-     }
+-    }
 -    return nsRFPService::GetSpoofedScreenAvailSize(
 -        CSSPixel::ToAppUnits(GetRect()), context->GetFullZoom(),
 -        IsFullscreen(), platform);
-+    return CSSIntRect::FromAppUnitsRounded(context->GetClientRect());
-+  }();
-+  if (availFromResolution) {
-+    return stock;
-   }
+-  }
 -
 -  nsDeviceContext* context = GetDeviceContext();
 -  if (NS_WARN_IF(!context)) {
 -    return {};
-+  // Camoufox: the per-context API sets one size, so the available rect is the
-+  // whole screen. That matches the generated fingerprints, whose availWidth /
-+  // availHeight equal width / height, and keeps availWidth <= width true.
-+  if (uint32_t w = 0, h = 0; ScreenDimensionManager::GetDimensions(
-+          RoverfoxStorageManager::UserContextId(GetOwnerWindow()), w, h)) {
-+    return {0, 0, static_cast<int32_t>(w), static_cast<int32_t>(h)};
-+  }
-+  // Camoufox: report the spoofed available screen rect from the injected
-+  // config.
-+  auto rect = MaskConfig::GetRect("screen.availLeft", "screen.availTop",
-+                                  "screen.availWidth", "screen.availHeight");
-+  if (rect.has_value()) {
-+    auto values = rect.value();
-+    return {values[0], values[1], values[2], values[3]};
-   }
+-  }
 -  return CSSIntRect::FromAppUnitsRounded(context->GetClientRect());
 +  return stock;
  }
  
  bool nsScreen::IsFullscreen() const {
+   if (nsPIDOMWindowInner* owner = GetOwnerWindow()) {
+     if (Document* doc = owner->GetExtantDoc()) {
+       return StyleDisplayMode::Fullscreen ==
 diff --git a/dom/base/nsScreen.h b/dom/base/nsScreen.h
 index 4614516ff0..173d604436 100644
 --- a/dom/base/nsScreen.h
@@ -573,13 +692,49 @@ index 4614516ff0..173d604436 100644
  
  namespace mozilla::dom {
 diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
-index dfd268cbc2..b527a9828b 100644
 --- a/dom/workers/WorkerNavigator.cpp
 +++ b/dom/workers/WorkerNavigator.cpp
-@@ -307,6 +307,20 @@ void WorkerNavigator::GetUserAgent(nsCString& aUserAgent,
+@@ -111,26 +111,27 @@ void WorkerNavigator::Invalidate() {
+ JSObject* WorkerNavigator::WrapObject(JSContext* aCx,
+                                       JS::Handle<JSObject*> aGivenProto) {
+   return WorkerNavigator_Binding::Wrap(aCx, this, aGivenProto);
+ }
+ 
+ bool WorkerNavigator::GlobalPrivacyControl() const {
+-  if (auto value = MaskConfig::GetOptionalBool("navigator.globalPrivacyControl");
+-      value.has_value())
+-    return value.value();
++  // Camoufox: stock's work first, then the spoof, read once per process
++  // (timing parity; see nsScreen::PixelDepth).
++  static const std::optional<bool> sSpoofed =
++      MaskConfig::GetOptionalBool("navigator.globalPrivacyControl");
+   bool gpcStatus = StaticPrefs::privacy_globalprivacycontrol_enabled();
+   if (!gpcStatus) {
+     JSObject* jso = GetWrapper();
+     if (const nsCOMPtr<nsIGlobalObject> global = xpc::NativeGlobal(jso)) {
+       if (const nsCOMPtr<nsIPrincipal> principal = global->PrincipalOrNull()) {
+         gpcStatus = principal->GetIsInPrivateBrowsing() &&
+                     StaticPrefs::privacy_globalprivacycontrol_pbmode_enabled();
+       }
+     }
+   }
+-  return gpcStatus;
++  return sSpoofed.value_or(gpcStatus);
+ }
+ 
+ void WorkerNavigator::GetAppCodeName(nsString& aAppCodeName,
+                                      ErrorResult& /* unused */) const {
+   if (auto value = MaskConfig::GetString("navigator.appCodeName")) {
+     aAppCodeName.Assign(NS_ConvertUTF8toUTF16(value.value()));
+@@ -304,35 +305,43 @@ void WorkerNavigator::GetUserAgent(nsCString& aUserAgent,
+       workerPrivate->ShouldResistFingerprinting(RFPTarget::NavigatorUserAgent));
+ 
+   runnable->Dispatch(workerPrivate, Canceling, aRv);
  }
  
  uint64_t WorkerNavigator::HardwareConcurrency() const {
+-  // Camoufox: per-context hardware concurrency for workers
+-  {
 +  // Camoufox: stock's work first, then the spoof (timing parity; see
 +  // nsScreen::PixelDepth).
 +  const uint64_t stock = [&]() -> uint64_t {
@@ -594,13 +749,31 @@ index dfd268cbc2..b527a9828b 100644
 +        aWorkerPrivate->ShouldResistFingerprinting(
 +            RFPTarget::NavigatorHWConcurrencyTiered));
 +  }();
-   // Camoufox: per-context hardware concurrency for workers
-   {
++  // Camoufox: per-context hardware concurrency, else the global config.
++  // A worker's context never changes, so a current cache answers alone.
++  const uint64_t generation = RoverfoxStorageManager::Generation();
++  auto& cache = mCamouHardwareConcurrency;
++  if (cache.mGeneration != generation) {
      WorkerPrivate* wp = GetCurrentThreadWorkerPrivate();
-@@ -320,16 +334,7 @@ uint64_t WorkerNavigator::HardwareConcurrency() const {
+-    if (wp) {
+-      uint32_t ucid = wp->GetOriginAttributes().mUserContextId;
+-      uint32_t stored = mozilla::dom::NavigatorManager::GetHardwareConcurrency(ucid);
+-      if (stored > 0) {
+-        return static_cast<uint64_t>(stored);
+-      }
+-    }
++    const uint32_t ucid = wp ? wp->GetOriginAttributes().mUserContextId : 0;
++    const uint32_t stored =
++        wp ? mozilla::dom::NavigatorManager::GetHardwareConcurrency(ucid) : 0;
++    cache.mValue = stored > 0 ? stored
++                              : MaskConfig::GetUint64(
++                                    "navigator.hardwareConcurrency")
++                                    .value_or(0);
++    cache.mUserContextId = ucid;
++    cache.mGeneration = generation;
    }
-   if (auto value = MaskConfig::GetUint64("navigator.hardwareConcurrency"))
-     return value.value();
+-  if (auto value = MaskConfig::GetUint64("navigator.hardwareConcurrency"))
+-    return value.value();
 -  RuntimeService* rts = RuntimeService::GetService();
 -  MOZ_ASSERT(rts);
 -
@@ -611,10 +784,33 @@ index dfd268cbc2..b527a9828b 100644
 -          RFPTarget::NavigatorHWConcurrency),
 -      aWorkerPrivate->ShouldResistFingerprinting(
 -          RFPTarget::NavigatorHWConcurrencyTiered));
-+  return stock;
++  return cache.mValue ? cache.mValue : stock;
  }
  
  StorageManager* WorkerNavigator::Storage() {
+   if (!mStorageManager) {
+     WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+     MOZ_ASSERT(workerPrivate);
+diff --git a/dom/workers/WorkerNavigator.h b/dom/workers/WorkerNavigator.h
+index a96a6bb290..ebab8e00e5 100644
+--- a/dom/workers/WorkerNavigator.h
++++ b/dom/workers/WorkerNavigator.h
+@@ -108,6 +108,15 @@ class WorkerNavigator final : public nsWrapperCache {
+   void SetLanguages(const nsTArray<nsString>& aLanguages);
+ 
+   uint64_t HardwareConcurrency() const;
++  // Camoufox: the spoofed hardwareConcurrency of this context, read once per
++  // RoverfoxStorageManager generation instead of on every call (timing
++  // parity; see nsScreen::CamouSpoofed). 0: none, stock's value applies.
++  struct CamouHardwareConcurrency {
++    uint64_t mGeneration = 0;
++    uint32_t mUserContextId = 0;
++    uint64_t mValue = 0;
++  };
++  mutable CamouHardwareConcurrency mCamouHardwareConcurrency;
+ 
+   StorageManager* Storage();
+ 
 diff --git a/toolkit/components/resistfingerprinting/moz.build b/toolkit/components/resistfingerprinting/moz.build
 index a4bb89bd34..e4e3e161de 100644
 --- a/toolkit/components/resistfingerprinting/moz.build

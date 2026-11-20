@@ -45,7 +45,7 @@ import os
 import subprocess
 import sys
 
-from _font_bundle import base_has_alias, read_groups, require_bundle
+from _font_bundle import read_groups, require_bundle
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGE = os.path.join(os.path.dirname(REPO), 'python', 'src', 'camoufox')
@@ -82,10 +82,9 @@ ALIASES = {
         'Nirmala UI Semilight': 'Nirmala UI',
     },
     # macOS registers each weight of these TTCs as its own family, which
-    # fontconfig and fc-scan do not, so they are listed here;
-    # bundle/fontconfig/macos/fonts.conf rewrites each to its base family. Not
-    # every macOS version reports every one, so a base carries one only when it
-    # lists the name (base_has_alias).
+    # fontconfig and fc-scan do not, so they are listed here, reported by each
+    # OS version that has the base family; bundle/fontconfig/macos/fonts.conf
+    # rewrites each to its base family.
     'mac': {
         'American Typewriter Semibold': 'American Typewriter',
         'Apple SD Gothic Neo ExtraBold': 'Apple SD Gothic Neo',
@@ -229,9 +228,8 @@ def main():
         wanted = manifest_names(man, os_key) | set(MARKER_FONTS[os_key])
         reportable = union & wanted
         # An alias is rewritten unconditionally by fonts.conf, so it is renderable
-        # for every identity whose list has the target, so it is reportable. A
-        # base below carries it only where that OS version has it
-        # (base_has_alias).
+        # for every identity whose list has the target; report it always (the
+        # bases below carry it, and the real OS resolves every one of them).
         reportable |= set(ALIASES[os_key])
         # Families whose mere presence makes CreepJS-class detectors infer
         # Windows 11 (measured 2026-09-14: a Linux identity that drew Cascadia
@@ -256,12 +254,16 @@ def main():
             for tag, data in (('union', sorted(union)), ('unreported', unreported), ('unbundled', unbundled)):
                 with open(os.path.join(args.dump_union, f'{os_key}-{tag}.txt'), 'w', encoding='utf-8') as fh:
                     fh.write('\n'.join(data) + '\n')
+        # A base "has" an alias name fonts.conf rewrites only when it has the
+        # target: the alias renders only through it. Calibri and Cambria
+        # (Carlito, Caladea) are LibreOffice's on Linux, not a stock Ubuntu's;
+        # every Linux identity claimed them, and only Windows' own files, which
+        # the bundled-font activation leaked to every OS, rendered them.
         bases_out[os_key] = {
-            key: sorted((set(base['fonts']) & reportable)
-                        | {alias for alias, target in ALIASES[os_key].items()
-                           if base_has_alias(os_key, alias, target, base['fonts'])})
+            key: sorted(fonts | {name for name, target in ALIASES[os_key].items() if target in fonts})
             for key, base in man[os_key]['bases'].items()
             if base['fonts'] and not base.get('deferred')
+            for fonts in [set(base['fonts']) & reportable]
         }
 
     with open(args.out, 'w', encoding='utf-8') as fh:
@@ -297,10 +299,8 @@ def main():
         # is the INTERSECTION of the bases, not any one of them. Making it a
         # superset of one base silently forces that base's exclusive families
         # onto every identity -- which is what made a macOS 26 identity keep
-        # claiming 131 Sonoma-only families. An alias name is in it only when
-        # every base carries it (base_has_alias): "Kohinoor Devanagari Medium"
-        # is one of the names whose absence identifies macOS 27, and "Noto Sans
-        # Canadian Aboriginal Regular" names a family only Sonoma has.
+        # claiming 131 Sonoma-only families. The alias names come with each
+        # base (bases_out) where their target is in it.
         essential = {}
         for os_key in OSDIRS:
             bases = list(bases_out[os_key].values())
@@ -312,7 +312,7 @@ def main():
             common &= set(result[os_key])
             suffix = {'win': 'WINDOWS', 'mac': 'MACOS', 'lin': 'LINUX'}[os_key]
             print(f'# _ESSENTIAL_FONTS_{suffix}: {len(common)} families '
-                  f'(intersection of {len(bases)} base(s))')
+                  f'(intersection of {len(bases)} base(s) + aliases)')
             essential[os_key] = sorted(common)
         path = os.path.join(PACKAGE, 'essential-fonts.json')
         # Both launchers read every OS's list at import, so a file missing one
