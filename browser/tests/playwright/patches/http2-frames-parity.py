@@ -200,10 +200,14 @@ def getter_cost_parity():
 def stock_connection(stock, ca: Path, cert: Path, key: Path) -> dict:
     binary = stock.stock_firefox()
     policies = binary.parent / "distribution" / "policies.json"
-    if policies.exists():
-        raise SystemExit(f"{policies} already exists; this guard writes its own and removes it")
+    # Another guard may have left its own policies in the shared stock copy
+    # (stock-gpu-parity turns app updates off): add the CA to them for the run
+    # and put the file back as it was afterwards.
+    original = policies.read_text() if policies.exists() else None
+    merged = json.loads(original) if original else {"policies": {}}
+    merged.setdefault("policies", {})["Certificates"] = {"Install": [str(ca)]}
     policies.parent.mkdir(exist_ok=True)
-    policies.write_text(json.dumps({"policies": {"Certificates": {"Install": [str(ca)]}}}))
+    policies.write_text(json.dumps(merged))
     try:
         catcher = FrameCatcher(cert, key)
         profile, proc = stock.run_stock(binary, catcher.url)
@@ -212,7 +216,10 @@ def stock_connection(stock, ca: Path, cert: Path, key: Path) -> dict:
         finally:
             stock.stop_stock(profile, proc)
     finally:
-        policies.unlink()
+        if original is None:
+            policies.unlink()
+        else:
+            policies.write_text(original)
 
 
 def camoufox_connection(cert: Path, key: Path) -> dict:
