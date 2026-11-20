@@ -1,5 +1,5 @@
 {
- "firefox_version": "160.0",
+ "firefox_version": "160.0.1",
  "packages": {
   "browser/omni.ja|content|activity-stream": {
    "files": {
@@ -2356,7 +2356,7 @@
     "chrome/toolkit/content/global/bindings/timekeeper.js": "fdccc112a17084dd6881027d5bd4a899a4403892b79c422d04c126385264fd29",
     "chrome/toolkit/content/global/bindings/timepicker.js": "8b63f5cbdd80b4739fab5a7bd1675c520f98a4a1c316c3c7496bf155ae5f941d",
     "chrome/toolkit/content/global/buildconfig.css": "e9cd781bbc7ee82f28a71520352a4b2c7ade454a87c51ca6c882ba69720a2330",
-    "chrome/toolkit/content/global/buildconfig.html": "0b774b5b954fe745c6769e9562a4c213cff3985abf01971738f0395eefbc2e90",
+    "chrome/toolkit/content/global/buildconfig.html": "8807291ba7babb579152d1b1f17b8b3157b492a93fcc4b52608401e5a4474d1c",
     "chrome/toolkit/content/global/certviewer/certDecoder.mjs": "03ba917df792554ed07ff559b30a846ca7e3315f838d0f2931cb527a86ad4fa5",
     "chrome/toolkit/content/global/certviewer/certviewer.css": "66defee9ba236bfb58d0e0283ec9abfe3509648bd6704a831edf7b69537213f1",
     "chrome/toolkit/content/global/certviewer/certviewer.html": "4b1478b882e97771965bfe39403455349f1a7a02a1ca7e716a6f711e1432cdaa",

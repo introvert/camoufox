@@ -1,26 +1,26 @@
 {
-  "firefox": "160.0",
-  "commit": "2887d9de1f69c0e9776413da80e7ba0d1225dd9b",
+  "firefox": "160.0.1",
+  "commit": "58fed86b1b6864ad71b83c910a879d6f1a6b678b",
   "profiles": {
     "linux64": {
-      "task": "dRRnDxMKQ3-FPOlXeY_FWA",
-      "sha256": "6164970ffe25d816b40fc29e7545618121e737100f156f900da87185a1c7c993"
+      "task": "QEgBdgvWQNiOpGa2Po540A",
+      "sha256": "1f403d80f67ffc4ad6fa218dace36e535027da60d7f8a01e7ee40478f703939f"
     },
     "macosx64": {
-      "task": "QRu4A0dySieVDUmYyy88WQ",
-      "sha256": "41a31e85f545eab7e6eb270c3e93e679e3344b078611ebd5c1333ca4d37fe893"
+      "task": "axKEX5HvTXC1266sLRQGCQ",
+      "sha256": "2219dcc4e1f200086fc54cdcd9fbb39c81f6b4d89c2252e9dc2109cbe8409abb"
     },
     "macosx64-aarch64": {
-      "task": "arBuuAedTgWrotxwtlES9w",
-      "sha256": "0d9fdb619a612021783b00adcf0263c2feb5d666cbe776bfbc7458a830713e20"
+      "task": "GKD2BDMVRqC6b_TB_y8CcA",
+      "sha256": "25a8c6c5cfd29ef0bca81f4214af01e8975ec4e4960aeb9eb1d5e318fff48ccd"
     },
     "win32": {
-      "task": "X25O3feQRaus2035lAhniA",
-      "sha256": "4fa0ece678d3da6b0d8285b26fe2cda88ffd77160280328b08c6410fa253a531"
+      "task": "EOVZjx-UQ4iaAuh1pbHzFA",
+      "sha256": "64bbb477ebea5b02282668e9c6d8b3d1c9fc4a5232c02e44f3721655f226baa3"
     },
     "win64": {
-      "task": "Dw7p-qpKQCG043KngTZulQ",
-      "sha256": "db4384729a98454a3da0d2cef2e3ebee42fafba569794440254d2aa7042e4864"
+      "task": "Mm4TdzGDShaJRy2UALe-Qg",
+      "sha256": "571944ef8e8bcfd7e7bdb99fd92dac566b2a67b5454a5f91d41bd9a2e99728dd"
     }
   }
 }

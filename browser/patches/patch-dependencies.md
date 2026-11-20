@@ -56,7 +56,7 @@ be listed there.
 | `voice-spoofing.patch` | `voices`, `voices:speechd`, `voices:pool`, `voices:pool:speechd` (the voices a context's own list may name), `voices:blockIfNotDefined` |
 | `webgl-spoofing.patch` | `webGl:*`, `webGl2:*` |
 | `webrtc-ip-spoofing.patch` | `webrtc:ipv4`, `webrtc:ipv6`, `navigator.platform` |
-| `window-orientation.patch` | `mobile` (builds `window.orientation` / `onorientationchange` everywhere and exposes them for a phone: mobile mode or an Android `isMobile` context) |
+| `window-orientation.patch` | `mobile` (builds `window.orientation` / `onorientationchange` everywhere and exposes them for a phone: mobile mode or an Android `isMobile` context; `screen.mozOrientation` follows the same orientation override) |
 | `windows-keyboard.patch` | `input:windowsKeyboard` (launch-wide: the shortcut tables and GTK's key handling are process-level) |
 | `zz-stock-cost-parity.patch` | `navigator.hardwareConcurrency`, `navigator.maxTouchPoints`, `screen.*` (re-orders the getters above so stock's work runs first) |
 

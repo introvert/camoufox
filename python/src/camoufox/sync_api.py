@@ -10,7 +10,7 @@ from typing_extensions import Literal
 
 from camoufox.virtdisplay import VirtualDisplay
 
-from . import driver_defaults
+from . import _humanize_playwright, driver_defaults
 from .fingerprints import render_context_identity
 from .ip import ExitGeo, Proxy, proxy_exit_geo
 from .utils import (
@@ -22,6 +22,7 @@ from .utils import (
     host_identity,
     launch_options,
     launch_machine,
+    launch_os,
     launches_mobile,
     machine_from_probe,
     needs_exit_geo,
@@ -117,13 +118,19 @@ def NewBrowser(
         **kwargs:
             All other keyword arguments passed to `launch_options()`.
     """
+    # humanize runs in this process: checked before the launch,
+    # attached to the browser after it (also with from_options).
+    _humanize_playwright.check(kwargs.get('humanize'), is_async=False)
     virtual_display, headless = start_virtual_display(headless, debug, kwargs)
     # Everything after the display exists can fail (bad proxy, missing binary,
     # unsatisfiable constraints) before sync/async_attach_vd wires kill() into
     # close, which used to strand one Xvfb and its /tmp/.X<n> lock per failed
     # launch.
     try:
-        return _launch(playwright, virtual_display, headless, from_options, persistent_context, debug, kwargs)
+        browser, os = _launch(playwright, virtual_display, headless, from_options, persistent_context, debug, kwargs)
+        return _humanize_playwright.attach(
+            browser, kwargs.get('humanize'), os, i_know_what_im_doing=kwargs.get('i_know_what_im_doing')
+        )
     except BaseException:
         if virtual_display:
             virtual_display.kill()
@@ -138,7 +145,8 @@ def _launch(
     persistent_context: bool,
     debug: Optional[bool],
     kwargs: Dict[str, Any],
-) -> Union[Browser, BrowserContext]:
+) -> Tuple[Union[Browser, BrowserContext], str]:
+    """The browser (or persistent context), and its identity's OS."""
     # Options the caller built leave its contexts to the caller (host_identity).
     canvas_noise: Optional[bool] = False
     if not from_options:
@@ -172,14 +180,14 @@ def _launch(
                 **persistent_context_options(from_options, no_viewport_default)
             )
             driver_defaults.mark(context)
-            return sync_attach_vd(context, virtual_display)
+            return sync_attach_vd(context, virtual_display), launch_os(from_options)
 
         identity = host_identity(from_options, canvas_noise)
         browser = playwright.firefox.launch(**from_options)
         attach_context_defaults(browser, no_viewport_default, launches_mobile(from_options))
         browser._camoufox_host_identity = identity
         browser._camoufox_machine = launch_machine(from_options)
-        return sync_attach_vd(browser, virtual_display)
+        return sync_attach_vd(browser, virtual_display), launch_os(from_options)
     finally:
         if pid:
             cpu_affinity.restore(pid, previous)
